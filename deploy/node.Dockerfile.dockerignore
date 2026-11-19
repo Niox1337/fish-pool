@@ -1,0 +1,11 @@
+**
+!node/Cargo.toml
+!node/Cargo.lock
+!node/rustfmt.toml
+!node/src/**
+!sidecar/pyproject.toml
+!sidecar/fish_sidecar/**
+!sidecar/astrbot/**
+!deploy/node-entrypoint.sh
+**/__pycache__
+**/*.pyc

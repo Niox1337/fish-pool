@@ -1,0 +1,10 @@
+# Copy to .dev.vars for `wrangler dev`. Values here override [vars] in wrangler.toml.
+FISH_DEV=1
+EMAIL_PROVIDER=log
+DEFAULT_NODE_URL=http://127.0.0.1:8700
+# openssl rand -base64 32
+DATA_KEY=
+# Same value as FISH_NODE_SECRET of the node agent
+NODE_SECRET=
+# RESEND_API_KEY=
+# GITHUB_TOKEN=

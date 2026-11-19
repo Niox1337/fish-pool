@@ -1,0 +1,37 @@
+# Local credentials. Templates and the credential-free mock mode are versioned.
+.env
+.env.*
+!.env.example
+!/web/.env.mock
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Build output, dependencies and tool state
+node_modules/
+target/
+/console/build/
+/web/dist/
+.wrangler/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+*.egg-info/
+*.tsbuildinfo
+
+# Local runtime data and logs
+/node/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+
+# Design session output and local handoff notes
+.impeccable/
+/docs/CONSOLE-UI-BRIEF.md
+.DS_Store

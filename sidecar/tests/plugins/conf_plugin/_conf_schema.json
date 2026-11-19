@@ -1,0 +1,13 @@
+{
+  "greeting": {"type": "string", "description": "greeting", "default": "hello"},
+  "times": {"type": "int", "description": "times", "default": 3},
+  "enabled": {"type": "bool", "description": "enabled"},
+  "nested": {
+    "type": "object",
+    "description": "nested",
+    "items": {
+      "level": {"type": "int", "default": 7},
+      "name": {"type": "string"}
+    }
+  }
+}

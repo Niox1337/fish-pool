@@ -1,0 +1,145 @@
+@import 'tailwindcss';
+
+@font-face {
+  font-family: 'Fish Rounded';
+  src: url('./assets/fonts/display-700.woff2') format('woff2');
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Fish Rounded';
+  src: url('./assets/fonts/display-900.woff2') format('woff2');
+  font-weight: 900;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+  --font-display: 'Fish Rounded', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, 'Cascadia Mono', Menlo, monospace;
+
+  --color-cobalt-950: #0f1550;
+  --color-cobalt-900: #141d6b;
+  --color-cobalt: #192785;
+  --color-cobalt-700: #2433a6;
+  --color-cobalt-500: #3d55d6;
+  --color-sky: #2f5bd8;
+  --color-sky-soft: #dfe7ff;
+
+  --color-paper: #f8f3ec;
+  --color-paper-2: #f3e9dd;
+  --color-paper-3: #ead9c6;
+  --color-peach: #f6d4bc;
+  --color-cream: #fffaf3;
+
+  --color-ink: #1b2163;
+  --color-ink-2: #454b80;
+  --color-ink-3: #6b6f98;
+
+  --color-star: #f8c93a;
+  --color-star-2: #f0b11e;
+  --color-star-ink: #5a3d00;
+  --color-pink: #f3a6bd;
+  --color-pink-soft: #fde4ea;
+  --color-pink-ink: #b8466b;
+
+  --color-ok: #2f8f5b;
+  --color-ok-soft: #dff3e6;
+  --color-warn: #b8700b;
+  --color-warn-soft: #fdf0d6;
+  --color-bad: #c43d4b;
+  --color-bad-soft: #fde3e5;
+
+  --radius-pill: 999px;
+  --shadow-soft: 0 2px 0 rgb(27 33 99 / 0.06), 0 8px 24px -10px rgb(27 33 99 / 0.28);
+  --shadow-lift: 0 3px 0 rgb(27 33 99 / 0.08), 0 16px 36px -14px rgb(27 33 99 / 0.38);
+  --shadow-star: inset 0 -3px 0 rgb(160 100 0 / 0.28), 0 6px 14px -6px rgb(160 100 0 / 0.55);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    font-synthesis: none;
+  }
+  ::selection {
+    background: var(--color-star);
+    color: var(--color-ink);
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-sky);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  input,
+  textarea,
+  select {
+    caret-color: var(--color-sky);
+  }
+  a {
+    text-underline-offset: 0.22em;
+    text-decoration-thickness: 0.08em;
+  }
+  * {
+    scrollbar-color: var(--color-paper-3) transparent;
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+@keyframes pupil-x {
+  to {
+    background-position-x: calc(var(--pupil-size) * -4);
+  }
+}
+@keyframes pupil-y {
+  to {
+    background-position-y: calc(var(--pupil-size) * -8);
+  }
+}
+.pupil-sheet {
+  background-size: 400% 800%;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pupil-sheet[data-play] {
+    animation:
+      pupil-x var(--pupil-row) steps(4) infinite,
+      pupil-y var(--pupil-loop) steps(8) infinite;
+  }
+}

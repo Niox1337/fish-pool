@@ -1,0 +1,50 @@
+name: fish
+
+services:
+  node:
+    build:
+      context: ..
+      dockerfile: deploy/node.Dockerfile
+    image: fish-node:latest
+    restart: unless-stopped
+    environment:
+      FISH_NODE_ID: ${FISH_NODE_ID:-node-1}
+      FISH_NODE_SECRET: ${FISH_NODE_SECRET:?set FISH_NODE_SECRET in deploy/.env}
+      FISH_CONSOLE_URL: ${FISH_CONSOLE_URL:-https://fish.niox.lol}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - fish-data:/data
+    expose:
+      - "8700"
+    cgroup: private
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    mem_limit: 1600m
+    pids_limit: 512
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-2025.4.0}
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in deploy/.env}
+    depends_on:
+      - node
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  fish-data:

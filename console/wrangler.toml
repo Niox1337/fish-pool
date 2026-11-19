@@ -1,0 +1,54 @@
+name = "fish-console"
+main = "build/index.js"
+compatibility_date = "2026-01-01"
+
+# /api and /api/* run Rust first. Other paths use static assets with an index.html fallback.
+assets = { directory = "../web/dist", binding = "ASSETS", not_found_handling = "single-page-application", run_worker_first = ["/api", "/api/*"] }
+
+# Custom domain. Kept commented until the zone niox.lol is ready to point fish.niox.lol at this Worker.
+# routes = [
+#   { pattern = "fish.niox.lol", custom_domain = true },
+# ]
+
+# Builds the SPA and compiles Rust to build/index.js and build/index_bg.wasm.
+[build]
+command = "npm --prefix ../web run build && CC=clang worker-build --release"
+
+# Create the database with `wrangler d1 create fish` and paste its id here.
+[[d1_databases]]
+binding = "DB"
+database_name = "fish"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Cloudflare Email Service binding, used when EMAIL_PROVIDER = "cloudflare".
+[[send_email]]
+name = "EMAIL"
+allowed_sender_addresses = ["noreply@niox.lol"]
+
+# Cleanup of expired rows, retries of pending node pushes and node side deletions.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true
+
+[vars]
+# "cloudflare" (send_email binding EMAIL), "resend" (secret RESEND_API_KEY) or "log" (only with FISH_DEV = "1").
+EMAIL_PROVIDER = "cloudflare"
+EMAIL_FROM = "noreply@niox.lol"
+EMAIL_FROM_NAME = "大肥鱼托管班"
+# Seeded into the nodes table on first use. Its HMAC secret is NODE_SECRET (or NODE_SECRET_NODE_1).
+DEFAULT_NODE_ID = "node-1"
+DEFAULT_NODE_URL = "https://node-1.fish.niox.lol"
+# ADMIN_EMAILS is an optional secret containing comma separated admin registration addresses.
+# FISH_DEV is absent in production. Local development sets it in .dev.vars.
+
+# Secrets, set with `wrangler secret put <NAME>`:
+#   DATA_KEY          base64 of 32 random bytes, AES-256-GCM key for secrets stored in D1
+#   NODE_SECRET       base64 of 32 random bytes, HMAC key shared with the node agent
+#                     (per node override: NODE_SECRET_<NODE ID uppercased, non alphanumerics as _>)
+#   RESEND_API_KEY    only when EMAIL_PROVIDER = "resend"
+#   GITHUB_TOKEN      optional, raises the GitHub API rate limit for plugin inspection
+#   ADMIN_EMAILS      optional, comma separated admin registration addresses
+# Generate a key with: openssl rand -base64 32
