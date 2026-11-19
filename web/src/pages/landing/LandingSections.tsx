@@ -7,7 +7,6 @@ import whaleWave from '@/assets/whale/wave.webp'
 import './landing-sections.css'
 
 const PLUGIN_MARKET = 'https://cloud.astrbot.app/plugin'
-const YUNYUE_REPO = 'https://github.com/YunYueSama/codex-deepseek-pet'
 
 const FAQ: { q: string; a: string }[] = [
   {
@@ -184,14 +183,7 @@ export default function LandingSections() {
             </a>
           </nav>
         </div>
-        <p className="ls-credit">
-          小鱼形象 作者：YunYueSama　仓库：
-          <a href={YUNYUE_REPO} target="_blank" rel="noreferrer">
-            {YUNYUE_REPO}
-          </a>
-          <br />
-          本站使用的版本经过修改。插件接口为独立实现，与 AstrBot 官方无关。
-        </p>
+        <p className="ls-foot-note">插件接口为独立实现，与 AstrBot 官方无关。</p>
       </footer>
     </div>
   )

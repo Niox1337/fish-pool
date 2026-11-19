@@ -48,7 +48,7 @@ uv run pytest
 
 ## 致谢与说明
 
-小鱼角色素材作者：YunYueSama。素材来自 [codex-deepseek-pet](https://github.com/YunYueSama/codex-deepseek-pet)，本站使用的素材经过修改。[角色素材许可](assets/whale-LICENSE.txt)
+本站的小鱼动画素材取自 YunYueSama 发布的 [codex-deepseek-pet](https://github.com/YunYueSama/codex-deepseek-pet) 版本，经缩放和格式转换。角色参考的来源另见[上游素材说明](https://github.com/YunYueSama/codex-deepseek-pet/blob/main/ASSET_LICENSE.md)。[随附的素材许可](assets/whale-LICENSE.txt)
 
 插件接口是独立实现，兼容部分 AstrBot 插件，与 AstrBot 项目没有隶属或合作关系。AstrBot 源码仅用于参考，兼容范围见 [sidecar/COMPAT.md](sidecar/COMPAT.md)。
 

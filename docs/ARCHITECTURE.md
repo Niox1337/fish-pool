@@ -307,4 +307,4 @@ Reimplement from scratch the public plugin API names that common plugins import,
 
 ## 10. License boundary
 
-AstrBot is AGPL-3.0. Read it to learn protocols and the plugin API surface, then write new code. Do not translate or copy AstrBot source. Assets from YunYueSama require the attribution `作者：YunYueSama` and `仓库：https://github.com/YunYueSama/codex-deepseek-pet`, plus a note that they were modified, on the about page and in the README.
+AstrBot is AGPL-3.0. Read it to learn protocols and the plugin API surface, then write new code. Do not translate or copy AstrBot source. The [README](../README.md) records the whale sprite assets' source, modifications and licence.

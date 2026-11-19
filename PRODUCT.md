@@ -49,7 +49,7 @@ A small daycare for bots: the platform looks after hosting, restarts, isolation 
 
 - Name: 大肥鱼托管班. The bot instances are affectionately called 小鱼.
 - Theme illustration supplied by the user: a cozy chibi daycare where a pale blue haired teacher (the 梗Wiki mascot, speech bubble hair clip) reads a picture book to four small whale-girl pupils (大肥鱼) in a warm reading corner. The user requires the site to feel warm and cute.
-- Character assets from YunYueSama's 大肥鱼 project require visible attribution: `作者：YunYueSama` and `仓库：https://github.com/YunYueSama/codex-deepseek-pet`, plus a note that the assets were modified. Place it on the about section and in the README.
+- The README records the source of the whale sprite assets, the changes made for Fish and the applicable licence. The about page links to this record.
 - Interface language: Simplified Chinese.
 
 ## Evidence on Hand

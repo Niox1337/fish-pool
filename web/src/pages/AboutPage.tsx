@@ -129,23 +129,17 @@ export default function AboutPage() {
 
         <section aria-labelledby="credits" className="mt-14 border-t border-paper-3 pt-10">
           <h2 id="credits" className="font-display text-2xl font-black text-ink">
-            致谢与说明
+            项目说明
           </h2>
           <div className="mt-4 grid gap-5 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
             <Pupil mood="portrait" size={88} className="rounded-2xl bg-paper-2" />
             <div className="grid gap-3 text-[15px] leading-relaxed text-ink-2">
-              <p>小鱼的角色形象来自下面这个开源项目，谢谢作者。</p>
-              <div className="grid gap-1 text-ink">
-                <p>作者：YunYueSama</p>
-                <p className="break-all">
-                  仓库：
-                  <a href="https://github.com/YunYueSama/codex-deepseek-pet" target="_blank" rel="noreferrer" className="font-semibold text-sky underline">
-                    https://github.com/YunYueSama/codex-deepseek-pet
-                  </a>
-                </p>
-              </div>
-              <p>本站使用的角色素材经过修改，和原作不完全相同。</p>
               <p>托管班的插件接口是独立实现，可以运行部分 AstrBot 插件，和 AstrBot 项目没有隶属或合作关系。</p>
+              <p>
+                <a href="https://github.com/Niox1337/fish-pull#readme" target="_blank" rel="noreferrer" className="font-semibold text-sky underline">
+                  素材来源与许可
+                </a>
+              </p>
             </div>
           </div>
         </section>
