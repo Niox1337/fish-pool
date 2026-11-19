@@ -136,7 +136,7 @@ export default function AboutPage() {
             <div className="grid gap-3 text-[15px] leading-relaxed text-ink-2">
               <p>托管班的插件接口是独立实现，可以运行部分 AstrBot 插件，和 AstrBot 项目没有隶属或合作关系。</p>
               <p>
-                <a href="https://github.com/Niox1337/fish-pull#readme" target="_blank" rel="noreferrer" className="font-semibold text-sky underline">
+                <a href="https://github.com/Niox1337/fish-pool#readme" target="_blank" rel="noreferrer" className="font-semibold text-sky underline">
                   素材来源与许可
                 </a>
               </p>
