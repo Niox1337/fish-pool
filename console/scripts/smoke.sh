@@ -88,6 +88,8 @@ NODE_SECRET=$NODE_SECRET
 GITHUB_API_BASE=$NODE/gh-api
 GITHUB_RAW_BASE=$NODE/gh-raw
 GITHUB_GIT_BASE=$NODE/gh-git
+GENGWIKI_GATEWAY=$NODE/gw
+GENGWIKI_GATEWAY_TOKEN=gw-service-token
 ADMIN_EMAILS=admin@example.com
 EOF
 
@@ -210,8 +212,8 @@ make_invite() {
 
 # no_secrets NAME TEXT: TEXT must not contain plaintext secrets or stored secret columns
 no_secrets() {
-  if printf '%s' "$2" | grep -q -E 'sk-good|qq-secret|wx-token|manual-secret|password_hash|pbkdf2|secret_enc|api_key_enc|"secret"|"token"'; then
-    bad "$1" "$(printf '%s' "$2" | grep -o -E '.{40}(sk-good|qq-secret|wx-token|manual-secret|password_hash|pbkdf2|secret_enc|api_key_enc|"secret"|"token").{20}' | head -3)"
+  if printf '%s' "$2" | grep -q -E 'sk-good|gwk_ai_|qq-secret|wx-token|manual-secret|password_hash|pbkdf2|secret_enc|api_key_enc|"secret"|"token"'; then
+    bad "$1" "$(printf '%s' "$2" | grep -o -E '.{40}(sk-good|gwk_ai_|qq-secret|wx-token|manual-secret|password_hash|pbkdf2|secret_enc|api_key_enc|"secret"|"token").{20}' | head -3)"
   else
     ok "$1"
   fi
@@ -563,6 +565,32 @@ check "redeemed invite gives invite_used" 400 '.error.code == "invite_used"'
 COOKIE="$ADMIN_COOKIE"
 req GET "/api/admin/invites?status=used"
 check "used invite shows redemption" 200 "[.items[] | select(.code == \"$INV_B\")][0] | .used_count == 1 and .redemptions[0].user_email == \"$EMAIL\" and .redemptions[0].days == 7"
+
+echo "gengwiki gateway keys"
+req POST /api/admin/invites '{"days":1,"gateway_budget":"1000.01"}'
+check "gateway credit validated" 400 '.error.code == "invalid_input"'
+req POST /api/admin/invites '{"days":1,"count":2,"gateway_budget":"2.5"}'
+check "invite carries gateway credit" 200 '(.items | length) == 2 and .items[0].gateway_budget == "2.50"'
+INV_G1=$(j '.items[0].code'); INV_G2=$(j '.items[1].code')
+COOKIE="$USER_COOKIE"
+req POST /api/me/redeem "{\"code\":\"$INV_G1\"}"
+check "gateway invite redeemed" 200 '.user.service_active == true'
+node_check "gateway key issued with the invite credit" "/_debug/gw" "[.keys[] | select(.external_ref == \"invite:$INV_G1:$USER_ID\")] | length == 1 and .[0].budget == \"2.50\" and .[0].issued == 1 and (.[0].name | startswith(\"大肥鱼 \"))"
+req GET /api/llm-keys
+check "gateway key added to the user's keys" 200 '[.items[] | select(.name == "gengwiki 网关" and .has_balance == true and .model == "deepseek-flash" and (.base_url | endswith("/gw/v1")))] | length == 1'
+no_secrets "key list hides the gateway key" "$BODY"
+GW_KEY_ID=$(j '[.items[] | select(.name == "gengwiki 网关")][0].id')
+req GET "/api/llm-keys/$GW_KEY_ID/balance"
+check "gateway key reads its balance" 200 '.available == "2.5000" and .budget == "2.50" and .disabled == false'
+req GET "/api/llm-keys/$KEY_ID/balance"
+check "other keys have no balance" 400 '.error.code == "invalid_input"'
+node_check "bot with a working key keeps it" "/_debug/desired/$BOT" '.llm.api_key == "sk-good-abcdef1234"'
+curl -s "$NODE/_debug/gw?fail=1" > /dev/null
+req POST /api/me/redeem "{\"code\":\"$INV_G2\"}"
+check "redeem succeeds while the gateway fails" 200 '.user.service_active == true'
+COOKIE="$ADMIN_COOKIE"
+req GET "/api/admin/invites?status=used"
+check "redemptions show the gateway key state" 200 "([.items[] | select(.code == \"$INV_G1\")][0].redemptions[0].gateway == \"granted\") and ([.items[] | select(.code == \"$INV_G2\")][0].redemptions[0] | .gateway == \"failed\" and (.gateway_error | contains(\"503\")))"
 new_captcha
 COOKIE=""
 req POST /api/auth/email-code "{\"email\":\"$EMAIL2\",\"purpose\":\"register\",\"captcha_id\":\"$CAPTCHA_ID\",\"captcha_answer\":\"$CAPTCHA_ANSWER\",\"invite_code\":\"$INV_A\"}"

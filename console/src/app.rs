@@ -91,6 +91,15 @@ impl App {
         crate::gateway::AiGateway::new(&self.var("AI_GATEWAY")?, &self.var("AI_GATEWAY_TOKEN")?)
     }
 
+    /// gengwiki gateway from `GENGWIKI_GATEWAY`, `GENGWIKI_GATEWAY_MODEL` and the `GENGWIKI_GATEWAY_TOKEN` secret.
+    pub fn gengwiki(&self) -> crate::gengwiki::Gengwiki {
+        crate::gengwiki::Gengwiki::new(
+            self.var("GENGWIKI_GATEWAY").as_deref(),
+            self.var("GENGWIKI_GATEWAY_TOKEN").as_deref(),
+            self.var("GENGWIKI_GATEWAY_MODEL").as_deref(),
+        )
+    }
+
     pub fn default_node_id(&self) -> String {
         self.var("DEFAULT_NODE_ID").filter(|s| !s.is_empty()).unwrap_or_else(|| "node-1".into())
     }

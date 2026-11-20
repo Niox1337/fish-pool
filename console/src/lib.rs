@@ -9,6 +9,7 @@ pub mod db;
 pub mod email;
 pub mod error;
 pub mod gateway;
+pub mod gengwiki;
 pub mod github;
 pub mod http;
 pub mod invite;

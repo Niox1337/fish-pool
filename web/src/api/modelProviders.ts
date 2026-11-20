@@ -1,4 +1,12 @@
 export const modelProviders = [
+  // DeepSeek models through the gengwiki gateway, keys are prepaid credit
+  {
+    id: 'gengwiki',
+    name: 'gengwiki 网关',
+    platform_url: 'https://gengwiki.com/',
+    base_url: 'https://gateway.gengwiki.com/v1',
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
+  },
   // https://api-docs.deepseek.com/api/create-chat-completion/
   {
     id: 'deepseek',

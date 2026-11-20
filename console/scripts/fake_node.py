@@ -38,7 +38,10 @@ STATE = {
     "rejected": 0,
     "qr": {},
     "commit": "a" * 40,
+    "gw_keys": {},
+    "gw_fail": 0,
 }
+GW_TOKEN = "gw-service-token"
 COMMIT_VERSIONS = {"a" * 40: "v1.0.0", "b" * 40: "v1.1.0"}
 
 META = """name: astrbot_plugin_demo
@@ -185,6 +188,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.gh_raw(parts[1:])
         if parts[:1] == ["gh-git"]:
             return self.gh_git(parts[1:], query)
+        if parts[:1] == ["gw"]:
+            return self.gw(parts[1:], query, body)
         if parts[:1] == ["_debug"]:
             return self.debug(parts[1:], query)
         self.send_json(404, {"error": {"code": "not_found", "message": "not found"}})
@@ -292,6 +297,39 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(401, {"error": {"message": "Invalid API key provided", "type": "invalid_request_error"}})
         self.send_json(404, {"error": {"message": "not found"}})
 
+    # ---- fake gengwiki gateway ----
+    def gw(self, p, query, body):
+        auth = self.headers.get("authorization", "")
+        if p == ["manage", "keys"] and self.command == "POST":
+            if auth != f"Bearer {GW_TOKEN}":
+                return self.send_json(401, {"error": {"code": "invalid_token", "message": "服务令牌无效"}})
+            with LOCK:
+                if STATE["gw_fail"] > 0:
+                    STATE["gw_fail"] -= 1
+                    return self.send_json(503, {"error": {"code": "unavailable", "message": "网关没有配置"}})
+            doc = json.loads(body)
+            ref = doc.get("external_ref")
+            with LOCK:
+                found = next((k for k in STATE["gw_keys"].values() if ref and k["external_ref"] == ref), None)
+                key = "gwk_ai_" + os.urandom(12).hex()
+                if found:
+                    found["key"] = key
+                    found["issued"] += 1
+                    row = found
+                else:
+                    row = {"id": f"gk{len(STATE['gw_keys']) + 1}", "name": doc["name"], "budget": doc["budget"], "external_ref": ref, "key": key, "issued": 1}
+                    STATE["gw_keys"][row["id"]] = row
+            return self.send_json(200 if found else 201, {"key": key, "row": {"id": row["id"], "name": row["name"], "external_ref": ref}, **({"reissued": True} if found else {})})
+        with LOCK:
+            holder = next((k for k in STATE["gw_keys"].values() if auth == f"Bearer {k['key']}"), None)
+        if holder is None:
+            return self.send_json(401, {"error": {"code": "invalid_api_key", "message": "API Key 无效"}})
+        if p == ["v1", "models"]:
+            return self.send_json(200, {"object": "list", "data": [{"id": "deepseek-flash", "object": "model"}]})
+        if p == ["v1", "balance"]:
+            return self.send_json(200, {"currency": "CNY", "available": f"{holder['budget']}00", "budget": holder["budget"], "spent": "0.0000", "expires_at": None, "disabled": False})
+        self.send_json(404, {"error": {"code": "not_found", "message": "not found"}})
+
     # ---- fake GitHub ----
     def gh_api(self, p):
         if self.headers.get("user-agent") != "fish-console":
@@ -335,6 +373,10 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 STATE["commit"] = (query.get("sha") or [STATE["commit"]])[0]
                 return self.send_json(200, {"commit": STATE["commit"]})
+        if p == ["gw"]:
+            with LOCK:
+                STATE["gw_fail"] += int((query.get("fail") or ["0"])[0])
+                return self.send_json(200, {"keys": list(STATE["gw_keys"].values()), "fail": STATE["gw_fail"]})
         if len(p) == 2 and p[0] == "desired":
             with LOCK:
                 doc = STATE["desired"].get(p[1])

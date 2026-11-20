@@ -10,6 +10,7 @@ import type {
   Bot,
   BotSettings,
   CreateBotInput,
+  KeyBalance,
   LlmKey,
   LogLine,
   Platform,
@@ -90,6 +91,7 @@ export const api = {
   llmKeys: () => get<{ items: LlmKey[] }>('/llm-keys'),
   addLlmKey: (b: { name: string; base_url: string; model: string; api_key: string }) => post<LlmKey>('/llm-keys', b),
   deleteLlmKey: (id: string) => del<{ ok: true }>(`/llm-keys/${id}`),
+  llmKeyBalance: (id: string) => get<KeyBalance>(`/llm-keys/${id}/balance`),
 
   bots: () => get<{ items: Bot[] }>('/bots'),
   bot: (id: string) => get<Bot>(`/bots/${id}`),
@@ -140,7 +142,7 @@ export const api = {
     patch<AdminUser>(`/admin/users/${id}`, b),
   adminInvites: (status: 'unused' | 'used' | 'revoked' | 'all') =>
     get<{ items: Invite[]; cursor: string | null; default_quota: Quota }>(`/admin/invites?status=${status}`),
-  adminCreateInvites: (b: { days: number; count: number; quota: Quota; max_uses?: number; note?: string; expires_at?: number | null }) =>
+  adminCreateInvites: (b: { days: number; count: number; quota: Quota; max_uses?: number; note?: string; expires_at?: number | null; gateway_budget?: string }) =>
     post<{ items: Invite[] }>('/admin/invites', b),
   adminRevokeInvite: (code: string) => del<{ ok: true }>(`/admin/invites/${encodeURIComponent(code)}`),
 }

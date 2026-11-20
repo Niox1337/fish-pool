@@ -5,6 +5,7 @@ use crate::app::{ok_json, App, KEY_COLS};
 use crate::args;
 use crate::error::{ApiError, ApiResult};
 use crate::gateway::AiGateway;
+use crate::gengwiki::Gengwiki;
 use crate::http;
 use crate::models::LlmKeyRow;
 use crate::settings::BotSettings;
@@ -53,15 +54,35 @@ pub async fn list(req: &Request, app: &App) -> ApiResult<Reply> {
         .await?;
     let dec = app.decryptor()?;
     let gateway = app.ai_gateway();
-    let items: Vec<Value> = rows.iter().map(|r| key_view(r, dec(&r.api_key_enc).as_deref(), gateway.as_ref())).collect();
+    let gw = app.gengwiki();
+    let items: Vec<Value> = rows.iter().map(|r| key_view(r, dec(&r.api_key_enc).as_deref(), gateway.as_ref(), &gw)).collect();
     Ok(Reply::json(json!({"items": items})))
 }
 
-/// Key view plus `via_gateway`, true when the node reaches this provider through the AI Gateway.
-fn key_view(row: &LlmKeyRow, plaintext: Option<&str>, gateway: Option<&AiGateway>) -> Value {
+/// Key view plus `via_gateway`, true when the node reaches this provider through the AI Gateway,
+/// and `has_balance`, true when the key is a gengwiki gateway key that reports its balance.
+fn key_view(row: &LlmKeyRow, plaintext: Option<&str>, gateway: Option<&AiGateway>, gw: &Gengwiki) -> Value {
     let mut view = row.view(plaintext);
     view["via_gateway"] = json!(gateway.and_then(|g| g.endpoint(&row.base_url)).is_some());
+    view["has_balance"] = json!(gw.serves(&row.base_url));
     view
+}
+
+/// Balance of a gengwiki gateway key, read with the key itself.
+pub async fn balance(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let row: LlmKeyRow = app
+        .db
+        .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"), args![id, user.id])
+        .await?
+        .ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
+    let gw = app.gengwiki();
+    if !gw.serves(&row.base_url) {
+        return Err(ApiError::bad_request("只有 gengwiki 网关的 Key 可以查询余额"));
+    }
+    let key = (app.decryptor()?)(&row.api_key_enc).ok_or_else(|| ApiError::internal("key cannot be decrypted"))?;
+    let b = gw.balance(&key).await.map_err(|e| ApiError::new(502, "upstream_error", format!("余额查询失败：{e}")))?;
+    Ok(Reply::json(serde_json::to_value(b)?))
 }
 
 #[derive(Deserialize)]
@@ -136,7 +157,7 @@ pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
         .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1"), args![id])
         .await?
         .ok_or_else(|| ApiError::internal("inserted key missing"))?;
-    Ok(Reply::json(key_view(&row, Some(api_key), app.ai_gateway().as_ref())))
+    Ok(Reply::json(key_view(&row, Some(api_key), app.ai_gateway().as_ref(), &app.gengwiki())))
 }
 
 pub async fn delete(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {

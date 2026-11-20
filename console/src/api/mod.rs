@@ -5,7 +5,7 @@ mod auth;
 mod bots;
 mod internal;
 pub mod archive;
-mod keys;
+pub(crate) mod keys;
 mod platforms;
 mod plugins;
 mod usage;
@@ -91,6 +91,7 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Get, ["llm-keys"]) => keys::list(&req, app).await,
         (Post, ["llm-keys"]) => keys::create(&mut req, app).await,
         (Delete, ["llm-keys", id]) => keys::delete(&req, app, id).await,
+        (Get, ["llm-keys", id, "balance"]) => keys::balance(&req, app, id).await,
 
         (Get, ["bots"]) => bots::list(&req, app).await,
         (Post, ["bots"]) => bots::create(&mut req, app).await,

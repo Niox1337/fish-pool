@@ -58,8 +58,10 @@ users(id PK, email UNIQUE, password_hash, role TEXT 'user'|'admin', created_at,
       quota_memory_mb INT, quota_storage_mb INT, quota_bots INT, quota_plugins INT,
       service_until INT NULL, last_login_at INT NULL)   -- ms, null means no service yet
 invite_codes(code PK, days INT, max_uses INT DEFAULT 1, used_count INT DEFAULT 0, note TEXT,
-             created_by, created_at, expires_at INT NULL, revoked_at INT NULL, quota_json TEXT NULL)
-invite_redemptions(code, user_id, days, redeemed_at)
+             created_by, created_at, expires_at INT NULL, revoked_at INT NULL, quota_json TEXT NULL,
+             gateway_fen INT DEFAULT 0)   -- gengwiki gateway credit per redemption
+invite_redemptions(code, user_id, days, redeemed_at, gateway_fen INT DEFAULT 0,
+                   gateway_key_id TEXT NULL, gateway_error TEXT NULL)   -- llm_keys.id once issued
 sessions(token_hash PK, user_id, created_at, expires_at, user_agent)
 email_codes(email, purpose 'register'|'reset', code_hash, expires_at, attempts, created_at)
 captchas(id PK, answer_hash, expires_at)
@@ -126,12 +128,14 @@ Subscription and invite codes
 - The service is subscription based. At this stage every subscription period comes from an invite code made by an admin. A code carries a service length in days. Prices are not shown anywhere.
 - Code format `FISH-XXXX-XXXX` (Crockford base32, case insensitive, dashes optional on input).
 - `POST /api/me/redeem` `{code}` → `{"user": User}`. Extends `service_until` to `max(now, service_until) + days`.
+- Register and redeem with an invite whose `gateway_fen > 0` then issue a gengwiki gateway key (see below). The redemption succeeds even when that call fails.
 - Invite errors: `invite_invalid` (unknown or revoked), `invite_used` (used_count reached max_uses), `invite_expired` (past expires_at).
 - `service_active` is `role == 'admin' || service_until > now`. While inactive: `POST /api/bots`, `/start`, `/restart` and `POST /api/bots/:id/plugins` fail with 403 `service_expired`. Everything else stays readable and editable.
 - A 5 minute cron stops the bots of users whose service ran out (DesiredBot `running: false`, bot `status_detail` = `服务已到期，兑换新的邀请码后可以重新启动`). Data is kept. Redeeming a code does not auto start bots.
 
 LLM keys
-- `GET /api/llm-keys` → `{"items": [{id, name, base_url, model, key_masked, created_at, via_gateway}]}`. `via_gateway` is true when the node reaches this provider through the Cloudflare AI Gateway.
+- `GET /api/llm-keys` → `{"items": [{id, name, base_url, model, key_masked, created_at, via_gateway, has_balance}]}`. `via_gateway` is true when the node reaches this provider through the Cloudflare AI Gateway. `has_balance` is true for keys on the gengwiki gateway.
+- `GET /api/llm-keys/:id/balance` → `{currency, available, budget, spent, expires_at, disabled}` in yuan strings, read from the gateway with the key itself. Other keys give `invalid_input`, a gateway failure gives `upstream_error` (502).
 - `POST /api/llm-keys` `{name, base_url, model, api_key}` → item. Worker validates by calling `{base_url}/models` with 8s timeout, failure returns `llm_key_invalid` with the upstream message.
 - `DELETE /api/llm-keys/:id`
 - Presets offered by the UI (base_url): DeepSeek `https://api.deepseek.com/v1`, OpenAI `https://api.openai.com/v1`, SiliconFlow `https://api.siliconflow.cn/v1`, Moonshot `https://api.moonshot.cn/v1`, 智谱 `https://open.bigmodel.cn/api/paas/v4`, custom.
@@ -217,8 +221,8 @@ Admin (role `admin` only, otherwise 403 `forbidden`; read routes never return se
 - `GET /api/admin/users/:id/bots/:bot_id/logs?after=` → logs of that bot
 - `PATCH /api/admin/users/:id` `{quota?: {memory_mb?, storage_mb?, bots?, plugins?}, service_until?: ms|null, extend_days?: n}` → AdminUser (pushes the new quota to the nodes of that user's bots, `extend_days` adds to `max(now, service_until)`)
 - `GET /api/admin/invites?status=unused|used|revoked|all&cursor=` → `{"items": [Invite], "cursor", "default_quota"}` (50 per page, newest first)
-  `Invite = {code, days, max_uses, used_count, note, created_by_email, created_at, expires_at, revoked_at, quota, redemptions: [{user_id, user_email, days, redeemed_at}]}`
-- `POST /api/admin/invites` `{days: 1..3650, count: 1..100, max_uses?: 1..1000 (default 1), note?, expires_at?, quota?: {memory_mb, storage_mb, bots, plugins}}` → `{"items": [Invite]}`. Legacy invite codes with `quota: null` use the registration defaults.
+  `Invite = {code, days, max_uses, used_count, note, created_by_email, created_at, expires_at, revoked_at, quota, gateway_budget, redemptions: [{user_id, user_email, days, redeemed_at, gateway, gateway_error}]}`. `gateway_budget` is yuan or null, `gateway` is null, `pending`, `failed` or `granted`.
+- `POST /api/admin/invites` `{days: 1..3650, count: 1..100, max_uses?: 1..1000 (default 1), note?, expires_at?, quota?: {memory_mb, storage_mb, bots, plugins}, gateway_budget?: "0".."1000" yuan}` → `{"items": [Invite]}`. Legacy invite codes with `quota: null` use the registration defaults. A gateway budget needs `GENGWIKI_GATEWAY_TOKEN`.
 - `DELETE /api/admin/invites/:code` → `{"ok": true}` (sets revoked_at, already granted time stays)
 - The overview gains `"users": {"total", "new_7d", "active", "expiring_7d", "expired"}` and `"invites": {"unused", "used_7d"}`.
 - `AdminUser` includes `service_until` and `service_active` through `User`.
@@ -230,6 +234,13 @@ Error codes (field `error.code`)
 - Resources: `quota_exceeded` (403), `llm_key_invalid`, `repo_invalid`, `not_astrbot_plugin`, `config_invalid` (400), `plugin_exists` (409), `github_unavailable` (502).
 - Node: `node_unreachable` (502, also from `GET /api/usage`), `node_error` (502, the node answered with an error), `no_node` (503, no node configured).
 - Node to console callbacks: `bad_signature` (401).
+
+gengwiki gateway
+- An OpenAI compatible DeepSeek endpoint with prepaid keys. Worker vars `GENGWIKI_GATEWAY` (origin, default `https://gateway.gengwiki.com`) and `GENGWIKI_GATEWAY_MODEL` (default `deepseek-flash`), secret `GENGWIKI_GATEWAY_TOKEN` (the service token gengwiki lists for fish).
+- Issuing: `POST {origin}/manage/keys` `{name: "大肥鱼 <email>", budget, external_ref: "invite:<code>:<user_id>"}` with the service token. A repeated `external_ref` reissues the same key with a new secret, so a retry never makes a second key.
+- The key is stored as an `llm_keys` row named `gengwiki 网关` with base URL `{origin}/v1`, and bots of that user whose key is unset or deleted switch to it and are pushed.
+- A failed call stores `gateway_error`. The maintenance cron retries redemptions older than 2 minutes and younger than 7 days, 5 per run.
+- Balance: `GET {origin}/v1/balance` with the key as bearer.
 
 Development mode (Worker var `FISH_DEV = "1"`, never in production)
 - Captcha answers and email codes are written to the Worker log as `[dev] captcha <id> answer <answer>` and `[dev] email code for <email>: <code>`. `EMAIL_PROVIDER = "log"` is only accepted in this mode.

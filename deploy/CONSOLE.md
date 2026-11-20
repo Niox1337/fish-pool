@@ -67,6 +67,7 @@ Worker 从环境读取以下名称。随机密钥都需要分别生成，不要�
 | `RESEND_API_KEY` | 仅 `EMAIL_PROVIDER = "resend"` 时必需 | 在 Resend 后台创建发送邮件的 API 凭据，不能用 OpenSSL 生成。默认 Cloudflare 邮件方案不需要它。 |
 | `GITHUB_TOKEN` | 可选 | 在 GitHub 创建访问插件仓库所需的 token，插件检查只在找不到 metadata.yaml 时调用 GitHub API，用来区分仓库不存在和不是插件。配置后这个提示更准确，不能用 OpenSSL 生成。 |
 | `AI_GATEWAY_TOKEN` | 可选 | 在 Cloudflare 后台创建带 AI Gateway Run 权限的 API token。配置后，OpenAI、Anthropic、Google Gemini 和 xAI 的请求由节点经 `AI_GATEWAY` 指向的网关转发。缺省时节点直连这些服务商。 |
+| `GENGWIKI_GATEWAY_TOKEN` | 可选 | gengwiki 服务器 `GATEWAY_SERVICE_TOKENS` 里 `fish=` 后面的令牌。配置后，管理员生成邀请码时可以附带 gengwiki 网关额度，兑换时自动发放模型 Key。 |
 
 在 `console/` 逐项上传，命令会提示输入内容：
 
@@ -89,7 +90,10 @@ wrangler secret put NODE_SECRET_NODE_1
 wrangler secret put RESEND_API_KEY
 wrangler secret put GITHUB_TOKEN
 wrangler secret put AI_GATEWAY_TOKEN
+wrangler secret put GENGWIKI_GATEWAY_TOKEN
 ```
+
+`GENGWIKI_GATEWAY`（默认 `https://gateway.gengwiki.com`）和 `GENGWIKI_GATEWAY_MODEL`（默认 `deepseek-flash`）可以写在 `[vars]` 里覆盖默认值。
 
 `AI_GATEWAY` 写在 `wrangler.toml` 的 `[vars]` 里，格式是 `https://gateway.ai.cloudflare.com/v1/<账户 ID>/<网关 ID>`。当前使用自建网关 `fish`，网关上已关闭日志、缓存、限速和重试，并开启鉴权。节点请求带 `cf-aig-collect-log: false`，网关不保存用户的对话内容。改动后需要重新推送小鱼（启动、重启或修改设置）才会生效。
 

@@ -30,7 +30,7 @@ function todayInput() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-type Errors = Partial<Record<'days' | 'count' | 'max_uses', string>>
+type Errors = Partial<Record<'days' | 'count' | 'max_uses' | 'gateway', string>>
 
 function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreated: (items: Invite[]) => void }) {
   const qc = useQueryClient()
@@ -39,10 +39,11 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
   const [maxUses, setMaxUses] = useState('1')
   const [note, setNote] = useState('')
   const [expires, setExpires] = useState('')
+  const [gateway, setGateway] = useState('')
   const [quotaEdits, setQuotaEdits] = useState<Partial<QuotaForm>>({})
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState<Errors>({})
-  const ids = { days: useFieldId('inv-days'), count: useFieldId('inv-count'), uses: useFieldId('inv-uses'), note: useFieldId('inv-note'), exp: useFieldId('inv-exp') }
+  const ids = { days: useFieldId('inv-days'), count: useFieldId('inv-count'), uses: useFieldId('inv-uses'), note: useFieldId('inv-note'), exp: useFieldId('inv-exp'), gw: useFieldId('inv-gw') }
   const quotaForm = defaultQuota ? { ...quotaToForm(defaultQuota), ...quotaEdits } : undefined
   const quotaValid = quotaForm && quotaFields.every((field) => !quotaFieldError(quotaForm[field.key], field))
 
@@ -55,11 +56,13 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
     if (!Number.isInteger(d) || d < 1 || d > 3650) next.days = '服务天数填 1 到 3650'
     if (!Number.isInteger(c) || c < 1 || c > 50) next.count = '一次生成 1 到 50 个'
     if (!Number.isInteger(u) || u < 1 || u > 1000) next.max_uses = '每个码可用 1 到 1000 次'
+    const g = gateway.trim()
+    if (g && (!/^\d{1,4}(\.\d{1,2})?$/.test(g) || Number(g) > 1000)) next.gateway = '填 0 到 1000 元，最多两位小数'
     setErrors(next)
     if (Object.keys(next).length || !quotaForm || !quotaValid) return
     setBusy(true)
     try {
-      const r = await api.adminCreateInvites({ days: d, count: c, max_uses: u, quota: quotaFromForm(quotaForm), note: note.trim() || undefined, expires_at: expires ? endOfDay(expires) : null })
+      const r = await api.adminCreateInvites({ days: d, count: c, max_uses: u, quota: quotaFromForm(quotaForm), note: note.trim() || undefined, expires_at: expires ? endOfDay(expires) : null, gateway_budget: g && Number(g) > 0 ? g : undefined })
       qc.invalidateQueries({ queryKey: [...keys.admin, 'invites'] })
       qc.invalidateQueries({ queryKey: [...keys.admin, 'overview'] })
       onCreated(r.items)
@@ -121,6 +124,12 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
           <QuotaInputs form={quotaForm} onChange={(key, value) => setQuotaEdits((prev) => ({ ...prev, [key]: value }))} />
         ) : <Skeleton className="h-40" />}
       </fieldset>
+      <Field label="gengwiki 网关额度（可选）" htmlFor={ids.gw} error={errors.gateway} hint="每次兑换都会生成一个带这笔额度的模型 Key，加进对方的模型 Key 并给没有可用 Key 的小鱼用上。">
+        <div className="flex items-center gap-2">
+          <Input id={ids.gw} inputMode="decimal" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="0" aria-invalid={!!errors.gateway} className="w-28 tabular-nums" />
+          <span className="text-sm text-ink-2">元</span>
+        </div>
+      </Field>
       <Field label="管理员备注" htmlFor={ids.note}>
         <Input id={ids.note} value={note} onChange={(e) => setNote(e.target.value)} maxLength={80} placeholder="群友试用" />
       </Field>
@@ -172,6 +181,7 @@ function Created({ items, onClose }: { items: Invite[]; onClose: () => void }) {
         每个 {items[0]?.days} 天，可用 {items[0]?.max_uses} 次{items[0]?.expires_at ? `，${fmtDate(items[0].expires_at)} 前兑换` : ''}
       </p>
       {items[0] && <p className="mt-1 text-[13px] text-ink-3 tabular-nums">{inviteQuotaLabel(items[0].quota)}</p>}
+      {items[0]?.gateway_budget && <p className="mt-1 text-[13px] text-ink-3 tabular-nums">附带 gengwiki 网关额度 {items[0].gateway_budget} 元</p>}
       <ul className="mt-3 grid gap-2 sm:grid-cols-2">
         {items.map((i) => (
           <li key={i.code} className="flex items-center gap-2 rounded-xl border border-paper-3 bg-white py-1.5 pr-1.5 pl-3">
@@ -238,6 +248,7 @@ function InviteRow({ inv }: { inv: Invite }) {
       </div>
       {inv.note && <p className="mt-1 text-sm text-ink">{inv.note}</p>}
       <p className="mt-1 text-[13px] text-ink-2 tabular-nums">{inviteQuotaLabel(inv.quota)}</p>
+      {inv.gateway_budget && <p className="mt-1 text-[13px] text-ink-2 tabular-nums">附带 gengwiki 网关额度 {inv.gateway_budget} 元</p>}
       <p className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[13px] text-ink-3 tabular-nums">
         <span>{inv.created_by_email} 于 {fmtDate(inv.created_at)} 生成</span>
         <span>{inv.expires_at ? `${fmtDate(inv.expires_at)} 前可兑换` : '不限兑换日期'}</span>
@@ -253,6 +264,9 @@ function InviteRow({ inv }: { inv: Invite }) {
               <span className="text-ink-3 tabular-nums">
                 {fmtDateTime(r.redeemed_at)} 兑换，加了 {r.days} 天
               </span>
+              {r.gateway === 'granted' && <span className="text-ok">网关 Key 已发放</span>}
+              {r.gateway === 'pending' && <span className="text-ink-3">网关 Key 发放中</span>}
+              {r.gateway === 'failed' && <span className="text-bad" title={r.gateway_error ?? undefined}>网关 Key 发放失败，稍后自动重试</span>}
             </li>
           ))}
         </ul>

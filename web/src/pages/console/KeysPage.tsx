@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
@@ -134,7 +134,7 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          placeholder="sk-..."
+          placeholder={provider === 'gengwiki' ? 'gwk_ai_...' : 'sk-...'}
           autoComplete="off"
           spellCheck={false}
           aria-invalid={!!errors.api_key}
@@ -154,6 +154,19 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
         {onCancel && <Button variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>}
       </div>
     </form>
+  )
+}
+
+function KeyBalanceLine({ id }: { id: string }) {
+  const q = useQuery({ queryKey: [...keys.llmKeys, id, 'balance'], queryFn: () => api.llmKeyBalance(id), staleTime: 60_000, retry: false })
+  if (q.isLoading) return <span className="text-ink-3">正在查询余额</span>
+  if (q.error || !q.data) return <span className="text-ink-3" title={q.error instanceof Error ? q.error.message : undefined}>余额暂时查不到</span>
+  const b = q.data
+  const expired = !!b.expires_at && new Date(b.expires_at).getTime() <= Date.now()
+  return (
+    <span className={cn('tabular-nums', b.disabled || expired ? 'text-bad' : 'text-ink-2')} title={`总额度 ${b.budget} 元，已用 ${b.spent} 元`}>
+      余额 {b.available} 元{b.disabled ? ' · 已停用' : expired ? ' · 已过期' : ''}
+    </span>
   )
 }
 
@@ -194,6 +207,7 @@ function KeyRow({ k, usedBy }: { k: LlmKey; usedBy: string[] }) {
             </span>
           )}
         </p>
+        {k.has_balance && <p className="mt-1 text-sm"><KeyBalanceLine id={k.id} /></p>}
         {usedBy.length > 0 && <p className="mt-1 break-words text-sm text-ink-3">使用中 · {usedBy.join('、')}</p>}
         <details className="mt-1 text-sm text-ink-3">
           <summary aria-label={`${k.name} 的详情`} className="w-fit cursor-pointer rounded-md py-1 font-semibold text-ink-2 hover:text-sky">详情</summary>

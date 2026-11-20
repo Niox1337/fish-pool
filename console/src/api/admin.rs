@@ -692,6 +692,8 @@ struct InviteListRow {
     expires_at: Option<i64>,
     revoked_at: Option<i64>,
     quota_json: Option<String>,
+    #[serde(default)]
+    gateway_fen: i64,
 }
 
 #[derive(Deserialize)]
@@ -701,6 +703,19 @@ struct RedemptionRow {
     user_email: Option<String>,
     days: i64,
     redeemed_at: i64,
+    gateway_fen: i64,
+    gateway_key_id: Option<String>,
+    gateway_error: Option<String>,
+}
+
+/// Gateway key state of a redemption: none, pending, failed or granted.
+fn gateway_state(r: &RedemptionRow) -> Option<&'static str> {
+    match (r.gateway_fen > 0, &r.gateway_key_id, &r.gateway_error) {
+        (false, _, _) => None,
+        (true, Some(_), _) => Some("granted"),
+        (true, None, Some(_)) => Some("failed"),
+        (true, None, None) => Some("pending"),
+    }
 }
 
 async fn invite_views(app: &App, rows: Vec<InviteListRow>) -> ApiResult<Vec<Value>> {
@@ -712,15 +727,18 @@ async fn invite_views(app: &App, rows: Vec<InviteListRow>) -> ApiResult<Vec<Valu
             .db
             .all(
                 &format!(
-                    "SELECT r.code, r.user_id, u.email AS user_email, r.days, r.redeemed_at FROM invite_redemptions r \
+                    "SELECT r.code, r.user_id, u.email AS user_email, r.days, r.redeemed_at, r.gateway_fen, r.gateway_key_id, r.gateway_error \
+                     FROM invite_redemptions r \
                      LEFT JOIN users u ON u.id = r.user_id WHERE r.code IN ({marks}) ORDER BY r.redeemed_at"
                 ),
                 &binds,
             )
             .await?;
         for r in found {
-            redemptions.entry(r.code).or_default().push(json!({
+            let gateway = gateway_state(&r);
+            redemptions.entry(r.code.clone()).or_default().push(json!({
                 "user_id": r.user_id, "user_email": r.user_email, "days": r.days, "redeemed_at": r.redeemed_at,
+                "gateway": gateway, "gateway_error": r.gateway_error,
             }));
         }
     }
@@ -733,6 +751,7 @@ async fn invite_views(app: &App, rows: Vec<InviteListRow>) -> ApiResult<Vec<Valu
                 "code": r.code, "days": r.days, "max_uses": r.max_uses, "used_count": r.used_count, "note": r.note,
                 "created_by_email": r.created_by_email, "created_at": r.created_at, "expires_at": r.expires_at,
                 "revoked_at": r.revoked_at, "redemptions": red, "quota": quota,
+                "gateway_budget": (r.gateway_fen > 0).then(|| crate::gengwiki::yuan(r.gateway_fen)),
             })
         })
         .collect())
@@ -757,7 +776,7 @@ pub fn parse_invite_cursor(c: &str) -> ApiResult<(i64, String)> {
 }
 
 const INVITE_SELECT: &str = "SELECT i.code, i.days, i.max_uses, i.used_count, i.note, u.email AS created_by_email, \
-i.created_at, i.expires_at, i.revoked_at, i.quota_json FROM invite_codes i LEFT JOIN users u ON u.id = i.created_by";
+i.created_at, i.expires_at, i.revoked_at, i.quota_json, i.gateway_fen FROM invite_codes i LEFT JOIN users u ON u.id = i.created_by";
 
 pub async fn invites(req: &Request, app: &App) -> ApiResult<Reply> {
     app.require_admin(req).await?;
@@ -794,6 +813,9 @@ struct CreateInvites {
     expires_at: Option<i64>,
     #[serde(default)]
     quota: AccountQuota,
+    /// gengwiki gateway credit in yuan for each redemption.
+    #[serde(default)]
+    gateway_budget: Option<String>,
 }
 
 fn one() -> i64 {
@@ -822,6 +844,10 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
     if body.expires_at.is_some_and(|t| t <= now) {
         return Err(ApiError::bad_request("expires_at 必须晚于当前时间"));
     }
+    let gateway_fen = gateway_fen(body.gateway_budget.as_deref())?;
+    if gateway_fen > 0 && app.gengwiki().token.is_none() {
+        return Err(ApiError::bad_request("gengwiki 网关未配置，不能附带额度"));
+    }
     let mut codes = Vec::new();
     for attempt in 0..3 {
         codes = (0..body.count).map(|_| invite::generate()).collect::<Vec<_>>();
@@ -829,8 +855,9 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
             .iter()
             .map(|c| {
                 app.db.stmt(
-                    "INSERT INTO invite_codes (code, days, max_uses, used_count, note, created_by, created_at, expires_at, quota_json) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8)",
-                    args![c, body.days, body.max_uses, note, admin.id, now, body.expires_at, quota_json],
+                    "INSERT INTO invite_codes (code, days, max_uses, used_count, note, created_by, created_at, expires_at, quota_json, gateway_fen) \
+                     VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    args![c, body.days, body.max_uses, note, admin.id, now, body.expires_at, quota_json, gateway_fen],
                 )
             })
             .collect::<ApiResult<Vec<_>>>()?;
@@ -853,9 +880,18 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
             expires_at: body.expires_at,
             revoked_at: None,
             quota_json: Some(quota_json.clone()),
+            gateway_fen,
         })
         .collect();
     Ok(Reply::json(json!({"items": invite_views(app, rows).await?})))
+}
+
+/// Optional gateway credit of an invite as fen, empty meaning none.
+pub fn gateway_fen(budget: Option<&str>) -> ApiResult<i64> {
+    let Some(b) = budget.map(str::trim).filter(|b| !b.is_empty()) else { return Ok(0) };
+    crate::gengwiki::parse_fen(b)
+        .filter(|f| *f <= crate::gengwiki::MAX_GIFT_FEN)
+        .ok_or_else(|| ApiError::bad_request(format!("网关额度应为 0 到 {} 元，最多两位小数", crate::gengwiki::MAX_GIFT_FEN / 100)))
 }
 
 pub async fn revoke_invite(req: &Request, app: &App, code: &str) -> ApiResult<Reply> {
@@ -872,6 +908,17 @@ pub async fn revoke_invite(req: &Request, app: &App, code: &str) -> ApiResult<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_budgets() {
+        assert_eq!(gateway_fen(None).unwrap(), 0);
+        assert_eq!(gateway_fen(Some(" ")).unwrap(), 0);
+        assert_eq!(gateway_fen(Some("5")).unwrap(), 500);
+        assert_eq!(gateway_fen(Some("1000")).unwrap(), 100_000);
+        assert!(gateway_fen(Some("1000.01")).is_err());
+        assert!(gateway_fen(Some("-1")).is_err());
+        assert!(gateway_fen(Some("0.001")).is_err());
+    }
 
     #[test]
     fn like_escaping() {

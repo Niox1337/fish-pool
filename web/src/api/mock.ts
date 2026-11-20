@@ -248,10 +248,13 @@ export async function mockFetch(method: string, path: string, body: any): Promis
       key_masked: `${String(body.api_key).slice(0, 3)}…${String(body.api_key).slice(-4)}`,
       created_at: now(),
       via_gateway: gatewayBaseUrls.includes(String(body.base_url).replace(/\/+$/, '')),
+      has_balance: String(body.base_url).replace(/\/+$/, '') === 'https://gateway.gengwiki.com/v1',
     }
     state.keys.push(k)
     return ok(k)
   }
+  const bal = m(/^\/llm-keys\/(\w+)\/balance$/)
+  if (bal && method === 'GET') return ok({ currency: 'CNY', available: '4.9832', budget: '5.00', spent: '0.0168', expires_at: null, disabled: false })
   let r = m(/^\/llm-keys\/(\w+)$/)
   if (r && method === 'DELETE') {
     state.keys = state.keys.filter((k) => k.id !== r![1])
@@ -623,6 +626,7 @@ function adminRoute(method: string, path: string, body: any): Response {
     const items: Invite[] = Array.from({ length: body.count ?? 1 }, () => ({
       code: genCode(), days: body.days, quota: body.quota ?? defaultQuota, max_uses: body.max_uses ?? 1, used_count: 0, note: body.note || null,
       created_by_email: state.user!.email, created_at: now(), expires_at: body.expires_at ?? null, revoked_at: null, redemptions: [],
+      gateway_budget: body.gateway_budget ? Number(body.gateway_budget).toFixed(2) : null,
     }))
     invites.push(...items)
     return ok({ items })

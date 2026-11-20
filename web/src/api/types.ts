@@ -19,6 +19,17 @@ export type LlmKey = {
   created_at: number
   /** The node reaches this provider through the Cloudflare AI Gateway. */
   via_gateway?: boolean
+  /** A gengwiki gateway key, its balance comes from `/llm-keys/{id}/balance`. */
+  has_balance?: boolean
+}
+
+export type KeyBalance = {
+  currency: string
+  available: string
+  budget: string
+  spent: string
+  expires_at: string | null
+  disabled: boolean
 }
 
 export type CreateBotInput = { name: string; key_id: string; model: string }
@@ -217,7 +228,16 @@ export type Invite = {
   created_at: number
   expires_at: number | null
   revoked_at: number | null
-  redemptions: { user_id: string; user_email: string; days: number; redeemed_at: number }[]
+  /** gengwiki gateway credit in yuan each redemption gets as a model key. */
+  gateway_budget?: string | null
+  redemptions: {
+    user_id: string
+    user_email: string
+    days: number
+    redeemed_at: number
+    gateway?: 'pending' | 'failed' | 'granted' | null
+    gateway_error?: string | null
+  }[]
 }
 
 export type AdminOverview = {

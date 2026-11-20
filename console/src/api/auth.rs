@@ -283,6 +283,7 @@ pub async fn register(req: &mut Request, app: &App) -> ApiResult<Reply> {
             if changes.get(1).copied().unwrap_or(0) != 1 {
                 return Err(invite::failure(app, &code, &id).await);
             }
+            grant_after_redeem(app, &id).await;
         }
         None => {
             app.db
@@ -398,8 +399,16 @@ pub async fn redeem(req: &mut Request, app: &App) -> ApiResult<Reply> {
     app.rate_hit(&bucket).await?;
     let row = invite::check(app, &body.code).await?;
     invite::redeem_for_user(app, &row.code, &user.id).await?;
+    grant_after_redeem(app, &user.id).await;
     let user = app.user_by_id(&user.id).await?;
     Ok(Reply::json(json!({"user": user.view()})))
+}
+
+/// Issues the gateway key an invite carried. A failure is retried by the maintenance run.
+async fn grant_after_redeem(app: &App, user_id: &str) {
+    if let Err(e) = invite::grant_gateway_keys(app, Some(user_id), now_ms(), 5).await {
+        crate::util::log_error(&format!("gengwiki key for user {user_id}: {}", e.message));
+    }
 }
 
 pub async fn me(req: &Request, app: &App) -> ApiResult<Reply> {
