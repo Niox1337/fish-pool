@@ -53,3 +53,8 @@ export function pct(part: number, whole: number): number {
   if (!whole) return 0
   return Math.min(100, Math.max(0, (part / whole) * 100))
 }
+
+/** True when an ISO time is set and not in the future. */
+export function isPast(iso: string | null | undefined): boolean {
+  return !!iso && new Date(iso).getTime() <= Date.now()
+}

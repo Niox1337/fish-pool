@@ -349,6 +349,8 @@ const D1_SQL: &str = "SELECT \
 (SELECT COUNT(*) FROM llm_keys) AS llm_keys, \
 (SELECT COUNT(*) FROM invite_codes) AS invite_codes, \
 (SELECT COUNT(*) FROM invite_redemptions) AS invite_redemptions, \
+(SELECT COUNT(*) FROM gateway_accounts) AS gateway_accounts, \
+(SELECT COUNT(*) FROM gateway_credits) AS gateway_credits, \
 (SELECT COUNT(*) FROM email_codes) AS email_codes, \
 (SELECT COUNT(*) FROM captchas) AS captchas, \
 (SELECT COUNT(*) FROM rate_events) AS rate_events, \
@@ -358,8 +360,8 @@ const D1_SQL: &str = "SELECT \
 (SELECT COUNT(*) FROM nodes) AS nodes";
 
 /// Tables reported by [`D1_SQL`], in display order.
-pub const D1_TABLES: [&str; 14] = [
-    "users", "sessions", "bots", "platforms", "plugins", "llm_keys", "invite_codes", "invite_redemptions",
+pub const D1_TABLES: [&str; 16] = [
+    "users", "sessions", "bots", "platforms", "plugins", "llm_keys", "invite_codes", "invite_redemptions", "gateway_accounts", "gateway_credits",
     "email_codes", "captchas", "rate_events", "qr_tasks", "node_tombstones", "nodes",
 ];
 
@@ -703,18 +705,18 @@ struct RedemptionRow {
     user_email: Option<String>,
     days: i64,
     redeemed_at: i64,
-    gateway_fen: i64,
-    gateway_key_id: Option<String>,
-    gateway_error: Option<String>,
+    credit_id: Option<String>,
+    credit_remote_id: Option<String>,
+    credit_error: Option<String>,
 }
 
-/// Gateway key state of a redemption: none, pending, failed or granted.
+/// Gateway credit state of a redemption: none, pending, failed or granted.
 fn gateway_state(r: &RedemptionRow) -> Option<&'static str> {
-    match (r.gateway_fen > 0, &r.gateway_key_id, &r.gateway_error) {
-        (false, _, _) => None,
-        (true, Some(_), _) => Some("granted"),
-        (true, None, Some(_)) => Some("failed"),
-        (true, None, None) => Some("pending"),
+    match (&r.credit_id, &r.credit_remote_id, &r.credit_error) {
+        (None, _, _) => None,
+        (Some(_), Some(_), _) => Some("granted"),
+        (Some(_), None, Some(_)) => Some("failed"),
+        (Some(_), None, None) => Some("pending"),
     }
 }
 
@@ -727,9 +729,10 @@ async fn invite_views(app: &App, rows: Vec<InviteListRow>) -> ApiResult<Vec<Valu
             .db
             .all(
                 &format!(
-                    "SELECT r.code, r.user_id, u.email AS user_email, r.days, r.redeemed_at, r.gateway_fen, r.gateway_key_id, r.gateway_error \
-                     FROM invite_redemptions r \
-                     LEFT JOIN users u ON u.id = r.user_id WHERE r.code IN ({marks}) ORDER BY r.redeemed_at"
+                    "SELECT r.code, r.user_id, u.email AS user_email, r.days, r.redeemed_at, \
+                     c.id AS credit_id, c.remote_id AS credit_remote_id, c.error AS credit_error \
+                     FROM invite_redemptions r LEFT JOIN users u ON u.id = r.user_id \
+                     LEFT JOIN gateway_credits c ON c.ref = 'invite:' || r.code || ':' || r.user_id WHERE r.code IN ({marks}) ORDER BY r.redeemed_at"
                 ),
                 &binds,
             )
@@ -738,7 +741,7 @@ async fn invite_views(app: &App, rows: Vec<InviteListRow>) -> ApiResult<Vec<Valu
             let gateway = gateway_state(&r);
             redemptions.entry(r.code.clone()).or_default().push(json!({
                 "user_id": r.user_id, "user_email": r.user_email, "days": r.days, "redeemed_at": r.redeemed_at,
-                "gateway": gateway, "gateway_error": r.gateway_error,
+                "gateway": gateway, "gateway_error": r.credit_error,
             }));
         }
     }
@@ -846,7 +849,7 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
     }
     let gateway_fen = gateway_fen(body.gateway_budget.as_deref())?;
     if gateway_fen > 0 && app.gengwiki().token.is_none() {
-        return Err(ApiError::bad_request("gengwiki 网关未配置，不能附带额度"));
+        return Err(ApiError::bad_request("活动额度服务未配置，不能附带额度"));
     }
     let mut codes = Vec::new();
     for attempt in 0..3 {
@@ -890,8 +893,8 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
 pub fn gateway_fen(budget: Option<&str>) -> ApiResult<i64> {
     let Some(b) = budget.map(str::trim).filter(|b| !b.is_empty()) else { return Ok(0) };
     crate::gengwiki::parse_fen(b)
-        .filter(|f| *f <= crate::gengwiki::MAX_GIFT_FEN)
-        .ok_or_else(|| ApiError::bad_request(format!("网关额度应为 0 到 {} 元，最多两位小数", crate::gengwiki::MAX_GIFT_FEN / 100)))
+        .filter(|f| *f <= crate::gengwiki::MAX_CREDIT_FEN)
+        .ok_or_else(|| ApiError::bad_request(format!("网关额度应为 0 到 {} 元，最多两位小数", crate::gengwiki::MAX_CREDIT_FEN / 100)))
 }
 
 pub async fn revoke_invite(req: &Request, app: &App, code: &str) -> ApiResult<Reply> {

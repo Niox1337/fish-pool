@@ -7,6 +7,7 @@ export const keys = {
   bots: ['bots'] as const,
   bot: (id: string) => ['bots', id] as const,
   llmKeys: ['llm-keys'] as const,
+  gateway: ['gateway'] as const,
   usage: ['usage'] as const,
   logs: (id: string) => ['logs', id] as const,
   admin: ['admin'] as const,
@@ -49,6 +50,14 @@ export function useLlmKeys() {
   return useQuery({ queryKey: keys.llmKeys, queryFn: async () => (await api.llmKeys()).items })
 }
 
+export function useKeyBalance(id: string) {
+  return useQuery({ queryKey: [...keys.llmKeys, id, 'balance'], queryFn: () => api.llmKeyBalance(id), staleTime: 60_000, retry: false })
+}
+
+export function useGateway() {
+  return useQuery({ queryKey: keys.gateway, queryFn: api.gateway, staleTime: 60_000, retry: false })
+}
+
 export function useUsage() {
   return useQuery({ queryKey: keys.usage, queryFn: api.usage, refetchInterval: 30_000 })
 }
@@ -85,6 +94,10 @@ export function useAdminUsers(q: string) {
 
 export function useAdminUser(id: string) {
   return useQuery({ queryKey: [...keys.admin, 'user', id], queryFn: () => api.adminUser(id), refetchInterval: 15_000 })
+}
+
+export function useAdminCredits(id: string) {
+  return useQuery({ queryKey: [...keys.admin, 'credits', id], queryFn: () => api.adminCredits(id), retry: false })
 }
 
 export function useAdminUserUsage(id: string) {

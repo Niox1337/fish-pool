@@ -1,21 +1,22 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
-import { keys, useBots, useLlmKeys } from '@/api/hooks'
-import { modelProviders, providerForEndpoint } from '@/api/modelProviders'
+import { keys, useBots, useKeyBalance, useLlmKeys } from '@/api/hooks'
+import { modelProviders, providerForEndpoint, type ModelProvider } from '@/api/modelProviders'
 import type { CreateBotInput, LlmKey } from '@/api/types'
 import { Button, ConfirmDialog, ErrorNote, Field, Input, PageHeader, Skeleton, useFieldId } from '@/components/ui'
 import { cn } from '@/lib/cn'
-import { fmtDate } from '@/lib/format'
+import { fmtDate, isPast } from '@/lib/format'
 import { Select } from './bot/shared'
 import ModelField from './ModelField'
 
 type Errors = Partial<Record<'provider' | 'name' | 'base_url' | 'model' | 'api_key' | 'form', string>>
 
-function ProviderPlatformLink({ provider }: { provider: (typeof modelProviders)[number] }) {
+function ProviderPlatformLink({ provider }: { provider: ModelProvider }) {
+  if (!provider.platform_url) return null
   return (
     <a href={provider.platform_url} target="_blank" rel="noreferrer" title={`${provider.name} 官方平台`}
       className="inline-flex min-w-0 items-center gap-1 text-[13px] font-semibold text-sky underline-offset-2 hover:underline">
@@ -158,14 +159,15 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
 }
 
 function KeyBalanceLine({ id }: { id: string }) {
-  const q = useQuery({ queryKey: [...keys.llmKeys, id, 'balance'], queryFn: () => api.llmKeyBalance(id), staleTime: 60_000, retry: false })
+  const q = useKeyBalance(id)
   if (q.isLoading) return <span className="text-ink-3">正在查询余额</span>
   if (q.error || !q.data) return <span className="text-ink-3" title={q.error instanceof Error ? q.error.message : undefined}>余额暂时查不到</span>
   const b = q.data
-  const expired = !!b.expires_at && new Date(b.expires_at).getTime() <= Date.now()
+  const expired = isPast(b.expires_at)
+  const next = b.credits?.[0]?.expires_at
   return (
-    <span className={cn('tabular-nums', b.disabled || expired ? 'text-bad' : 'text-ink-2')} title={`总额度 ${b.budget} 元，已用 ${b.spent} 元`}>
-      余额 {b.available} 元{b.disabled ? ' · 已停用' : expired ? ' · 已过期' : ''}
+    <span className={cn('tabular-nums', b.disabled || expired ? 'text-bad' : 'text-ink-2')}>
+      余额 {b.available} 元{b.disabled ? ' · 已停用' : expired ? ' · 已过期' : next ? ` · 最早一笔 ${fmtDate(new Date(next).getTime())} 过期` : ''}
     </span>
   )
 }

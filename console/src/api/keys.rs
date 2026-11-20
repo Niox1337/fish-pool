@@ -55,7 +55,15 @@ pub async fn list(req: &Request, app: &App) -> ApiResult<Reply> {
     let dec = app.decryptor()?;
     let gateway = app.ai_gateway();
     let gw = app.gengwiki();
-    let items: Vec<Value> = rows.iter().map(|r| key_view(r, dec(&r.api_key_enc).as_deref(), gateway.as_ref(), &gw)).collect();
+    let own = crate::gengwiki::account(app, &user.id).await?.map(|a| a.llm_key_id);
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let mut v = key_view(r, dec(&r.api_key_enc).as_deref(), gateway.as_ref(), &gw);
+            v["rotatable"] = json!(own.as_deref() == Some(r.id.as_str()));
+            v
+        })
+        .collect();
     Ok(Reply::json(json!({"items": items})))
 }
 
@@ -78,7 +86,7 @@ pub async fn balance(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
         .ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
     let gw = app.gengwiki();
     if !gw.serves(&row.base_url) {
-        return Err(ApiError::bad_request("只有 gengwiki 网关的 Key 可以查询余额"));
+        return Err(ApiError::bad_request("只有活动获取的 Key 可以查询余额"));
     }
     let key = (app.decryptor()?)(&row.api_key_enc).ok_or_else(|| ApiError::internal("key cannot be decrypted"))?;
     let b = gw.balance(&key).await.map_err(|e| ApiError::new(502, "upstream_error", format!("余额查询失败：{e}")))?;
@@ -123,6 +131,61 @@ async fn validate_upstream(base_url: &str, api_key: &str) -> ApiResult<()> {
         return Err(invalid(upstream_message(resp.status, &resp.text())));
     }
     Ok(())
+}
+
+/// Replaces the secret of the user's gateway key, adding the model key again when it was deleted.
+pub async fn rotate_gateway(req: &Request, app: &App) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let bucket = format!("key_rotate:{}", user.id);
+    if app.rate_count(&bucket, 3600 * 1000).await? >= 10 {
+        return Err(ApiError::rate_limited("刷新太频繁，请一小时后再试"));
+    }
+    app.rate_hit(&bucket).await?;
+    let id = crate::gengwiki::rotate_key(app, &user.id).await?.ok_or_else(|| ApiError::not_found("还没有活动额度"))?;
+    let row: LlmKeyRow = app
+        .db
+        .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1"), args![id])
+        .await?
+        .ok_or_else(|| ApiError::internal("rotated key missing"))?;
+    let plaintext = (app.decryptor()?)(&row.api_key_enc);
+    let mut view = key_view(&row, plaintext.as_deref(), app.ai_gateway().as_ref(), &app.gengwiki());
+    view["rotatable"] = json!(true);
+    Ok(Reply::json(json!({"key": view})))
+}
+
+/// The user's gateway key, its balance with the usable credits, and credits not yet on the gateway.
+pub async fn gateway(req: &Request, app: &App) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let gw = app.gengwiki();
+    #[derive(Deserialize)]
+    struct Pending {
+        amount_fen: i64,
+        expires_at: Option<i64>,
+    }
+    let pending: Vec<Pending> = app
+        .db
+        .all("SELECT amount_fen, expires_at FROM gateway_credits WHERE user_id = ?1 AND remote_id IS NULL ORDER BY created_at", args![user.id])
+        .await?;
+    let pending: Vec<Value> = pending.iter().map(|p| json!({"amount": crate::gengwiki::yuan(p.amount_fen), "expires_at": p.expires_at})).collect();
+    let account = crate::gengwiki::account(app, &user.id).await?;
+    let row: Option<LlmKeyRow> = match &account {
+        Some(a) => app.db.first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"), args![a.llm_key_id, user.id]).await?,
+        None => None,
+    };
+    let Some(row) = row else {
+        return Ok(Reply::json(json!({"account": account.is_some(), "key": null, "balance": null, "pending": pending})));
+    };
+    let plaintext = (app.decryptor()?)(&row.api_key_enc);
+    let mut view = key_view(&row, plaintext.as_deref(), app.ai_gateway().as_ref(), &gw);
+    view["rotatable"] = json!(true);
+    let (balance, error) = match plaintext.as_deref() {
+        Some(k) => match gw.balance(k).await {
+            Ok(b) => (Some(b), None),
+            Err(e) => (None, Some(e)),
+        },
+        None => (None, Some("Key 无法解密".to_string())),
+    };
+    Ok(Reply::json(json!({"account": true, "key": view, "balance": balance, "balance_error": error, "pending": pending})))
 }
 
 pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {

@@ -21,6 +21,16 @@ export type LlmKey = {
   via_gateway?: boolean
   /** A gengwiki gateway key, its balance comes from `/llm-keys/{id}/balance`. */
   has_balance?: boolean
+  /** The user's event credit key, its secret can be replaced with `/me/gateway/rotate`. */
+  rotatable?: boolean
+}
+
+/** One usable event credit, in billing order. */
+export type BalanceCredit = {
+  available: string
+  amount: string
+  spent: string
+  expires_at: string | null
 }
 
 export type KeyBalance = {
@@ -30,6 +40,38 @@ export type KeyBalance = {
   spent: string
   expires_at: string | null
   disabled: boolean
+  credits?: BalanceCredit[]
+}
+
+/** The user's event credit key with its balance and credits not yet sent to the gateway. */
+export type GatewayAccount = {
+  account: boolean
+  key: LlmKey | null
+  balance: KeyBalance | null
+  balance_error?: string | null
+  pending: { amount: string; expires_at: number | null }[]
+}
+
+export type AdminCredit = {
+  id: string
+  source: 'invite' | 'admin'
+  amount: string
+  expires_at: number | null
+  expired: boolean
+  note: string
+  created_at: number
+  created_by_email: string | null
+  state: 'pending' | 'failed' | 'granted'
+  error: string | null
+  spent: string | null
+  remaining: string | null
+}
+
+export type AdminCredits = {
+  configured: boolean
+  account: boolean
+  items: AdminCredit[]
+  remote_error: string | null
 }
 
 export type CreateBotInput = { name: string; key_id: string; model: string }

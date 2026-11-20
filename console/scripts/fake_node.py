@@ -42,6 +42,24 @@ STATE = {
     "gw_fail": 0,
 }
 GW_TOKEN = "gw-service-token"
+
+
+def yuan_nano(s):
+    whole, _, frac = str(s).partition(".")
+    return int(whole) * 10**9 + int((frac + "000000000")[:9])
+
+
+def nano_yuan(n):
+    return f"{n // 10**9}.{n % 10**9 // 10**5:04d}"
+
+
+def gw_expired(c):
+    return c["expires_at"] is not None and c["expires_at"] <= time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def gw_credit(c):
+    return {"id": c["id"], "external_ref": c["external_ref"], "note": c["note"], "amount_nano": c["amount_nano"], "spent_nano": c["spent_nano"],
+            "remaining_nano": c["amount_nano"] - c["spent_nano"], "expires_at": c["expires_at"], "expired": gw_expired(c), "created_at": "2026-01-01T00:00:00Z"}
 COMMIT_VERSIONS = {"a" * 40: "v1.0.0", "b" * 40: "v1.1.0"}
 
 META = """name: astrbot_plugin_demo
@@ -172,6 +190,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         self.route(self.read_body())
 
+    def do_PATCH(self):
+        self.route(self.read_body())
+
     def route(self, body):
         url = urllib.parse.urlsplit(self.path)
         parts = [p for p in url.path.split("/") if p]
@@ -300,26 +321,14 @@ class Handler(BaseHTTPRequestHandler):
     # ---- fake gengwiki gateway ----
     def gw(self, p, query, body):
         auth = self.headers.get("authorization", "")
-        if p == ["manage", "keys"] and self.command == "POST":
+        if p[:1] == ["manage"]:
             if auth != f"Bearer {GW_TOKEN}":
                 return self.send_json(401, {"error": {"code": "invalid_token", "message": "服务令牌无效"}})
             with LOCK:
                 if STATE["gw_fail"] > 0:
                     STATE["gw_fail"] -= 1
                     return self.send_json(503, {"error": {"code": "unavailable", "message": "网关没有配置"}})
-            doc = json.loads(body)
-            ref = doc.get("external_ref")
-            with LOCK:
-                found = next((k for k in STATE["gw_keys"].values() if ref and k["external_ref"] == ref), None)
-                key = "gwk_ai_" + os.urandom(12).hex()
-                if found:
-                    found["key"] = key
-                    found["issued"] += 1
-                    row = found
-                else:
-                    row = {"id": f"gk{len(STATE['gw_keys']) + 1}", "name": doc["name"], "budget": doc["budget"], "external_ref": ref, "key": key, "issued": 1}
-                    STATE["gw_keys"][row["id"]] = row
-            return self.send_json(200 if found else 201, {"key": key, "row": {"id": row["id"], "name": row["name"], "external_ref": ref}, **({"reissued": True} if found else {})})
+                return self.gw_manage(p[1:], json.loads(body) if body else {})
         with LOCK:
             holder = next((k for k in STATE["gw_keys"].values() if auth == f"Bearer {k['key']}"), None)
         if holder is None:
@@ -327,7 +336,57 @@ class Handler(BaseHTTPRequestHandler):
         if p == ["v1", "models"]:
             return self.send_json(200, {"object": "list", "data": [{"id": "deepseek-flash", "object": "model"}]})
         if p == ["v1", "balance"]:
-            return self.send_json(200, {"currency": "CNY", "available": f"{holder['budget']}00", "budget": holder["budget"], "spent": "0.0000", "expires_at": None, "disabled": False})
+            with LOCK:
+                live = sorted((c for c in holder["credits"] if not gw_expired(c)), key=lambda c: (c["expires_at"] is None, c["expires_at"] or ""))
+                credits = [{"available": nano_yuan(c["amount_nano"] - c["spent_nano"]), "amount": nano_yuan(c["amount_nano"]), "spent": nano_yuan(c["spent_nano"]), "expires_at": c["expires_at"]} for c in live]
+                total = sum(c["amount_nano"] - c["spent_nano"] for c in live)
+            return self.send_json(200, {"currency": "CNY", "available": nano_yuan(total), "budget": "0.00", "spent": "0.0000", "expires_at": None, "disabled": False, "credits": credits})
+        self.send_json(404, {"error": {"code": "not_found", "message": "not found"}})
+
+    def gw_manage(self, p, doc):
+        m = self.command
+        if p == ["keys"] and m == "POST":
+            ref = doc.get("external_ref")
+            found = next((k for k in STATE["gw_keys"].values() if ref and k["external_ref"] == ref), None)
+            key = "gwk_ai_" + os.urandom(12).hex()
+            if found:
+                found["key"] = key
+                found["issued"] += 1
+                row = found
+            else:
+                row = {"id": f"gk{len(STATE['gw_keys']) + 1}", "name": doc["name"], "budget": doc["budget"], "external_ref": ref, "key": key, "issued": 1, "credits": []}
+                STATE["gw_keys"][row["id"]] = row
+            return self.send_json(200 if found else 201, {"key": key, "row": {"id": row["id"], "name": row["name"], "external_ref": ref}, **({"reissued": True} if found else {})})
+        row = STATE["gw_keys"].get(p[1]) if len(p) >= 2 and p[0] == "keys" else None
+        if row is None:
+            return self.send_json(404, {"error": {"code": "not_found", "message": "key not found"}})
+        rest = p[2:]
+        if rest == ["rotate"] and m == "POST":
+            row["key"] = "gwk_ai_" + os.urandom(12).hex()
+            row["issued"] += 1
+            return self.send_json(200, {"key": row["key"], "row": {"id": row["id"], "name": row["name"], "external_ref": row["external_ref"]}})
+        if rest == ["credits"] and m == "GET":
+            items = sorted(row["credits"], key=lambda c: (c["expires_at"] is None, c["expires_at"] or ""))
+            return self.send_json(200, {"items": [gw_credit(c) for c in items]})
+        if rest == ["credits"] and m == "POST":
+            found = next((c for c in row["credits"] if c["external_ref"] == doc["external_ref"]), None)
+            if found:
+                return self.send_json(200, {"credit": gw_credit(found), "existing": True})
+            c = {"id": f"gc{sum(len(k['credits']) for k in STATE['gw_keys'].values()) + 1}", "external_ref": doc["external_ref"], "note": doc.get("note", ""),
+                 "amount_nano": yuan_nano(doc["amount"]), "spent_nano": 0, "expires_at": doc.get("expires_at")}
+            row["credits"].append(c)
+            return self.send_json(201, {"credit": gw_credit(c)})
+        if len(rest) == 2 and rest[0] == "credits" and m == "PATCH":
+            c = next((c for c in row["credits"] if c["id"] == rest[1]), None)
+            if c is None:
+                return self.send_json(404, {"error": {"code": "not_found", "message": "credit not found"}})
+            if "amount" in doc:
+                if yuan_nano(doc["amount"]) < c["spent_nano"]:
+                    return self.send_json(400, {"error": {"code": "invalid_amount", "message": "额度不能低于已用"}})
+                c["amount_nano"] = yuan_nano(doc["amount"])
+            if "expires_at" in doc:
+                c["expires_at"] = doc["expires_at"]
+            return self.send_json(200, {"credit": gw_credit(c)})
         self.send_json(404, {"error": {"code": "not_found", "message": "not found"}})
 
     # ---- fake GitHub ----

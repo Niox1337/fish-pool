@@ -1,9 +1,17 @@
-export const modelProviders = [
-  // DeepSeek models through the gengwiki gateway, keys are prepaid credit
+export type ModelProvider = {
+  id: string
+  name: string
+  /** Where users get a key. Providers without one hand out keys elsewhere. */
+  platform_url?: string
+  base_url: string
+  models: string[]
+}
+
+export const modelProviders: ModelProvider[] = [
+  // DeepSeek models with prepaid credit handed out as event rewards
   {
     id: 'gengwiki',
-    name: 'gengwiki 网关',
-    platform_url: 'https://gengwiki.com/',
+    name: '活动获取',
     base_url: 'https://gateway.gengwiki.com/v1',
     models: ['deepseek-flash', 'deepseek-v4-pro'],
   },

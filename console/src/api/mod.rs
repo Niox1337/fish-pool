@@ -6,6 +6,7 @@ mod bots;
 mod internal;
 pub mod archive;
 pub(crate) mod keys;
+mod credits;
 mod platforms;
 mod plugins;
 mod usage;
@@ -92,6 +93,8 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Post, ["llm-keys"]) => keys::create(&mut req, app).await,
         (Delete, ["llm-keys", id]) => keys::delete(&req, app, id).await,
         (Get, ["llm-keys", id, "balance"]) => keys::balance(&req, app, id).await,
+        (Get, ["me", "gateway"]) => keys::gateway(&req, app).await,
+        (Post, ["me", "gateway", "rotate"]) => keys::rotate_gateway(&req, app).await,
 
         (Get, ["bots"]) => bots::list(&req, app).await,
         (Post, ["bots"]) => bots::create(&mut req, app).await,
@@ -124,6 +127,9 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Get, ["admin", "users"]) => admin::users(&req, app).await,
         (Get, ["admin", "users", id]) => admin::user(&req, app, id).await,
         (Patch, ["admin", "users", id]) => admin::patch_user(&mut req, app, id).await,
+        (Get, ["admin", "users", id, "credits"]) => credits::list(&req, app, id).await,
+        (Post, ["admin", "users", id, "credits"]) => credits::add(&mut req, app, id).await,
+        (Patch, ["admin", "users", id, "credits", credit_id]) => credits::patch(&mut req, app, id, credit_id).await,
         (Get, ["admin", "users", id, "usage"]) => admin::user_usage_route(&req, app, id).await,
         (Get, ["admin", "users", id, "bots", bot_id, "logs"]) => admin::user_bot_logs(&req, app, id, bot_id).await,
         (Get, ["admin", "invites"]) => admin::invites(&req, app).await,

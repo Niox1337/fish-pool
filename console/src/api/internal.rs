@@ -81,7 +81,7 @@ pub async fn node_events(req: &mut Request, app: &App) -> ApiResult<Reply> {
 }
 
 /// Periodic cleanup and retries, run from the cron trigger.
-/// Redemptions younger than this are left to the request that made them.
+/// Credits younger than this are left to the request that made them.
 const GRANT_SETTLE_MS: i64 = 2 * 60 * 1000;
 
 pub async fn run_maintenance(app: &App) -> ApiResult<()> {
@@ -113,10 +113,10 @@ pub async fn run_maintenance(app: &App) -> ApiResult<()> {
             log_error(&format!("tombstone {}: {e}", t.bot_id));
         }
     }
-    match crate::invite::grant_gateway_keys(app, None, now - GRANT_SETTLE_MS, 5).await {
+    match crate::gengwiki::sync_pending(app, now - GRANT_SETTLE_MS, 5).await {
         Ok(0) => {}
-        Ok(n) => log(&format!("maintenance issued {n} gengwiki gateway keys")),
-        Err(e) => log_error(&format!("gengwiki key retry failed: {}", e.message)),
+        Ok(n) => log(&format!("maintenance sent {n} gateway credits")),
+        Err(e) => log_error(&format!("gateway credit retry failed: {}", e.message)),
     }
     match super::plugins::check_updates(app, now).await {
         Ok(0) => {}

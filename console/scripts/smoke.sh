@@ -505,7 +505,7 @@ check "overview reports plugin CPU from node" 200 ".plugin_cpu.reporting_nodes =
 check "overview lists problems" 200 "[.problems[] | select(.kind == \"plugin\" and .id == \"$PLUG\" and .status == \"over_quota\" and .user_email == \"$EMAIL\")] | length == 1"
 ADMIN_BODIES="$ADMIN_BODIES$BODY"
 req GET /api/admin/system
-check "admin system view reports D1 tables" 200 '(.console.d1.tables | length) == 14 and ([.console.d1.tables[] | select(.name == "users")][0].rows >= 2) and .console.d1.round_trip_ms >= 0 and .generated_at > 0'
+check "admin system view reports D1 tables" 200 '(.console.d1.tables | length) == 16 and ([.console.d1.tables[] | select(.name == "users")][0].rows >= 2) and .console.d1.round_trip_ms >= 0 and .generated_at > 0'
 check "admin system view embeds node metrics" 200 ".nodes[0].online == true and .nodes[0].latency_ms >= 0 and .nodes[0].system.host.cpu_count == 2 and .nodes[0].system.container.memory_max_bytes > 0 and (.nodes[0].system.processes | any(.role == \"plugin\" and .plugin.plugin_id == \"$PLUG\")) and .nodes[0].last_seen > 0"
 check "admin system view maps user emails" 200 ".users[\"$USER_ID\"] == \"$EMAIL\""
 ADMIN_BODIES="$ADMIN_BODIES$BODY"
@@ -566,7 +566,7 @@ COOKIE="$ADMIN_COOKIE"
 req GET "/api/admin/invites?status=used"
 check "used invite shows redemption" 200 "[.items[] | select(.code == \"$INV_B\")][0] | .used_count == 1 and .redemptions[0].user_email == \"$EMAIL\" and .redemptions[0].days == 7"
 
-echo "gengwiki gateway keys"
+echo "gateway credits"
 req POST /api/admin/invites '{"days":1,"gateway_budget":"1000.01"}'
 check "gateway credit validated" 400 '.error.code == "invalid_input"'
 req POST /api/admin/invites '{"days":1,"count":2,"gateway_budget":"2.5"}'
@@ -575,22 +575,67 @@ INV_G1=$(j '.items[0].code'); INV_G2=$(j '.items[1].code')
 COOKIE="$USER_COOKIE"
 req POST /api/me/redeem "{\"code\":\"$INV_G1\"}"
 check "gateway invite redeemed" 200 '.user.service_active == true'
-node_check "gateway key issued with the invite credit" "/_debug/gw" "[.keys[] | select(.external_ref == \"invite:$INV_G1:$USER_ID\")] | length == 1 and .[0].budget == \"2.50\" and .[0].issued == 1 and (.[0].name | startswith(\"大肥鱼 \"))"
+UNTIL_G1=$(j '.user.service_until')
+EXPIRY_G1=$(python3 -c "import datetime,sys;print(datetime.datetime.fromtimestamp(int(sys.argv[1])//1000,datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))" "$UNTIL_G1")
+node_check "one gateway key per user" "/_debug/gw" "[.keys[] | select(.external_ref == \"user:$USER_ID\")] | length == 1 and .[0].budget == \"0\" and .[0].issued == 1 and (.[0].name | startswith(\"大肥鱼 \"))"
+node_check "invite credit expires with the service" "/_debug/gw" "[.keys[] | select(.external_ref == \"user:$USER_ID\")][0].credits | length == 1 and .[0].external_ref == \"invite:$INV_G1:$USER_ID\" and .[0].amount_nano == 2500000000 and .[0].expires_at == \"$EXPIRY_G1\""
 req GET /api/llm-keys
-check "gateway key added to the user's keys" 200 '[.items[] | select(.name == "gengwiki 网关" and .has_balance == true and .model == "deepseek-flash" and (.base_url | endswith("/gw/v1")))] | length == 1'
+check "gateway key added to the user's keys" 200 '[.items[] | select(.name == "活动获取" and .has_balance == true and .rotatable == true and .model == "deepseek-flash" and (.base_url | endswith("/gw/v1")))] | length == 1'
 no_secrets "key list hides the gateway key" "$BODY"
-GW_KEY_ID=$(j '[.items[] | select(.name == "gengwiki 网关")][0].id')
+GW_KEY_ID=$(j '[.items[] | select(.name == "活动获取")][0].id')
+GW_MASKED=$(j '[.items[] | select(.name == "活动获取")][0].key_masked')
 req GET "/api/llm-keys/$GW_KEY_ID/balance"
-check "gateway key reads its balance" 200 '.available == "2.5000" and .budget == "2.50" and .disabled == false'
+check "gateway key reads its balance" 200 '.available == "2.5000" and (.credits | length) == 1'
 req GET "/api/llm-keys/$KEY_ID/balance"
 check "other keys have no balance" 400 '.error.code == "invalid_input"'
+req GET /api/me/gateway
+check "account view lists the credits" 200 ".account == true and .key.id == \"$GW_KEY_ID\" and .balance.available == \"2.5000\" and .balance.credits[0].expires_at == \"$EXPIRY_G1\" and .pending == []"
+no_secrets "account view hides the key" "$BODY"
+req POST /api/me/gateway/rotate '{}'
+check "gateway key rotated" 200 ".key.id == \"$GW_KEY_ID\" and .key.rotatable == true and .key.key_masked != \"$GW_MASKED\""
+no_secrets "rotate reply hides the key" "$BODY"
+node_check "rotation keeps the same gateway key" "/_debug/gw" "[.keys[] | select(.external_ref == \"user:$USER_ID\")] | length == 1 and .[0].issued == 2"
+req GET "/api/llm-keys/$GW_KEY_ID/balance"
+check "rotated key reads its balance" 200 '.available == "2.5000"'
 node_check "bot with a working key keeps it" "/_debug/desired/$BOT" '.llm.api_key == "sk-good-abcdef1234"'
+COOKIE="$ADMIN_COOKIE"
+req PATCH "/api/admin/users/$USER_ID" '{"extend_days":5}'
+check "admin extends the service" 200 ".service_until > $UNTIL_G1"
+node_check "service extension leaves the credit expiry" "/_debug/gw" "[.keys[] | select(.external_ref == \"user:$USER_ID\")][0].credits[0].expires_at == \"$EXPIRY_G1\""
+req POST "/api/admin/users/$USER_ID/credits" '{"amount":"0","expires_at":null}'
+check "admin credit amount validated" 400 '.error.code == "invalid_input"'
+req POST "/api/admin/users/$USER_ID/credits" '{"amount":"3","expires_at":1000}'
+check "admin credit expiry must be in the future" 400 '.error.code == "invalid_input"'
+req POST "/api/admin/users/$USER_ID/credits" '{"amount":"3","expires_at":null,"note":"补偿"}'
+check "admin adds a credit" 201 '(.items | length) == 2 and .items[0].source == "admin" and .items[0].amount == "3.00" and .items[0].state == "granted" and .items[0].remaining == "3.0000" and .items[0].created_by_email != null and .items[1].source == "invite"'
+ADMIN_CREDIT=$(j '.items[0].id')
+req PATCH "/api/admin/users/$USER_ID/credits/$ADMIN_CREDIT" "{\"amount\":\"4.5\",\"expires_at\":$((UNTIL_G1 + 86400000))}"
+check "admin adjusts a credit" 200 "[.items[] | select(.id == \"$ADMIN_CREDIT\")][0] | .amount == \"4.50\" and .expires_at == $((UNTIL_G1 + 86400000)) and .remaining == \"4.5000\""
+node_check "adjustment reaches the gateway" "/_debug/gw" "[.keys[] | select(.external_ref == \"user:$USER_ID\")][0].credits | map(select(.note == \"补偿\"))[0].amount_nano == 4500000000"
+req PATCH "/api/admin/users/$USER_ID/credits/$ADMIN_CREDIT" '{}'
+check "empty adjustment rejected" 400 '.error.code == "invalid_input"'
+req GET /api/me
+ADMIN_ID=$(j '.user.id')
+req GET "/api/admin/users/$ADMIN_ID/credits"
+check "user without credits lists none" 200 '.account == false and .items == []'
+COOKIE="$USER_COOKIE"
+req GET /api/me/gateway
+check "balance lists credits soonest expiry first" 200 ".balance.available == \"7.0000\" and (.balance.credits | length) == 2 and .balance.credits[0].expires_at == \"$EXPIRY_G1\""
+req GET "/api/admin/users/$USER_ID/credits"
+check "users cannot read admin credits" 403 '.error.code == "forbidden"'
 curl -s "$NODE/_debug/gw?fail=1" > /dev/null
 req POST /api/me/redeem "{\"code\":\"$INV_G2\"}"
 check "redeem succeeds while the gateway fails" 200 '.user.service_active == true'
+req GET /api/me/gateway
+check "failed credit shows as pending" 200 '(.pending | length) == 1 and .pending[0].amount == "2.50"'
 COOKIE="$ADMIN_COOKIE"
 req GET "/api/admin/invites?status=used"
-check "redemptions show the gateway key state" 200 "([.items[] | select(.code == \"$INV_G1\")][0].redemptions[0].gateway == \"granted\") and ([.items[] | select(.code == \"$INV_G2\")][0].redemptions[0] | .gateway == \"failed\" and (.gateway_error | contains(\"503\")))"
+check "redemptions show the gateway credit state" 200 "([.items[] | select(.code == \"$INV_G1\")][0].redemptions[0].gateway == \"granted\") and ([.items[] | select(.code == \"$INV_G2\")][0].redemptions[0] | .gateway == \"failed\" and (.gateway_error | contains(\"503\")))"
+d1 "UPDATE gateway_credits SET created_at = created_at - 600000 WHERE remote_id IS NULL" > /dev/null
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/__scheduled?cron=*/5+*+*+*+*")
+sleep 1
+req GET "/api/admin/invites?status=used"
+check "maintenance resends the failed credit" 200 "[.items[] | select(.code == \"$INV_G2\")][0].redemptions[0].gateway == \"granted\""
 new_captcha
 COOKIE=""
 req POST /api/auth/email-code "{\"email\":\"$EMAIL2\",\"purpose\":\"register\",\"captcha_id\":\"$CAPTCHA_ID\",\"captcha_answer\":\"$CAPTCHA_ANSWER\",\"invite_code\":\"$INV_A\"}"
@@ -660,7 +705,7 @@ req GET /api/bots
 check "D1 kept the change" 200 '.items[0].name == "离线改名" and .items[0].status == "error"'
 COOKIE="$ADMIN_COOKIE"
 req GET /api/admin/system
-check "system view survives node outage" 200 '.nodes[0].online == false and .nodes[0].system == null and (.nodes[0].error | length) > 0 and (.console.d1.tables | length) == 14'
+check "system view survives node outage" 200 '.nodes[0].online == false and .nodes[0].system == null and (.nodes[0].error | length) > 0 and (.console.d1.tables | length) == 16'
 req GET /api/admin/overview
 check "overview survives node outage" 200 '.nodes[0].online == false and (.nodes[0].error | length) > 0 and .nodes[0].version == null and .usage.memory_bytes == 0'
 req GET /api/admin/users

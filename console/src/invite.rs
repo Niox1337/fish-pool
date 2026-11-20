@@ -126,9 +126,25 @@ pub fn claim_stmt(app: &App, code: &str, user_id: &str, now: i64) -> ApiResult<D
 /// Records the redemption when the previous statement changed exactly one row.
 pub fn record_stmt(app: &App, code: &str, user_id: &str, now: i64) -> ApiResult<D1PreparedStatement> {
     app.db.stmt(
-        "INSERT INTO invite_redemptions (code, user_id, days, redeemed_at, gateway_fen) \
-         SELECT code, ?2, days, ?3, gateway_fen FROM invite_codes WHERE code = ?1 AND changes() = 1",
+        "INSERT INTO invite_redemptions (code, user_id, days, redeemed_at) \
+         SELECT code, ?2, days, ?3 FROM invite_codes WHERE code = ?1 AND changes() = 1",
         args![code, user_id, now],
+    )
+}
+
+/// Gateway reference of the credit an invite gives one user.
+pub fn credit_ref(code: &str, user_id: &str) -> String {
+    format!("invite:{code}:{user_id}")
+}
+
+/// Queues the gateway credit of the invite when the redemption was recorded by the previous
+/// statement. It expires with the service time the user has right after this redemption.
+pub fn credit_stmt(app: &App, code: &str, user_id: &str, now: i64) -> ApiResult<D1PreparedStatement> {
+    app.db.stmt(
+        "INSERT INTO gateway_credits (id, user_id, amount_fen, expires_at, source, ref, created_at) \
+         SELECT ?1, ?2, i.gateway_fen, u.service_until, 'invite', ?4, ?5 FROM invite_codes i JOIN users u ON u.id = ?2 \
+         WHERE i.code = ?3 AND i.gateway_fen > 0 AND changes() = 1",
+        args![crate::util::new_id(), user_id, code, credit_ref(code, user_id), now],
     )
 }
 
@@ -145,110 +161,11 @@ pub async fn redeem_for_user(app: &App, code: &str, user_id: &str) -> ApiResult<
                 args![user_id, now, code, DAY_MS],
             )?,
             record_stmt(app, code, user_id, now)?,
+            credit_stmt(app, code, user_id, now)?,
         ])
         .await?;
     if changes.first().copied().unwrap_or(0) != 1 || changes.get(1).copied().unwrap_or(0) != 1 {
         return Err(failure(app, code, user_id).await);
-    }
-    Ok(())
-}
-
-#[derive(Deserialize)]
-struct PendingGrant {
-    code: String,
-    user_id: String,
-    gateway_fen: i64,
-    email: String,
-}
-
-/// Retry window for redemptions whose gateway key could not be issued.
-const GRANT_RETRY_MS: i64 = 7 * DAY_MS;
-
-/// Issues the gengwiki gateway keys of redemptions that carry credit and have none yet, saves each
-/// one as an LLM key and points the user's bots without a working key at it. `user_id` limits it to
-/// one user, `settled_before` skips redemptions newer than that time. Returns the keys issued.
-pub async fn grant_gateway_keys(app: &App, user_id: Option<&str>, settled_before: i64, limit: i64) -> ApiResult<usize> {
-    let now = now_ms();
-    let pending: Vec<PendingGrant> = app
-        .db
-        .all(
-            "SELECT r.code, r.user_id, r.gateway_fen, u.email FROM invite_redemptions r JOIN users u ON u.id = r.user_id \
-             WHERE r.gateway_fen > 0 AND r.gateway_key_id IS NULL AND r.redeemed_at <= ?1 AND r.redeemed_at > ?2 \
-             AND (?3 IS NULL OR r.user_id = ?3) ORDER BY r.redeemed_at LIMIT ?4",
-            args![settled_before, now - GRANT_RETRY_MS, user_id, limit],
-        )
-        .await?;
-    let gw = app.gengwiki();
-    let mut issued = 0;
-    for p in pending {
-        let external_ref = format!("invite:{}:{}", p.code, p.user_id);
-        let granted = match gw.grant(&format!("大肥鱼 {}", p.email), p.gateway_fen, &external_ref).await {
-            Ok(g) => g,
-            Err(e) => {
-                crate::util::log_error(&format!("gengwiki key for {external_ref}: {e}"));
-                app.db
-                    .run(
-                        "UPDATE invite_redemptions SET gateway_error = ?3 WHERE code = ?1 AND user_id = ?2",
-                        args![p.code, p.user_id, e.chars().take(300).collect::<String>()],
-                    )
-                    .await?;
-                continue;
-            }
-        };
-        let key_id = crate::util::new_id();
-        let changes = app
-            .db
-            .batch(vec![
-                app.db.stmt(
-                    "UPDATE invite_redemptions SET gateway_key_id = ?3, gateway_error = NULL \
-                     WHERE code = ?1 AND user_id = ?2 AND gateway_key_id IS NULL",
-                    args![p.code, p.user_id, key_id],
-                )?,
-                app.db.stmt(
-                    "INSERT INTO llm_keys (id, user_id, name, base_url, model, api_key_enc, created_at) \
-                     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE changes() = 1",
-                    args![key_id, p.user_id, crate::gengwiki::KEY_NAME, gw.api_base(), gw.model, app.encrypt(&granted.key)?, now],
-                )?,
-            ])
-            .await?;
-        if changes.get(1).copied().unwrap_or(0) != 1 {
-            continue;
-        }
-        issued += 1;
-        adopt_key(app, &p.user_id, &key_id, &gw.model).await?;
-    }
-    Ok(issued)
-}
-
-/// Points the user's bots whose LLM key is unset or deleted at `key_id`, then pushes them.
-async fn adopt_key(app: &App, user_id: &str, key_id: &str, model: &str) -> ApiResult<()> {
-    #[derive(Deserialize)]
-    struct Bot {
-        id: String,
-        settings_json: String,
-        has_key: i64,
-    }
-    let bots: Vec<Bot> = app
-        .db
-        .all(
-            "SELECT b.id, b.settings_json, EXISTS (SELECT 1 FROM llm_keys k WHERE k.user_id = b.user_id \
-             AND k.id = json_extract(b.settings_json, '$.llm.key_id')) AS has_key FROM bots b WHERE b.user_id = ?1",
-            args![user_id],
-        )
-        .await?;
-    for b in bots.into_iter().filter(|b| b.has_key == 0) {
-        let mut settings = crate::settings::BotSettings::from_stored(&b.settings_json);
-        settings.llm.key_id = Some(key_id.to_string());
-        settings.llm.model = model.to_string();
-        app.db
-            .run(
-                "UPDATE bots SET settings_json = ?2, needs_push = 1, updated_at = ?3 WHERE id = ?1",
-                args![b.id, serde_json::to_string(&settings)?, now_ms()],
-            )
-            .await?;
-        if let Err(e) = app.push_bot(&b.id).await {
-            crate::util::log_error(&format!("push bot {} after gengwiki key: {}", b.id, e.message));
-        }
     }
     Ok(())
 }

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { KeyRound, LogOut, Ticket } from 'lucide-react'
+import { Coins, KeyRound, LogOut, RefreshCw, Ticket } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
-import { keys, useBots, useMe } from '@/api/hooks'
+import { keys, useBots, useGateway, useMe } from '@/api/hooks'
 import type { User } from '@/api/types'
-import { Button, Field, Input, PageHeader, Pill, Skeleton, Stat } from '@/components/ui'
+import { Button, ConfirmDialog, Field, Input, PageHeader, Pill, Skeleton, Stat } from '@/components/ui'
 import { daysLeft, fmtDate, fmtMb } from '@/lib/format'
 
 function formatInvite(value: string): string {
@@ -85,6 +85,8 @@ function RedeemForm({ me }: { me: User }) {
     try {
       const { user } = await api.redeem(code)
       qc.setQueryData(keys.me, user)
+      qc.invalidateQueries({ queryKey: keys.gateway })
+      qc.invalidateQueries({ queryKey: keys.llmKeys })
       setCode('')
       toast.success(`兑换成功，服务延长到 ${fmtDate(user.service_until)}`, {
         description: me.service_active ? undefined : '小鱼不会自动醒来，到我的小鱼里点启动就好。',
@@ -132,6 +134,114 @@ function RedeemForm({ me }: { me: User }) {
           </div>
         </Field>
       </form>
+    </section>
+  )
+}
+
+/** Expiry of a credit as a local date, with how many days are left when it is soon. */
+function creditExpiry(iso: string | null): string {
+  if (!iso) return '不过期'
+  const ms = new Date(iso).getTime()
+  const left = daysLeft(ms)
+  return left != null && left <= 7 ? `${fmtDate(ms)} 过期，还剩 ${Math.max(left, 0)} 天` : `${fmtDate(ms)} 过期`
+}
+
+function EventCredit() {
+  const qc = useQueryClient()
+  const q = useGateway()
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const g = q.data
+  if (!g || (!g.account && g.pending.length === 0)) return null
+  const b = g.balance
+  const credits = b?.credits ?? []
+  const k = g.key
+
+  async function rotate() {
+    setBusy(true)
+    try {
+      await api.rotateGateway()
+      qc.invalidateQueries({ queryKey: keys.gateway })
+      qc.invalidateQueries({ queryKey: keys.llmKeys })
+      toast.success(k ? 'Key 已刷新，旧 Key 已失效' : '模型 Key 已重新加上')
+      setOpen(false)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '没能刷新，稍后再试')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section aria-labelledby="acct-event" className="rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 id="acct-event" className="flex items-center gap-2 font-display text-lg font-black text-ink">
+          <Coins className="size-5 text-pink-ink" aria-hidden />
+          活动额度
+        </h2>
+        <p className={`font-display text-2xl font-black tabular-nums ${b?.disabled ? 'text-bad' : 'text-ink'}`}>
+          {b ? `${b.available} 元` : q.isFetching ? <Skeleton className="h-8 w-24" /> : '查不到'}
+        </p>
+      </div>
+      <p className="mt-1 text-sm leading-relaxed text-ink-2">活动送的模型额度，每笔到期自动作废，用的时候先扣最早过期的那笔。</p>
+      {g.balance_error && <p className="mt-2 text-[13px] text-bad">{g.balance_error}</p>}
+      {b?.disabled && <p className="mt-2 text-[13px] text-bad">这个 Key 已停用，请联系管理员。</p>}
+
+      {(credits.length > 0 || g.pending.length > 0) && (
+        <ul className="mt-3 divide-y divide-paper-3 border-y border-paper-3">
+          {credits.map((c, i) => (
+            <li key={`c${i}`} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2.5">
+              <span className="font-semibold text-ink tabular-nums">
+                {c.available} 元
+                <span className="ml-2 text-[13px] font-normal text-ink-3">共 {c.amount} 元</span>
+              </span>
+              <span className="text-[13px] text-ink-2 tabular-nums">{creditExpiry(c.expires_at)}</span>
+            </li>
+          ))}
+          {g.pending.map((p, i) => (
+            <li key={`p${i}`} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2.5">
+              <span className="font-semibold text-ink-2 tabular-nums">{p.amount} 元</span>
+              <Pill tone="warn">发放中</Pill>
+            </li>
+          ))}
+        </ul>
+      )}
+      {b && credits.length === 0 && g.pending.length === 0 && <p className="mt-3 text-[13px] text-ink-3">没有可用的额度了。</p>}
+
+      {k ? (
+        <p className="mt-3 flex flex-wrap gap-x-3 break-all text-sm text-ink-3">
+          <span>{k.name}</span>
+          <span>{k.model}</span>
+          <code>{k.key_masked}</code>
+        </p>
+      ) : (
+        g.account && <p className="mt-3 text-[13px] text-ink-3">模型 Key 已被删除，刷新后会重新加上。</p>
+      )}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button size="sm" variant="ghost" onClick={() => q.refetch()} loading={q.isFetching}>
+          <RefreshCw aria-hidden />
+          更新余额
+        </Button>
+        {g.account && (
+          <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+            <KeyRound aria-hidden />
+            刷新 Key
+          </Button>
+        )}
+        <Link to="/app/keys" className="ml-auto self-center text-sm font-semibold text-sky">
+          管理模型 Key
+        </Link>
+      </div>
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="刷新活动额度的 Key？"
+        body="会换成一个新的 Key，旧 Key 立刻失效，余额不变。用它的小鱼会自动换上新 Key。"
+        confirmLabel="刷新 Key"
+        onConfirm={rotate}
+        loading={busy}
+        tone="primary"
+      />
     </section>
   )
 }
@@ -207,6 +317,8 @@ export default function AccountPage() {
             </dl>
             <p className="mt-4 text-[13px] text-ink-3">调整额度请联系管理员。</p>
           </section>
+
+          <EventCredit />
 
           <section aria-labelledby="acct-security" className="rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
             <h2 id="acct-security" className="font-display text-lg font-black text-ink">

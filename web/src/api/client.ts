@@ -11,6 +11,8 @@ import type {
   BotSettings,
   CreateBotInput,
   KeyBalance,
+  GatewayAccount,
+  AdminCredits,
   LlmKey,
   LogLine,
   Platform,
@@ -92,6 +94,8 @@ export const api = {
   addLlmKey: (b: { name: string; base_url: string; model: string; api_key: string }) => post<LlmKey>('/llm-keys', b),
   deleteLlmKey: (id: string) => del<{ ok: true }>(`/llm-keys/${id}`),
   llmKeyBalance: (id: string) => get<KeyBalance>(`/llm-keys/${id}/balance`),
+  gateway: () => get<GatewayAccount>('/me/gateway'),
+  rotateGateway: () => post<{ key: LlmKey }>('/me/gateway/rotate'),
 
   bots: () => get<{ items: Bot[] }>('/bots'),
   bot: (id: string) => get<Bot>(`/bots/${id}`),
@@ -142,6 +146,11 @@ export const api = {
     patch<AdminUser>(`/admin/users/${id}`, b),
   adminInvites: (status: 'unused' | 'used' | 'revoked' | 'all') =>
     get<{ items: Invite[]; cursor: string | null; default_quota: Quota }>(`/admin/invites?status=${status}`),
+  adminCredits: (userId: string) => get<AdminCredits>(`/admin/users/${userId}/credits`),
+  adminAddCredit: (userId: string, b: { amount: string; expires_at: number | null; note?: string }) =>
+    post<AdminCredits>(`/admin/users/${userId}/credits`, b),
+  adminPatchCredit: (userId: string, creditId: string, b: { amount?: string; expires_at?: number | null }) =>
+    patch<AdminCredits>(`/admin/users/${userId}/credits/${creditId}`, b),
   adminCreateInvites: (b: { days: number; count: number; quota: Quota; max_uses?: number; note?: string; expires_at?: number | null; gateway_budget?: string }) =>
     post<{ items: Invite[] }>('/admin/invites', b),
   adminRevokeInvite: (code: string) => del<{ ok: true }>(`/admin/invites/${encodeURIComponent(code)}`),

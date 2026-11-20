@@ -277,6 +277,7 @@ pub async fn register(req: &mut Request, app: &App) -> ApiResult<Reply> {
                         args![id, email, hash, role, now, code, invite::DAY_MS, quota.memory_mb, quota.storage_mb, bots, plugins, UNLIMITED_COUNT],
                     )?,
                     invite::record_stmt(app, &code, &id, now)?,
+                    invite::credit_stmt(app, &code, &id, now)?,
                 ])
                 .await
                 .map_err(taken)?;
@@ -404,10 +405,10 @@ pub async fn redeem(req: &mut Request, app: &App) -> ApiResult<Reply> {
     Ok(Reply::json(json!({"user": user.view()})))
 }
 
-/// Issues the gateway key an invite carried. A failure is retried by the maintenance run.
+/// Sends the gateway credit an invite carried. A failure is retried by the maintenance run.
 async fn grant_after_redeem(app: &App, user_id: &str) {
-    if let Err(e) = invite::grant_gateway_keys(app, Some(user_id), now_ms(), 5).await {
-        crate::util::log_error(&format!("gengwiki key for user {user_id}: {}", e.message));
+    if let Err(e) = crate::gengwiki::sync_user(app, user_id).await {
+        crate::util::log_error(&format!("gateway credit for user {user_id}: {}", e.message));
     }
 }
 

@@ -60,8 +60,10 @@ users(id PK, email UNIQUE, password_hash, role TEXT 'user'|'admin', created_at,
 invite_codes(code PK, days INT, max_uses INT DEFAULT 1, used_count INT DEFAULT 0, note TEXT,
              created_by, created_at, expires_at INT NULL, revoked_at INT NULL, quota_json TEXT NULL,
              gateway_fen INT DEFAULT 0)   -- gengwiki gateway credit per redemption
-invite_redemptions(code, user_id, days, redeemed_at, gateway_fen INT DEFAULT 0,
-                   gateway_key_id TEXT NULL, gateway_error TEXT NULL)   -- llm_keys.id once issued
+invite_redemptions(code, user_id, days, redeemed_at)
+gateway_accounts(user_id PK, remote_key_id, llm_key_id, created_at)   -- one gateway key per user
+gateway_credits(id PK, user_id, amount_fen, expires_at INT NULL, source 'invite'|'admin', ref UNIQUE,
+                note, created_by NULL, created_at, remote_id NULL, error NULL)   -- remote_id once on the gateway
 sessions(token_hash PK, user_id, created_at, expires_at, user_agent)
 email_codes(email, purpose 'register'|'reset', code_hash, expires_at, attempts, created_at)
 captchas(id PK, answer_hash, expires_at)
@@ -128,14 +130,16 @@ Subscription and invite codes
 - The service is subscription based. At this stage every subscription period comes from an invite code made by an admin. A code carries a service length in days. Prices are not shown anywhere.
 - Code format `FISH-XXXX-XXXX` (Crockford base32, case insensitive, dashes optional on input).
 - `POST /api/me/redeem` `{code}` → `{"user": User}`. Extends `service_until` to `max(now, service_until) + days`.
-- Register and redeem with an invite whose `gateway_fen > 0` then issue a gengwiki gateway key (see below). The redemption succeeds even when that call fails.
+- Register and redeem with an invite whose `gateway_fen > 0` add a gateway credit that expires at the user's `service_until` right after that redemption (see gengwiki gateway below). Later extensions do not move it. The redemption succeeds even when the gateway call fails.
 - Invite errors: `invite_invalid` (unknown or revoked), `invite_used` (used_count reached max_uses), `invite_expired` (past expires_at).
 - `service_active` is `role == 'admin' || service_until > now`. While inactive: `POST /api/bots`, `/start`, `/restart` and `POST /api/bots/:id/plugins` fail with 403 `service_expired`. Everything else stays readable and editable.
 - A 5 minute cron stops the bots of users whose service ran out (DesiredBot `running: false`, bot `status_detail` = `服务已到期，兑换新的邀请码后可以重新启动`). Data is kept. Redeeming a code does not auto start bots.
 
 LLM keys
-- `GET /api/llm-keys` → `{"items": [{id, name, base_url, model, key_masked, created_at, via_gateway, has_balance}]}`. `via_gateway` is true when the node reaches this provider through the Cloudflare AI Gateway. `has_balance` is true for keys on the gengwiki gateway.
-- `GET /api/llm-keys/:id/balance` → `{currency, available, budget, spent, expires_at, disabled}` in yuan strings, read from the gateway with the key itself. Other keys give `invalid_input`, a gateway failure gives `upstream_error` (502).
+- `GET /api/llm-keys` → `{"items": [{id, name, base_url, model, key_masked, created_at, via_gateway, has_balance}]}`. `via_gateway` is true when the node reaches this provider through the Cloudflare AI Gateway. `has_balance` is true for keys on the gengwiki gateway, `rotatable` for the user's own gateway key.
+- `GET /api/llm-keys/:id/balance` → `{currency, available, budget, spent, expires_at, disabled, credits: [{available, amount, spent, expires_at}]}` in yuan strings, read from the gateway with the key itself. `credits` are the usable credits in billing order. Other keys give `invalid_input`, a gateway failure gives `upstream_error` (502).
+- `GET /api/me/gateway` → `{account, key: item|null, balance: Balance|null, balance_error?, pending: [{amount, expires_at}]}`. `key` is null when the user deleted the model key. `pending` lists credits not yet on the gateway.
+- `POST /api/me/gateway/rotate` → `{key: item}` with a new secret. Credits and spend stay, a deleted model key is added again, and bots using it are pushed. 10 per hour per user, users without a gateway key get `not_found`.
 - `POST /api/llm-keys` `{name, base_url, model, api_key}` → item. Worker validates by calling `{base_url}/models` with 8s timeout, failure returns `llm_key_invalid` with the upstream message.
 - `DELETE /api/llm-keys/:id`
 - Presets offered by the UI (base_url): DeepSeek `https://api.deepseek.com/v1`, OpenAI `https://api.openai.com/v1`, SiliconFlow `https://api.siliconflow.cn/v1`, Moonshot `https://api.moonshot.cn/v1`, 智谱 `https://open.bigmodel.cn/api/paas/v4`, custom.
@@ -217,6 +221,10 @@ Admin (role `admin` only, otherwise 403 `forbidden`; read routes never return se
 - `GET /api/admin/users?q=<email substring>&cursor=` → `{"items": [AdminUser], "cursor": "..."|null}` (50 per page, newest first)
   `AdminUser = User + {bots: n, plugins: n, running: n, errors: n, memory_bytes: n|null, storage_bytes: n|null, last_login_at: n|null}` (usage is null when the node is unreachable)
 - `GET /api/admin/users/:id` → `{"user": AdminUser, "bots": [Bot]}`
+- `GET /api/admin/users/:id/credits` → `{configured, account, items: [Credit], remote_error}`, newest first.
+  `Credit = {id, source, amount, expires_at: ms|null, expired, note, created_at, created_by_email, state: pending|failed|granted, error, spent, remaining}`. `spent` and `remaining` come from the gateway and are null when it cannot be read.
+- `POST /api/admin/users/:id/credits` `{amount: "0.01".."1000", expires_at: ms|null, note?}` → 201 with the list. The credit is sent right away and retried by the maintenance cron on failure.
+- `PATCH /api/admin/users/:id/credits/:credit_id` `{amount?, expires_at?}` → the list. The gateway refuses an amount below what is spent.
 - `GET /api/admin/users/:id/usage` → the Usage object of `GET /api/usage`, for that user
 - `GET /api/admin/users/:id/bots/:bot_id/logs?after=` → logs of that bot
 - `PATCH /api/admin/users/:id` `{quota?: {memory_mb?, storage_mb?, bots?, plugins?}, service_until?: ms|null, extend_days?: n}` → AdminUser (pushes the new quota to the nodes of that user's bots, `extend_days` adds to `max(now, service_until)`)
@@ -237,9 +245,10 @@ Error codes (field `error.code`)
 
 gengwiki gateway
 - An OpenAI compatible DeepSeek endpoint with prepaid keys. Worker vars `GENGWIKI_GATEWAY` (origin, default `https://gateway.gengwiki.com`) and `GENGWIKI_GATEWAY_MODEL` (default `deepseek-flash`), secret `GENGWIKI_GATEWAY_TOKEN` (the service token gengwiki lists for fish).
-- Issuing: `POST {origin}/manage/keys` `{name: "大肥鱼 <email>", budget, external_ref: "invite:<code>:<user_id>"}` with the service token. A repeated `external_ref` reissues the same key with a new secret, so a retry never makes a second key.
-- The key is stored as an `llm_keys` row named `gengwiki 网关` with base URL `{origin}/v1`, and bots of that user whose key is unset or deleted switch to it and are pushed.
-- A failed call stores `gateway_error`. The maintenance cron retries redemptions older than 2 minutes and younger than 7 days, 5 per run.
+- Each user has one key, created on the first credit: `POST {origin}/manage/keys` `{name: "大肥鱼 <email>", budget: "0", external_ref: "user:<user_id>"}` with the service token. A repeated `external_ref` reissues the same key, so a retry never makes a second key.
+- The key is stored as an `llm_keys` row named `活动获取` with base URL `{origin}/v1`, and bots of that user whose key is unset or deleted switch to it and are pushed.
+- Credits: `POST {origin}/manage/keys/{id}/credits` `{amount, expires_at, external_ref, note}`. `external_ref` is `invite:<code>:<user_id>` or `admin:<credit id>`, a repeated one returns the credit already there. Each credit expires on its own, the gateway bills the unexpired credit that expires soonest first, and an expired remainder is forfeited.
+- A failed call stores `gateway_credits.error`. The maintenance cron retries credits older than 2 minutes and younger than 7 days, 5 per run.
 - Balance: `GET {origin}/v1/balance` with the key as bearer.
 
 Development mode (Worker var `FISH_DEV = "1"`, never in production)

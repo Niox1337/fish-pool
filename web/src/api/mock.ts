@@ -1,4 +1,4 @@
-import type { AdminOverview, AdminSystem, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, QqPanelRecord, Quota, Usage, User } from './types'
+import type { AdminCredit, AdminOverview, AdminSystem, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, QqPanelRecord, Quota, Usage, User } from './types'
 
 const MB = 1024 * 1024
 const defaultQuota: Quota = { memory_mb: 128, storage_mb: 128, bots: null, plugins: null }
@@ -20,6 +20,36 @@ const defaultSettings = (): Bot['settings'] => ({
 })
 
 type State = { user: User | null; keys: LlmKey[]; bots: Bot[]; qr: Record<string, number> }
+
+/** Gateway credits by user id. */
+const credits: Record<string, AdminCredit[]> = {
+  u2: [
+    { id: 'c1', source: 'invite', amount: '5.00', expires_at: now() + 3 * 86400000, expired: false, note: '', created_at: now() - 27 * 86400000, created_by_email: null, state: 'granted', error: null, spent: '1.2380', remaining: '3.7620' },
+    { id: 'c2', source: 'admin', amount: '10.00', expires_at: null, expired: false, note: '插件测试补偿', created_at: now() - 2 * 86400000, created_by_email: 'admin@fish.niox.lol', state: 'granted', error: null, spent: '0.0000', remaining: '10.0000' },
+  ],
+}
+const yuan2 = (v: string | number) => Number(v).toFixed(2)
+const yuan4 = (v: string | number) => Number(v).toFixed(4)
+const isoOf = (ms: number | null) => (ms == null ? null : new Date(ms).toISOString())
+
+function addMockCredit(userId: string, c: Omit<AdminCredit, 'id' | 'expired' | 'created_at' | 'state' | 'error' | 'spent' | 'remaining'>) {
+  ;(credits[userId] ??= []).unshift({ ...c, id: id(), expired: false, created_at: now(), state: 'granted', error: null, spent: '0.0000', remaining: yuan4(c.amount) })
+  if (userId === state.user?.id && !state.keys.some((k) => k.rotatable)) {
+    state.keys.push({
+      id: id(), name: '活动获取', base_url: 'https://gateway.gengwiki.com/v1', model: 'deepseek-flash',
+      key_masked: 'gwk…3f2a', created_at: now(), has_balance: true, rotatable: true,
+    })
+  }
+}
+
+function mockBalance(userId: string) {
+  const live = (credits[userId] ?? [])
+    .filter((c) => c.expires_at == null || c.expires_at > now())
+    .sort((a, b) => (a.expires_at ?? Infinity) - (b.expires_at ?? Infinity))
+  const list = live.map((c) => ({ available: yuan4(c.remaining ?? c.amount), amount: yuan2(c.amount), spent: yuan4(c.spent ?? 0), expires_at: isoOf(c.expires_at) }))
+  const total = live.reduce((n, c) => n + Number(c.remaining ?? c.amount), 0)
+  return { currency: 'CNY', available: yuan4(total), budget: '0.00', spent: '0.0000', expires_at: null, disabled: false, credits: list }
+}
 
 const state: State = {
   user: null,
@@ -139,7 +169,7 @@ const genCode = () => {
   return fmtCode(r)
 }
 const invites: Invite[] = [
-  { code: 'FISH-7K2M-Q9TD', days: 30, max_uses: 1, used_count: 0, note: '群友试用', created_by_email: 'admin@fish.niox.lol', created_at: now() - 86400000, expires_at: null, revoked_at: null, redemptions: [] },
+  { code: 'FISH-7K2M-Q9TD', days: 30, max_uses: 1, used_count: 0, note: '群友试用', gateway_budget: '5.00', created_by_email: 'admin@fish.niox.lol', created_at: now() - 86400000, expires_at: null, revoked_at: null, redemptions: [] },
   { code: 'FISH-9WQE-2RJA', days: 7, max_uses: 5, used_count: 2, note: '活动群批量', created_by_email: 'admin@fish.niox.lol', created_at: now() - 9 * 86400000, expires_at: now() - 2 * 86400000, revoked_at: now() - 3 * 86400000, redemptions: [{ user_id: 'u0', user_email: 'xiaoyu@example.com', days: 7, redeemed_at: now() - 8 * 86400000 }, { user_id: 'u1', user_email: 'qunzhu@example.com', days: 7, redeemed_at: now() - 6 * 86400000 }] },
   { code: 'FISH-3HXV-PB6N', days: 90, max_uses: 1, used_count: 1, note: null, created_by_email: 'admin@fish.niox.lol', created_at: now() - 5 * 86400000, expires_at: null, revoked_at: null, redemptions: [{ user_id: 'u2', user_email: 'astr.fan@example.com', days: 90, redeemed_at: now() - 4 * 86400000 }] },
 ].map((invite) => ({ ...invite, quota: null }))
@@ -233,6 +263,9 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     inv.redemptions.push({ user_id: state.user.id, user_email: state.user.email, days: inv.days, redeemed_at: now() })
     state.user.service_until = Math.max(now(), state.user.service_until ?? 0) + inv.days * 86400000
     state.user.service_active = true
+    if (inv.gateway_budget) {
+      addMockCredit(state.user.id, { source: 'invite', amount: inv.gateway_budget, expires_at: state.user.service_until, note: '', created_by_email: null })
+    }
     return ok({ user: state.user })
   }
   const blocked = () => err(403, 'service_expired', '服务已到期，兑换新的邀请码后再来')
@@ -253,8 +286,23 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     state.keys.push(k)
     return ok(k)
   }
+  if (path === '/me/gateway' && method === 'GET') {
+    const k = state.keys.find((x) => x.rotatable) ?? null
+    const has = (credits[state.user.id] ?? []).length > 0
+    return ok({ account: has, key: k, balance: k ? mockBalance(state.user.id) : null, pending: [] })
+  }
+  if (path === '/me/gateway/rotate' && method === 'POST') {
+    let k = state.keys.find((x) => x.rotatable)
+    if (!(credits[state.user.id] ?? []).length) return err(404, 'not_found', '还没有活动额度')
+    if (!k) {
+      k = { id: id(), name: '活动获取', base_url: 'https://gateway.gengwiki.com/v1', model: 'deepseek-flash', key_masked: '', created_at: now(), has_balance: true, rotatable: true }
+      state.keys.push(k)
+    }
+    k.key_masked = `gwk…${Math.random().toString(16).slice(2, 6)}`
+    return ok({ key: k })
+  }
   const bal = m(/^\/llm-keys\/(\w+)\/balance$/)
-  if (bal && method === 'GET') return ok({ currency: 'CNY', available: '4.9832', budget: '5.00', spent: '0.0168', expires_at: null, disabled: false })
+  if (bal && method === 'GET') return ok(mockBalance(state.user.id))
   let r = m(/^\/llm-keys\/(\w+)$/)
   if (r && method === 'DELETE') {
     state.keys = state.keys.filter((k) => k.id !== r![1])
@@ -592,6 +640,32 @@ function adminRoute(method: string, path: string, body: any): Response {
     const bots = u.id === state.user!.id ? state.bots : u.bots ? [{ ...demoBot(u), id: 'b' + u.id }] : []
     return ok({ user: u, bots })
   }
+  r = path.match(/^\/admin\/users\/(\w+)\/credits(?:\/(\w+))?$/)
+  if (r) {
+    const uid = r[1]
+    const view = () => ({ configured: true, account: (credits[uid] ?? []).length > 0, items: credits[uid] ?? [], remote_error: null })
+    if (method === 'POST') {
+      if (!(Number(body.amount) > 0 && Number(body.amount) <= 1000)) return err(400, 'invalid_input', '额度应为 0.01 到 1000 元，最多两位小数')
+      if (body.expires_at != null && body.expires_at <= now()) return err(400, 'invalid_input', '过期时间应晚于现在')
+      addMockCredit(uid, { source: 'admin', amount: yuan2(body.amount), expires_at: body.expires_at ?? null, note: body.note ?? '', created_by_email: state.user!.email })
+      return new Response(JSON.stringify(view()), { status: 201 })
+    }
+    if (method === 'PATCH' && r[2]) {
+      const c = (credits[uid] ?? []).find((x) => x.id === r![2])
+      if (!c) return err(404, 'not_found', '额度不存在')
+      if (body.amount != null) {
+        if (Number(body.amount) < Number(c.spent ?? 0)) return err(502, 'upstream_error', '修改失败：额度不能低于已用')
+        c.amount = yuan2(body.amount)
+        c.remaining = yuan4(Number(body.amount) - Number(c.spent ?? 0))
+      }
+      if ('expires_at' in body) {
+        c.expires_at = body.expires_at
+        c.expired = c.expires_at != null && c.expires_at <= now()
+      }
+      return ok(view())
+    }
+    return ok(view())
+  }
   r = path.match(/^\/admin\/users\/(\w+)\/usage$/)
   if (r) {
     if (r[1] === state.user!.id) return ok(usage())
@@ -679,7 +753,7 @@ function mockSystem(): AdminSystem {
       d1: {
         size_bytes: 1_327_104, query_ms: 0.61, round_trip_ms: 14,
         tables: [['users', 61], ['sessions', 74], ['bots', 4], ['platforms', 5], ['plugins', 17], ['llm_keys', 6], ['invite_codes', 40],
-          ['invite_redemptions', 31], ['email_codes', 3], ['captchas', 12], ['rate_events', 208], ['qr_tasks', 2], ['node_tombstones', 0], ['nodes', 1]]
+          ['invite_redemptions', 31], ['gateway_accounts', 2], ['gateway_credits', 3], ['email_codes', 3], ['captchas', 12], ['rate_events', 208], ['qr_tasks', 2], ['node_tombstones', 0], ['nodes', 1]]
           .map(([name, rows]) => ({ name: name as string, rows: rows as number })),
         users_admin: 1, users_login_24h: 9, sessions_active: 52, bots_desired_running: 4, bots_needs_push: 0, qr_tasks_active: 1,
       },

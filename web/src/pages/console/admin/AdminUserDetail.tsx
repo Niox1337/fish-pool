@@ -4,9 +4,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Puzzle } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/api/client'
-import { keys, useAdminBotLogs, useAdminUser, useAdminUserUsage } from '@/api/hooks'
-import type { AdminUser, Bot, Quota } from '@/api/types'
-import { Button, ConfirmDialog, ErrorNote, Field, Input, Skeleton, useFieldId } from '@/components/ui'
+import { keys, useAdminBotLogs, useAdminCredits, useAdminUser, useAdminUserUsage } from '@/api/hooks'
+import type { AdminCredit, AdminCredits, AdminUser, Bot, Quota } from '@/api/types'
+import { Button, ConfirmDialog, ErrorNote, Field, Input, Pill, Skeleton, useFieldId } from '@/components/ui'
 import { Pupil, statusMood } from '@/components/Pupil'
 import { BotStatusPill, PlatformBadge, PluginStatusPill } from '@/pages/console/bot/status'
 import { cn } from '@/lib/cn'
@@ -207,6 +207,196 @@ function QuotaEditor({ user }: { user: AdminUser }) {
   )
 }
 
+const MAX_CREDIT_YUAN = 1000
+
+/** Error for a credit amount in yuan, null when valid. */
+function creditAmountError(v: string): string | null {
+  const t = v.trim()
+  if (!/^\d{1,4}(\.\d{1,2})?$/.test(t) || Number(t) <= 0 || Number(t) > MAX_CREDIT_YUAN) return `填 0.01 到 ${MAX_CREDIT_YUAN} 元，最多两位小数`
+  return null
+}
+
+function useCreditAction(userId: string) {
+  const qc = useQueryClient()
+  return async (run: () => Promise<AdminCredits>, done: string) => {
+    try {
+      const data = await run()
+      qc.setQueryData([...keys.admin, 'credits', userId], data)
+      toast.success(done)
+      return true
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '没能保存，稍后再试')
+      return false
+    }
+  }
+}
+
+const creditState: Record<AdminCredit['state'], { tone: 'ok' | 'warn' | 'bad'; label: string }> = {
+  granted: { tone: 'ok', label: '已到账' },
+  pending: { tone: 'warn', label: '发放中' },
+  failed: { tone: 'bad', label: '发放失败' },
+}
+
+function CreditRow({ userId, c }: { userId: string; c: AdminCredit }) {
+  const act = useCreditAction(userId)
+  const [editing, setEditing] = useState(false)
+  const [amount, setAmount] = useState(c.amount)
+  const [date, setDate] = useState(toDateInput(c.expires_at))
+  const [busy, setBusy] = useState(false)
+  const amountId = useFieldId('credit-amount')
+  const dateId = useFieldId('credit-date')
+  const amountError = creditAmountError(amount)
+  const state = creditState[c.state]
+
+  function open() {
+    setAmount(c.amount)
+    setDate(toDateInput(c.expires_at))
+    setEditing(true)
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault()
+    if (amountError) return
+    const body: { amount?: string; expires_at?: number | null } = {}
+    if (Number(amount) !== Number(c.amount)) body.amount = amount.trim()
+    const nextExpiry = date ? endOfDay(date) : null
+    if (date !== toDateInput(c.expires_at)) body.expires_at = nextExpiry
+    if (Object.keys(body).length === 0) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    const ok = await act(() => api.adminPatchCredit(userId, c.id, body), '额度已修改')
+    setBusy(false)
+    if (ok) setEditing(false)
+  }
+
+  return (
+    <li className="py-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <p className="font-semibold text-ink tabular-nums">
+            {c.remaining != null ? `剩 ${c.remaining} 元` : `${c.amount} 元`}
+            {c.remaining != null && <span className="ml-2 text-sm font-normal text-ink-3">共 {c.amount} 元</span>}
+          </p>
+          <p className="mt-0.5 text-[13px] wrap-anywhere text-ink-3">
+            {c.source === 'invite' ? '邀请码赠送' : `管理员添加${c.created_by_email ? `（${c.created_by_email}）` : ''}`}
+            {c.note && ` · ${c.note}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          <span className={cn('tabular-nums', c.expired ? 'text-bad' : 'text-ink-2')}>
+            {c.expires_at == null ? '不过期' : c.expired ? `${fmtDate(c.expires_at)} 已过期` : `${fmtDate(c.expires_at)} 过期`}
+          </span>
+          <Pill tone={state.tone}>{state.label}</Pill>
+        </div>
+      </div>
+      {c.error && c.state !== 'granted' && <p className="mt-1 text-[13px] wrap-anywhere text-bad">{c.error}</p>}
+      {editing ? (
+        <form onSubmit={save} noValidate className="mt-3 grid gap-3 rounded-xl bg-paper-2/60 p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <Field label="总额度（元）" htmlFor={amountId} error={amount && amountError ? amountError : undefined}>
+            <Input id={amountId} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-8 rounded-lg text-sm tabular-nums" />
+          </Field>
+          <Field label="过期日" htmlFor={dateId} hint="留空则不过期">
+            <Input id={dateId} type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 rounded-lg text-sm tabular-nums" />
+          </Field>
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!!amountError}>
+              保存
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+              取消
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <Button size="sm" variant="ghost" className="mt-1.5" onClick={open}>
+          修改
+        </Button>
+      )}
+    </li>
+  )
+}
+
+function CreditPanel({ user }: { user: AdminUser }) {
+  const q = useAdminCredits(user.id)
+  const act = useCreditAction(user.id)
+  const [amount, setAmount] = useState('')
+  const [date, setDate] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const amountId = useFieldId('credit-new-amount')
+  const dateId = useFieldId('credit-new-date')
+  const noteId = useFieldId('credit-new-note')
+  const amountError = amount ? creditAmountError(amount) : null
+  const data = q.data
+
+  async function add(e: FormEvent) {
+    e.preventDefault()
+    if (!amount || amountError) return
+    setBusy(true)
+    const ok = await act(
+      () => api.adminAddCredit(user.id, { amount: amount.trim(), expires_at: date ? endOfDay(date) : null, note: note.trim() || undefined }),
+      `已添加 ${amount.trim()} 元活动额度`,
+    )
+    setBusy(false)
+    if (ok) {
+      setAmount('')
+      setDate('')
+      setNote('')
+    }
+  }
+
+  return (
+    <section aria-labelledby="ud-credits" className="rounded-2xl border border-paper-3 bg-cream p-5">
+      <h2 id="ud-credits" className="font-display text-lg font-black text-ink">
+        活动额度
+      </h2>
+      <p className="mt-1 text-[13px] text-ink-3">每笔额度单独过期，用户用的时候先扣最早过期的那笔。</p>
+      {q.error ? (
+        <div className="mt-3">
+          <ErrorNote error={q.error} onRetry={() => q.refetch()} />
+        </div>
+      ) : !data ? (
+        <Skeleton className="mt-3 h-16" />
+      ) : (
+        <>
+          {data.remote_error && <p className="mt-2 text-[13px] text-bad">查不到剩余额度：{data.remote_error}</p>}
+          {data.items.length === 0 ? (
+            <p className="mt-3 text-[15px] text-ink-2">还没有活动额度。</p>
+          ) : (
+            <ul className="mt-2 divide-y divide-paper-3">
+              {data.items.map((c) => (
+                <CreditRow key={c.id} userId={user.id} c={c} />
+              ))}
+            </ul>
+          )}
+          {data.configured ? (
+            <form onSubmit={add} noValidate className="mt-4 grid gap-3 border-t border-paper-3 pt-4 sm:grid-cols-2">
+              <Field label="添加额度（元）" htmlFor={amountId} error={amountError ?? undefined}>
+                <Input id={amountId} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例如 5" className="h-8 rounded-lg text-sm tabular-nums" />
+              </Field>
+              <Field label="过期日" htmlFor={dateId} hint="留空则不过期">
+                <Input id={dateId} type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 rounded-lg text-sm tabular-nums" />
+              </Field>
+              <Field label="备注（可选）" htmlFor={noteId}>
+                <Input id={noteId} value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} className="h-8 rounded-lg text-sm" />
+              </Field>
+              <div className="flex items-end">
+                <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!amount || !!amountError}>
+                  添加额度
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <p className="mt-3 text-[13px] text-ink-3">活动额度服务未配置。</p>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 function BotCard({ bot }: { bot: Bot }) {
   return (
     <li className="rounded-2xl border border-paper-3 bg-cream p-4">
@@ -266,6 +456,7 @@ function Overview({ data }: { data: Detail }) {
       <div className="grid gap-6">
         <ServicePanel user={data.user} />
         <QuotaEditor user={data.user} />
+        <CreditPanel user={data.user} />
       </div>
       <section aria-labelledby="ud-bots">
         <h2 id="ud-bots" className="mb-3 font-display text-lg font-black text-ink">

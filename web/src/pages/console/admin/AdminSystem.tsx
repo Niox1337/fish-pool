@@ -496,7 +496,7 @@ function Logs({ s, users }: { s: NodeSystem; users: System['users'] }) {
 
 const tableLabel: Record<string, string> = {
   users: '用户', sessions: '登录会话', bots: '小鱼', platforms: '平台', plugins: '插件', llm_keys: '模型 Key',
-  invite_codes: '邀请码', invite_redemptions: '兑换记录', email_codes: '邮件验证码', captchas: '图形验证码',
+  invite_codes: '邀请码', invite_redemptions: '兑换记录', gateway_accounts: '活动额度账户', gateway_credits: '活动额度', email_codes: '邮件验证码', captchas: '图形验证码',
   rate_events: '限流记录', qr_tasks: '扫码任务', node_tombstones: '待删除记录', nodes: '节点',
 }
 

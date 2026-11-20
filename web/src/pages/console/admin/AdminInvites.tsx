@@ -124,7 +124,7 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
           <QuotaInputs form={quotaForm} onChange={(key, value) => setQuotaEdits((prev) => ({ ...prev, [key]: value }))} />
         ) : <Skeleton className="h-40" />}
       </fieldset>
-      <Field label="gengwiki 网关额度（可选）" htmlFor={ids.gw} error={errors.gateway} hint="每次兑换都会生成一个带这笔额度的模型 Key，加进对方的模型 Key 并给没有可用 Key 的小鱼用上。">
+      <Field label="活动额度（可选）" htmlFor={ids.gw} error={errors.gateway} hint="每次兑换都会生成一个带这笔额度的模型 Key，加进对方的模型 Key 并给没有可用 Key 的小鱼用上。">
         <div className="flex items-center gap-2">
           <Input id={ids.gw} inputMode="decimal" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="0" aria-invalid={!!errors.gateway} className="w-28 tabular-nums" />
           <span className="text-sm text-ink-2">元</span>
@@ -181,7 +181,7 @@ function Created({ items, onClose }: { items: Invite[]; onClose: () => void }) {
         每个 {items[0]?.days} 天，可用 {items[0]?.max_uses} 次{items[0]?.expires_at ? `，${fmtDate(items[0].expires_at)} 前兑换` : ''}
       </p>
       {items[0] && <p className="mt-1 text-[13px] text-ink-3 tabular-nums">{inviteQuotaLabel(items[0].quota)}</p>}
-      {items[0]?.gateway_budget && <p className="mt-1 text-[13px] text-ink-3 tabular-nums">附带 gengwiki 网关额度 {items[0].gateway_budget} 元</p>}
+      {items[0]?.gateway_budget && <p className="mt-1 text-[13px] text-ink-3 tabular-nums">附带活动额度 {items[0].gateway_budget} 元</p>}
       <ul className="mt-3 grid gap-2 sm:grid-cols-2">
         {items.map((i) => (
           <li key={i.code} className="flex items-center gap-2 rounded-xl border border-paper-3 bg-white py-1.5 pr-1.5 pl-3">
@@ -248,7 +248,7 @@ function InviteRow({ inv }: { inv: Invite }) {
       </div>
       {inv.note && <p className="mt-1 text-sm text-ink">{inv.note}</p>}
       <p className="mt-1 text-[13px] text-ink-2 tabular-nums">{inviteQuotaLabel(inv.quota)}</p>
-      {inv.gateway_budget && <p className="mt-1 text-[13px] text-ink-2 tabular-nums">附带 gengwiki 网关额度 {inv.gateway_budget} 元</p>}
+      {inv.gateway_budget && <p className="mt-1 text-[13px] text-ink-2 tabular-nums">附带活动额度 {inv.gateway_budget} 元</p>}
       <p className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[13px] text-ink-3 tabular-nums">
         <span>{inv.created_by_email} 于 {fmtDate(inv.created_at)} 生成</span>
         <span>{inv.expires_at ? `${fmtDate(inv.expires_at)} 前可兑换` : '不限兑换日期'}</span>
@@ -264,9 +264,9 @@ function InviteRow({ inv }: { inv: Invite }) {
               <span className="text-ink-3 tabular-nums">
                 {fmtDateTime(r.redeemed_at)} 兑换，加了 {r.days} 天
               </span>
-              {r.gateway === 'granted' && <span className="text-ok">网关 Key 已发放</span>}
-              {r.gateway === 'pending' && <span className="text-ink-3">网关 Key 发放中</span>}
-              {r.gateway === 'failed' && <span className="text-bad" title={r.gateway_error ?? undefined}>网关 Key 发放失败，稍后自动重试</span>}
+              {r.gateway === 'granted' && <span className="text-ok">活动额度已到账</span>}
+              {r.gateway === 'pending' && <span className="text-ink-3">活动额度发放中</span>}
+              {r.gateway === 'failed' && <span className="text-bad" title={r.gateway_error ?? undefined}>活动额度发放失败，稍后自动重试</span>}
             </li>
           ))}
         </ul>
