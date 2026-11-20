@@ -7,11 +7,12 @@ from typing import Any
 
 from astrbot.core.message import components as C
 from astrbot.core.message.message_event_result import MessageChain
+from astrbot.core.utils.media_utils import file_uri_to_path
 
 log = logging.getLogger("astrbot")
 
 
-def _media(comp: C._Media, kind: str) -> dict[str, Any]:
+def _media(comp: C.Image | C.Record, kind: str) -> dict[str, Any]:
     out: dict[str, Any] = {"type": kind}
     ref = comp.file or ""
     url = comp.url or ""
@@ -24,7 +25,7 @@ def _media(comp: C._Media, kind: str) -> dict[str, Any]:
     elif comp.path:
         out["path"] = comp.path
     elif ref.startswith("file://"):
-        out["path"] = C._file_uri_to_path(ref)
+        out["path"] = file_uri_to_path(ref)
     elif ref:
         out["path"] = ref
     if kind == "record":
@@ -42,7 +43,7 @@ def component_to_wire(comp: Any) -> dict[str, Any] | None:
     if isinstance(comp, C.Record):
         return _media(comp, "record")
     if isinstance(comp, C.At):
-        out = {"type": "at", "user_id": str(comp.qq)}
+        out: dict[str, Any] = {"type": "at", "user_id": str(comp.qq)}
         if comp.name:
             out["name"] = comp.name
         return out

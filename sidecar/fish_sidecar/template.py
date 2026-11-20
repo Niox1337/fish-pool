@@ -36,7 +36,7 @@ import types
 from pathlib import Path
 from typing import Any
 
-from fish_sidecar import loader, protocol
+from fish_sidecar import astrbot_boot, loader, protocol
 
 MAX_IMPORT_LOG_LINES = 200
 MAX_SCANNED_VALUES = 200_000
@@ -450,7 +450,7 @@ def _thread_count() -> int:
 
 
 def _workdir_extras(workdir: Path, plugin_name: str) -> list[str]:
-    expected = {Path("home"), Path("plugins"), Path("plugins") / plugin_name}
+    expected = {Path("home"), Path("plugins"), Path("plugins") / plugin_name, Path("data"), Path("config")}
     extras = []
     for root, dirs, files in os.walk(workdir):
         for entry in dirs + files:
@@ -478,6 +478,7 @@ def prepare(spec: dict[str, Any], workdir: str) -> dict[str, Any]:
         root.removeHandler(handler)
     root.addHandler(_CaptureHandler())
     root.setLevel(logging.INFO)
+    saved_target = astrbot_boot.set_log_target(lambda level, text: _remember(level, text) if level != "debug" else None)
     out, err = _ImportStream("stdout", "info"), _ImportStream("stderr", "warning")
     sys.stdout, sys.stderr = out, err
 
@@ -494,8 +495,8 @@ def prepare(spec: dict[str, Any], workdir: str) -> dict[str, Any]:
         except BaseException as e:
             result["error"] = e
 
-    # The import runs in a worker thread like a plugin process loading directly, which imports
-    # through asyncio.to_thread while its event loop runs in the main thread.
+    # The import runs in a worker thread with no event loop. A plugin whose module level code needs
+    # a running loop fails here and is then loaded directly in its own process.
     watch.start()
     try:
         worker = threading.Thread(target=run_import, name="fish-template-import")
@@ -515,6 +516,7 @@ def prepare(spec: dict[str, Any], workdir: str) -> dict[str, Any]:
         for handler in saved_handlers:
             root.addHandler(handler)
         root.setLevel(saved_level)
+        astrbot_boot.set_log_target(saved_target)
     if failure is not None:
         return {"op": "failed", "reason": failure}
     package, main = result["value"]

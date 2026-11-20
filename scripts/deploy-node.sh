@@ -41,7 +41,7 @@ LOCK="$REMOTE/.deploy.lock"
   || { echo "Another deploy holds $LOCK on the host" >&2; exit 1; }
 COPYFILE_DISABLE=1 XZ_OPT=-9e tar cJf - --exclude __pycache__ --exclude '*.pyc' \
   deploy/node.Dockerfile deploy/node.Dockerfile.dockerignore deploy/compose.yml deploy/node-entrypoint.sh \
-  deploy/dist/fish-node sidecar/pyproject.toml sidecar/fish_sidecar sidecar/astrbot node/Cargo.toml node/Cargo.lock \
+  deploy/dist/fish-node sidecar/pyproject.toml sidecar/uv.lock sidecar/fish_sidecar node/Cargo.toml node/Cargo.lock \
   node/rustfmt.toml node/src \
   | "${SSH[@]}" "tar xJf - -C $REMOTE"
 

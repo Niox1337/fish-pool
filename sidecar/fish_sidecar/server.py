@@ -24,6 +24,7 @@ import shutil
 import signal
 import socket
 import sys
+import threading
 import time
 import traceback
 from collections import deque
@@ -42,6 +43,7 @@ PRELOAD = (
     "yaml",
     "PIL.Image",
     "astrbot",
+    "astrbot.core",
     "astrbot.api",
     "astrbot.api.all",
     "astrbot.api.event",
@@ -50,7 +52,15 @@ PRELOAD = (
     "astrbot.api.message_components",
     "astrbot.api.platform",
     "astrbot.api.provider",
+    "astrbot.core.star",
+    "astrbot.core.agent.run_context",
+    "astrbot.core.agent.tool",
+    "astrbot.core.astr_agent_context",
+    "astrbot.core.conversation_mgr",
+    "astrbot.core.cron.manager",
+    "astrbot.core.platform_message_history_mgr",
     "astrbot.core.utils.session_waiter",
+    "fish_sidecar.adapter",
     "fish_sidecar.loader",
     "fish_sidecar.dispatch",
     "fish_sidecar.child",
@@ -69,12 +79,26 @@ PR_SET_CHILD_SUBREAPER = 36
 
 def preload() -> list[str]:
     """Imports shared modules so forked children inherit them. Returns modules that failed."""
+    from fish_sidecar import astrbot_boot
+
+    astrbot_boot.prepare_import()
     failed = []
     for name in PRELOAD:
         try:
             importlib.import_module(name)
         except Exception as e:
             failed.append(f"{name}: {e}")
+    try:
+        astrbot_boot.install_log_sink()
+    except Exception as e:
+        failed.append(f"log sink: {e}")
+    try:
+        astrbot_boot.warm_database()
+    except Exception as e:
+        failed.append(f"database warmup: {e}")
+    extra = [t.name for t in threading.enumerate() if t is not threading.main_thread()]
+    if extra:
+        failed.append("threads started during preload: " + ", ".join(extra))
     gc.collect()
     gc.freeze()
     return failed

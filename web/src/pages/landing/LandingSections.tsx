@@ -183,7 +183,7 @@ export default function LandingSections() {
             </a>
           </nav>
         </div>
-        <p className="ls-foot-note">插件接口为独立实现，与 AstrBot 官方无关。</p>
+        <p className="ls-foot-note">插件由 AstrBot 本体运行，托管班与 AstrBot 官方无关。</p>
       </footer>
     </div>
   )

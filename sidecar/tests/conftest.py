@@ -167,14 +167,15 @@ class PluginProc:
     async def recv(self, pred: Callable[[dict], bool], timeout: float = TIMEOUT) -> dict:
         end = time.monotonic() + timeout
         while True:
-            m = await self.lines.next(lambda _m: True, max(0.01, end - time.monotonic()))
-            if await self._service(m):
-                if pred(m):
-                    return m
-                continue
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"no matching plugin message, backlog={self.lines.backlog}")
+            m = await self.lines.next(
+                lambda m: m.get("op") in ("llm", "log", "send_to") or pred(m), remaining,
+            )
+            await self._service(m)
             if pred(m):
                 return m
-            self.lines.backlog.append(m)
 
     async def event(self, text: str, **kw: Any) -> dict[str, Any]:
         """Sends one event and collects matched, sends and done."""
@@ -263,7 +264,7 @@ class FakeNode:
 
     async def spawn_raw(
         self, plugin: str, config: dict | None = None, plugin_dir: str | None = None,
-        *, wait_for_memory_limit: bool = False, share_key: str | None = None,
+        *, wait_for_memory_limit: bool = False, share_key: str | None = None, data_dir: str | None = None,
     ) -> tuple[str, dict, asyncio.Future]:
         """Sends spawn and returns the reply plus a future for the child connection."""
         assert self.control is not None
@@ -277,7 +278,7 @@ class FakeNode:
 
         srv = await asyncio.start_unix_server(on_conn, sock, limit=64 * 1024 * 1024)
         self.servers.append(srv)
-        data_dir = os.path.join(self.tmp, proc_id, "data")
+        data_dir = data_dir or os.path.join(self.tmp, proc_id, "data")
         spec: dict[str, Any] = {
             "op": "spawn",
             "proc_id": proc_id,
@@ -300,9 +301,9 @@ class FakeNode:
 
     async def spawn(
         self, plugin: str, config: dict | None = None, llm: Callable[[dict], dict] = default_llm,
-        *, share_key: str | None = None, plugin_dir: str | None = None,
+        *, share_key: str | None = None, plugin_dir: str | None = None, data_dir: str | None = None,
     ) -> PluginProc:
-        proc_id, reply, conn = await self.spawn_raw(plugin, config, plugin_dir, share_key=share_key)
+        proc_id, reply, conn = await self.spawn_raw(plugin, config, plugin_dir, share_key=share_key, data_dir=data_dir)
         assert reply["op"] == "spawned", reply
         reader, writer = await asyncio.wait_for(conn, TIMEOUT)
         if share_key is not None:

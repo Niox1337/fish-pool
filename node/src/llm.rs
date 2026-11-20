@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::model::LlmSpec;
@@ -12,7 +13,7 @@ const CLAUDE_API_VERSION: &str = "2026-10-21";
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
-    /// Provider native assistant message that requested tools. Sent back unchanged.
+    /// Provider-native message, or an array of content blocks for Claude.
     pub raw: Option<Value>,
     /// Set on `tool` messages.
     pub tool_call_id: Option<String>,
@@ -54,7 +55,7 @@ pub struct ToolDef {
     pub parameters: Value,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -67,6 +68,29 @@ pub struct ChatReply {
     pub tool_calls: Vec<ToolCall>,
     /// Assistant message to append before the tool results when `tool_calls` is not empty.
     pub raw: Option<Value>,
+}
+
+impl ChatReply {
+    pub fn plugin_result(self, req_id: &str) -> Value {
+        let mut result = json!({"op": "llm_result", "req_id": req_id, "text": self.text, "tool_calls": self.tool_calls});
+        if let Some(raw) = self.raw {
+            if let Some(thinking) = raw.as_array().and_then(|blocks| blocks.iter().find(|b| b["type"] == "thinking")) {
+                result["reasoning_content"] = thinking["thinking"].clone();
+                result["reasoning_signature"] = thinking["signature"].clone();
+            } else {
+                if let Some(reasoning) = raw.get("reasoning_content") {
+                    result["reasoning_content"] = reasoning.clone();
+                }
+                let extra = raw["tool_calls"].as_array().into_iter().flatten().filter_map(|call| {
+                    Some((call["id"].as_str()?.to_string(), call.get("extra_content")?.clone()))
+                }).collect::<serde_json::Map<String, Value>>();
+                if !extra.is_empty() {
+                    result["tools_call_extra_content"] = Value::Object(extra);
+                }
+            }
+        }
+        result
+    }
 }
 
 pub struct ChatRequest<'a> {
@@ -91,12 +115,81 @@ fn openai_message(m: &ChatMessage) -> Value {
     }
 }
 
+fn claude_image(url: &str) -> Value {
+    let source = match url.strip_prefix("data:").and_then(|uri| uri.split_once(";base64,")) {
+        Some((media_type, data)) => json!({"type": "base64", "media_type": media_type, "data": data}),
+        None => json!({"type": "url", "url": url}),
+    };
+    json!({"type": "image", "source": source})
+}
+
+/// Converts AstrBot's OpenAI-style message history, including tool calls and their results.
+pub fn plugin_contexts(spec: &LlmSpec, contexts: &[Value]) -> Vec<ChatMessage> {
+    let claude = spec.base_url.trim_end_matches('/') == CLAUDE_BASE_URL;
+    contexts.iter().filter_map(|message| {
+        let role = message["role"].as_str()?;
+        let content = &message["content"];
+        let parts: Vec<Value> = match content {
+            Value::Array(parts) => parts.iter().filter_map(|part| match part["type"].as_str()? {
+                "text" => Some(json!({"type": "text", "text": part["text"].as_str()?})),
+                "image_url" if role == "user" => {
+                    let url = part["image_url"]["url"].as_str()?;
+                    Some(if claude { claude_image(url) } else { json!({"type": "image_url", "image_url": {"url": url}}) })
+                }
+                _ => None,
+            }).collect(),
+            Value::String(text) if !text.is_empty() => vec![json!({"type": "text", "text": text})],
+            _ => vec![],
+        };
+        let text = parts.iter().filter_map(|p| p["text"].as_str()).collect::<String>();
+        if role == "tool" {
+            return Some(ChatMessage::tool_result(message["tool_call_id"].as_str()?, text));
+        }
+        if !matches!(role, "system" | "user" | "assistant") {
+            return None;
+        }
+        let calls = message["tool_calls"].as_array().filter(|calls| role == "assistant" && !calls.is_empty());
+        let think = content.as_array().and_then(|parts| parts.iter().find(|part| part["type"] == "think"));
+        if claude {
+            if let Some(calls) = calls {
+                let mut blocks = parts;
+                if let Some((reasoning, signature)) = think.and_then(|part| Some((part["think"].as_str()?, part["encrypted"].as_str()?))) {
+                    blocks.insert(0, json!({"type": "thinking", "thinking": reasoning, "signature": signature}));
+                }
+                for call in calls {
+                    let args = call["function"]["arguments"].as_str().and_then(|s| serde_json::from_str::<Value>(s).ok())?;
+                    blocks.push(json!({
+                        "type": "tool_use", "id": call["id"].as_str()?,
+                        "name": call["function"]["name"].as_str()?, "input": args,
+                    }));
+                }
+                return Some(ChatMessage::assistant_raw(Value::Array(blocks)));
+            }
+        } else if let Some(calls) = calls {
+            let content = if text.is_empty() { Value::Null } else { Value::String(text) };
+            let mut raw = json!({"role": "assistant", "content": content, "tool_calls": calls});
+            if let Some(reasoning) = think.and_then(|part| part["think"].as_str()).or_else(|| message["reasoning_content"].as_str()) {
+                raw["reasoning_content"] = json!(reasoning);
+            }
+            if let Some(details) = message.get("reasoning_details") {
+                raw["reasoning_details"] = details.clone();
+            }
+            return Some(ChatMessage::assistant_raw(raw));
+        }
+        let mut result = ChatMessage::new(role, text);
+        if role == "user" && parts.iter().any(|part| part["type"] != "text") {
+            result.raw = Some(if claude { Value::Array(parts) } else { json!({"role": role, "content": parts}) });
+        }
+        Some(result)
+    }).collect()
+}
+
 /// Claude messages. Consecutive tool results become one user turn of `tool_result` blocks.
 fn claude_messages(messages: &[ChatMessage]) -> Vec<Value> {
     let mut out: Vec<Value> = vec![];
     for m in messages.iter().filter(|m| m.role != "system") {
         if let Some(raw) = &m.raw {
-            out.push(json!({"role": "assistant", "content": raw}));
+            out.push(json!({"role": m.role, "content": raw}));
         } else if let Some(id) = &m.tool_call_id {
             let block = json!({"type": "tool_result", "tool_use_id": id, "content": m.content});
             let merged = out.last_mut().and_then(|last| {
@@ -131,11 +224,7 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
         let mut parts = vec![json!({"type": "text", "text": m.content})];
         for u in &req.image_urls {
             let part = if claude {
-                let source = match u.strip_prefix("data:").and_then(|uri| uri.split_once(";base64,")) {
-                    Some((media_type, data)) => json!({"type": "base64", "media_type": media_type, "data": data}),
-                    None => json!({"type": "url", "url": u}),
-                };
-                json!({"type": "image", "source": source})
+                claude_image(u)
             } else {
                 json!({"type": "image_url", "image_url": {"url": u}})
             };
@@ -354,10 +443,6 @@ fn strip_think(s: &str) -> &str {
         }
     }
     s
-}
-
-pub async fn chat(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<String> {
-    Ok(chat_reply(http, req).await?.text)
 }
 
 /// Sends one chat request and returns the text and any tool calls.
@@ -633,6 +718,19 @@ mod tests {
         assert_eq!(body["messages"][2], raw);
         assert_eq!(body["messages"][3], json!({"role": "tool", "tool_call_id": "c1", "content": "result"}));
         assert_eq!(tool_request(&spec, messages, true)["tool_choice"], "none");
+        let mut plugin_turn = raw.clone();
+        plugin_turn["content"] = json!([{"type": "think", "think": "think", "encrypted": null}]);
+        plugin_turn.as_object_mut().unwrap().remove("reasoning_content");
+        let replay = plugin_contexts(&spec, &[
+            json!({"role": "user", "content": [{"type": "text", "text": "hi"}]}),
+            plugin_turn,
+            json!({"role": "tool", "tool_call_id": "c1", "content": [{"type": "text", "text": "result"}]}),
+        ]);
+        assert_eq!(tool_request(&spec, replay, false)["messages"].as_array().unwrap().as_slice(),
+                   &body["messages"].as_array().unwrap()[1..]);
+        let result = reply.plugin_result("r");
+        assert_eq!(result["reasoning_content"], "think");
+        assert_eq!(result["tool_calls"][0], json!({"id": "c1", "name": "lookup", "arguments": {"q": "梗"}}));
         let plain = parse_response(&json!({"choices": [{"message": {"content": "done"}}]})).unwrap();
         assert!(plain.tool_calls.is_empty() && plain.raw.is_none());
     }
@@ -651,7 +749,7 @@ mod tests {
         let messages = vec![
             ChatMessage::new("system", "s"),
             ChatMessage::new("user", "hi"),
-            ChatMessage::assistant_raw(reply.raw.unwrap()),
+            ChatMessage::assistant_raw(reply.raw.clone().unwrap()),
             ChatMessage::tool_result("t1", "ra"),
             ChatMessage::tool_result("t2", "rb"),
         ];
@@ -666,6 +764,19 @@ mod tests {
                 {"type": "tool_result", "tool_use_id": "t2", "content": "rb"},
             ]},
         ]));
+        let result = reply.plugin_result("r");
+        let calls: Vec<_> = result["tool_calls"].as_array().unwrap().iter().map(|c| {
+            json!({"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"].to_string()}})
+        }).collect();
+        let replay = plugin_contexts(&spec, &[
+            json!({"role": "user", "content": "hi"}),
+            json!({"role": "assistant", "tool_calls": calls, "content": [
+                {"type": "think", "think": result["reasoning_content"], "encrypted": result["reasoning_signature"]},
+            ]}),
+            json!({"role": "tool", "tool_call_id": "t1", "content": "ra"}),
+            json!({"role": "tool", "tool_call_id": "t2", "content": "rb"}),
+        ]);
+        assert_eq!(tool_request(&spec, replay, true)["messages"], body["messages"]);
     }
 
 }

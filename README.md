@@ -6,7 +6,7 @@
 
 - `console/`：Rust Worker、D1 数据库迁移和控制台 API。
 - `node/`：Rust 节点程序，运行机器人、平台连接和资源统计。
-- `sidecar/`：Python 插件宿主和 `astrbot` 插件兼容接口。
+- `sidecar/`：Python 插件宿主，用 AstrBot 本体运行插件。
 - `web/`：React + Vite 单页前端，由控制台 Worker 提供静态资源。
 - `deploy/`：控制台部署说明、节点 Docker 镜像、compose 和 Tunnel 配置。
 - `scripts/`：带生产配置检查的控制台部署入口。
@@ -50,6 +50,6 @@ uv run pytest
 
 本站的小鱼动画素材取自 YunYueSama 发布的 [codex-deepseek-pet](https://github.com/YunYueSama/codex-deepseek-pet) 版本，经缩放和格式转换。角色参考的来源另见[上游素材说明](https://github.com/YunYueSama/codex-deepseek-pet/blob/main/ASSET_LICENSE.md)。[随附的素材许可](assets/whale-LICENSE.txt)
 
-插件接口是独立实现，兼容部分 AstrBot 插件，与 AstrBot 项目没有隶属或合作关系。AstrBot 源码仅用于参考，兼容范围见 [sidecar/COMPAT.md](sidecar/COMPAT.md)。
+插件宿主 `sidecar/` 直接运行 [AstrBot](https://github.com/AstrBotDevs/AstrBot)（AGPL-3.0），因此 `sidecar/` 以 AGPL-3.0-or-later 发布，许可全文见 [sidecar/LICENSE](sidecar/LICENSE)。本项目与 AstrBot 项目没有隶属或合作关系，插件可用范围见 [sidecar/COMPAT.md](sidecar/COMPAT.md)。
 
 展示字体使用 Resource Han Rounded CN，遵循 [SIL Open Font License（SIL OFL）](assets/fonts/OFL-License.txt)。

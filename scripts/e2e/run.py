@@ -209,6 +209,11 @@ class Run:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # A process group can disappear between wait() and killpg().
+                groups = subprocess.check_output(["ps", "-axo", "pgid="], text=True)
+                if str(process.pid) in groups.split():
+                    raise
             break
 
     def request(self, base, method, path, data=None, signed=False):
@@ -443,11 +448,23 @@ ADMIN_EMAILS=admin@example.com
             requests = list(self.fixture.requests)
         offered = requests[-2].get("tools") or []
         self.check("LLM was offered the plugin tool with its docstring schema", any(
-            t["function"]["name"] == "echo_tool" and t["function"]["parameters"]["required"] == ["text"] for t in offered), offered)
+            t["function"]["name"] == "echo_tool"
+            and t["function"]["parameters"].get("properties", {}).get("text", {}).get("type") == "string"
+            for t in offered), offered)
         self.check("tool call and result were sent back to the LLM", requests[-1]["messages"][-2:] == [
             {"role": "assistant", "content": None, "tool_calls": [{"id": "call-local", "type": "function",
              "function": {"name": "echo_tool", "arguments": json.dumps({"text": "from-llm"})}}]},
             {"role": "tool", "tool_call_id": "call-local", "content": "updated:from-llm"}], requests[-1]["messages"])
+        self.expect("plugin agent command injected", node, "POST", inject,
+                    {"text": "/ask_tool", "session_id": "local-user", "message_id": "plugin-tool"}, signed=True)
+        self.until("plugin agent answered after calling its own tool", lambda: reply("plugin-tool", "tool said updated:from-llm"))
+        with self.fixture.lock:
+            first, followup = self.fixture.requests[-2:]
+        self.check("plugin agent sent the tool definition and continued from its result",
+                   first["messages"][-1] == {"role": "user", "content": TOOL_PROMPT}
+                   and [tool["function"]["name"] for tool in first.get("tools", [])] == ["echo_tool"]
+                   and followup["messages"][-1] == {"role": "tool", "tool_call_id": "call-local",
+                                                    "content": "updated:from-llm"})
         usage = self.expect("console usage endpoint responds", console, "GET", "/api/usage")
         self.check("console reports nonzero bot and plugin memory", usage["memory_bytes"] > 0 and
                    any(s["bot_id"] == bot and s["kind"] == "core" and s["memory_bytes"] > 0 for s in usage["sources"]) and

@@ -1,31 +1,19 @@
 [project]
 name = "fish-sidecar"
 version = "0.1.0"
-description = "Plugin host for fish: fork server and astrbot plugin API compatibility package"
-requires-python = ">=3.11"
-# The first group is used by the sidecar itself. The second group mirrors libraries that AstrBot
-# ships with, which plugins often import without listing them in requirements.txt.
+description = "Plugin host for fish: fork server that runs AstrBot plugins on top of the AstrBot package"
+requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+# astrbot provides the plugin API and the sidecar imports it directly. The packages after it are
+# libraries plugins often import without declaring them in requirements.txt.
 dependencies = [
-    "aiohttp>=3.9",
-    "httpx>=0.27",
-    "pydantic>=2.5",
+    "astrbot==4.29.4",
     "pyyaml>=6.0",
-    "aiofiles>=23.2",
-    "aiosqlite>=0.20",
-    "apscheduler>=3.10",
     "beautifulsoup4>=4.12",
-    "certifi>=2024.2",
-    "chardet>=5.2",
     "colorlog>=6.8",
-    "cryptography>=42.0",
     "defusedxml>=0.7",
     "jinja2>=3.1",
     "lxml>=5.2",
-    "openai>=1.30",
-    "pillow>=10.3",
-    "psutil>=5.9",
-    "pyjwt>=2.8",
-    "websockets>=12.0",
 ]
 
 [dependency-groups]
@@ -39,7 +27,7 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["fish_sidecar", "astrbot"]
+packages = ["fish_sidecar"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,7 +1,7 @@
-"""Link between the astrbot compatibility package and the fish child process runtime.
+"""Link between the fish adapters and the child process runtime.
 
-The child process registers a runtime object here. Code in the compatibility
-package calls it to send messages, call the LLM and locate directories.
+The child process registers a runtime object here. The AstrBot adapters in
+``fish_sidecar.adapter`` call it to send messages, call the LLM and start tasks.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def set_runtime(runtime: Runtime | None) -> None:
 
 def get_runtime() -> Runtime:
     if _runtime is None:
-        raise RuntimeError("the astrbot compatibility package is not connected to a fish node")
+        raise RuntimeError("the plugin process is not connected to a fish node")
     return _runtime
 
 

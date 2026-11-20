@@ -4,8 +4,8 @@
 !node/rustfmt.toml
 !node/src/**
 !sidecar/pyproject.toml
+!sidecar/uv.lock
 !sidecar/fish_sidecar/**
-!sidecar/astrbot/**
 !deploy/node-entrypoint.sh
 !deploy/dist/fish-node
 **/__pycache__

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import importlib
 import importlib.machinery
 import importlib.util
@@ -17,11 +18,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from astrbot.core.agent.handoff import FunctionTool, HandoffTool
 from astrbot.core.config.astrbot_config import AstrBotConfig
+from astrbot.core.provider.register import llm_tools
 from astrbot.core.star.base import Star
 from astrbot.core.star.context import Context
-from astrbot.core.star.star import StarMetadata, star_registry
+from astrbot.core.star.star import StarMetadata, star_map, star_registry
+from astrbot.core.star.star_handler import star_handlers_registry
 from astrbot.core.star.star_tools import StarTools
+
+from fish_sidecar import adapter, astrbot_boot
 
 log = logging.getLogger("astrbot")
 
@@ -36,7 +42,7 @@ class LoadedPlugin:
     metadata: StarMetadata
     instance: Star
     context: Context
-    config: AstrBotConfig
+    config: AstrBotConfig | None
 
 
 def safe_identifier(name: str) -> str:
@@ -64,6 +70,7 @@ def enter_data_dir(plugin_dir: Path, data_dir: Path, plugin_name: str) -> None:
     os.environ["HOME"] = str(home)
     for var, sub in (("XDG_CONFIG_HOME", ".config"), ("XDG_CACHE_HOME", ".cache"), ("XDG_DATA_HOME", ".local/share")):
         os.environ[var] = str(home / sub)
+    astrbot_boot.enter_plugin_root(str(data_dir))
     link = data_dir / "plugins" / plugin_name
     try:
         link.parent.mkdir(parents=True, exist_ok=True)
@@ -113,17 +120,29 @@ def import_plugin_package(plugin_dir: Path, plugin_name: str) -> tuple[str, type
     return package, importlib.import_module(f"{package}.main")
 
 
-def find_star(package: str, main_module: str) -> StarMetadata:
+def find_star(package: str, main: types.ModuleType) -> StarMetadata:
+    """The plugin class metadata, registered by ``Star.__init_subclass__`` or found by the legacy class name rule."""
+    md = star_map.get(main.__name__)
+    if md is not None and md.star_cls_type is not None:
+        return md
     candidates = [
-        md
-        for md in star_registry
-        if md.star_cls_type is not None and md.module_path and (md.module_path == package or md.module_path.startswith(package + "."))
+        m
+        for m in star_registry
+        if m.star_cls_type is not None and m.module_path and (m.module_path == package or m.module_path.startswith(package + "."))
     ]
-    if not candidates:
+    if candidates:
+        return candidates[-1]
+    legacy = [
+        c
+        for name, c in inspect.getmembers(main, inspect.isclass)
+        if c.__module__ == main.__name__ and (name.lower().endswith("plugin") or name.lower() == "main")
+    ]
+    if not legacy:
         raise LookupError("no Star subclass found in the plugin")
-    in_main = [md for md in candidates if md.module_path == main_module] or candidates
-    registered = [md for md in in_main if md.registered]
-    return (registered or in_main)[-1]
+    md = StarMetadata(star_cls_type=legacy[0], module_path=main.__name__)
+    star_map[main.__name__] = md
+    star_registry.append(md)
+    return md
 
 
 def read_metadata(plugin_dir: Path) -> dict[str, Any]:
@@ -147,40 +166,117 @@ def read_schema(plugin_dir: Path) -> dict | None:
     return json.loads(path.read_text("utf-8-sig"))
 
 
-def _accepts_config(cls: type) -> bool:
+def plugin_config(plugin_dir: Path, plugin_name: str, values: dict | None, required: bool = False) -> AstrBotConfig | None:
+    """The plugin config: node values in ``config/<name>_config.json``, completed with schema defaults.
+
+    None when the plugin has no ``_conf_schema.json``, unless ``required``.
+    """
+    schema = read_schema(plugin_dir)
+    if schema is None and not required:
+        return None
+    path = Path.cwd() / "config" / f"{plugin_name}_config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(values or {}, ensure_ascii=False, indent=2), "utf-8")
+    return _open_config(path, schema, values)
+
+
+def _open_config(path: Path, schema: dict | None, values: dict | None) -> AstrBotConfig:
+    if schema is None:
+        return AstrBotConfig(config_path=str(path), default_config=dict(values or {}))
+    return AstrBotConfig(config_path=str(path), schema=schema)
+
+
+def replace_config(config: AstrBotConfig, values: dict | None) -> None:
+    """Writes new node values and reloads them into the same config object."""
+    path = Path(config.config_path)
+    path.write_text(json.dumps(values or {}, ensure_ascii=False, indent=2), "utf-8")
+    fresh = _open_config(path, config.schema, values)
+    dict.clear(config)
+    dict.update(config, fresh)
+
+
+def _requires_config(cls: type) -> bool:
+    """True when ``__init__`` takes a second parameter without a default."""
     try:
         params = list(inspect.signature(cls.__init__).parameters.values())[1:]
     except (TypeError, ValueError):
-        return True
-    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
-        return True
+        return False
     positional = [p for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-    return len(positional) >= 2 or any(p.name == "config" for p in params)
+    if any(p.name == "config" and p.default is p.empty for p in params):
+        return True
+    return len(positional) >= 2 and positional[1].default is positional[1].empty
 
 
-def instantiate(md: StarMetadata, plugin_dir: Path, plugin_name: str, config_values: dict | None) -> LoadedPlugin:
+def _apply_metadata(md: StarMetadata, plugin_dir: Path, plugin_name: str) -> None:
     meta = read_metadata(plugin_dir)
-    md.name = md.name or meta.get("name") or plugin_name
-    md.author = md.author or meta.get("author")
-    md.desc = md.desc or meta.get("desc") or meta.get("description")
-    md.version = md.version or (str(meta["version"]) if meta.get("version") is not None else None)
-    md.repo = md.repo or meta.get("repo")
-    md.display_name = md.display_name or meta.get("display_name")
-    config = AstrBotConfig(
-        config_path=str(Path.cwd() / "config" / f"{plugin_name}_config.json"),
-        schema=read_schema(plugin_dir),
-        values=config_values,
-    )
-    context = Context()
+    for field in ("name", "author", "desc", "short_desc", "repo", "display_name", "support_platforms", "astrbot_version"):
+        if meta.get(field) is not None:
+            setattr(md, field, meta[field])
+    if meta.get("description") is not None and not md.desc:
+        md.desc = meta["description"]
+    if meta.get("version") is not None:
+        md.version = str(meta["version"])
+    md.name = md.name or plugin_name
+    md.author = md.author or "unknown"
+
+
+def _plugin_tools(module_path: str) -> list[FunctionTool]:
+    out: list[FunctionTool] = []
+    for tool in llm_tools.func_list:
+        if isinstance(tool, HandoffTool):
+            agent_tools = getattr(getattr(tool, "agent", None), "tools", None) or []
+            out.extend(t for t in agent_tools if isinstance(t, FunctionTool))
+        else:
+            out.append(tool)
+    return out
+
+
+def bind(md: StarMetadata, instance: Star) -> None:
+    """Binds the plugin's handlers and function tools to ``instance`` and marks them active."""
+    module_path = md.module_path or ""
+    for handler in star_handlers_registry.get_handlers_by_module_name(module_path):
+        raw = handler.handler.func if isinstance(handler.handler, functools.partial) else handler.handler
+        handler.handler = functools.partial(raw, instance)
+    for ft in _plugin_tools(module_path):
+        owner = getattr(ft.handler, "__module__", None) if ft.handler is not None else None
+        if ft.handler is not None and (owner == module_path or (isinstance(ft.handler, functools.partial) and ft.handler_module_path == module_path)):
+            raw = ft.handler.func if isinstance(ft.handler, functools.partial) else ft.handler
+            ft.handler_module_path = module_path
+            ft.handler = functools.partial(raw, instance)
+        path = getattr(ft, "handler_module_path", None) or ""
+        if path == module_path or path.startswith(module_path + "."):
+            ft.active = True
+    md.activated = True
+    md.star_handler_full_names = [h.handler_full_name for h in star_handlers_registry.get_handlers_by_module_name(module_path)]
+
+
+async def instantiate(md: StarMetadata, plugin_dir: Path, plugin_name: str, config_values: dict | None) -> LoadedPlugin:
+    """Creates the plugin object the way AstrBot does. Must run on the event loop thread."""
+    _apply_metadata(md, plugin_dir, plugin_name)
+    config = plugin_config(plugin_dir, plugin_name, config_values)
+    context = await adapter.build_context()
     StarTools.initialize(context)
     cls = md.star_cls_type
     assert cls is not None
-    cls.name = md.name
-    cls.author = md.author or "unknown"
+    author, _, name = md.plugin_id.partition("/")
+    cls.name = name
+    cls.author = author
     cls.plugin_id = md.plugin_id
-    instance = cls(context, config) if _accepts_config(cls) else cls(context)
+    if config is None and _requires_config(cls):
+        config = plugin_config(plugin_dir, plugin_name, config_values, required=True)
+    if config is not None:
+        try:
+            instance = cls(context=context, config=config)
+        except TypeError:
+            instance = cls(context=context)
+    else:
+        instance = cls(context=context)
+    instance.name = name
+    instance.author = author
+    instance.plugin_id = md.plugin_id
     md.star_cls = instance
     md.config = config
+    bind(md, instance)
     return LoadedPlugin(
         name=md.name or plugin_name,
         version=md.version or "",
@@ -192,7 +288,23 @@ def instantiate(md: StarMetadata, plugin_dir: Path, plugin_name: str, config_val
     )
 
 
-def load(
+def import_main(
+    plugin_dir: Path,
+    venv_site_packages: str | None,
+    data_dir: Path,
+    plugin_name: str,
+    preimported: tuple[str, types.ModuleType] | None = None,
+) -> tuple[str, types.ModuleType]:
+    """Prepares paths and the AstrBot root and imports the plugin. ``preimported`` is the package and main module already in sys.modules."""
+    plugin_dir = plugin_dir.resolve()
+    if preimported is None:
+        prepare_paths(plugin_dir, venv_site_packages, data_dir.resolve(), plugin_name)
+        return import_plugin_package(plugin_dir, plugin_name)
+    enter_data_dir(plugin_dir, data_dir.resolve(), plugin_name)
+    return preimported
+
+
+async def load(
     plugin_dir: Path,
     venv_site_packages: str | None,
     data_dir: Path,
@@ -200,17 +312,11 @@ def load(
     config_values: dict | None,
     preimported: tuple[str, types.ModuleType] | None = None,
 ) -> LoadedPlugin:
-    """Imports and instantiates the plugin. ``preimported`` is the package and main module already in sys.modules."""
-    plugin_dir = plugin_dir.resolve()
-    if preimported is None:
-        prepare_paths(plugin_dir, venv_site_packages, data_dir.resolve(), plugin_name)
-        package, main = import_plugin_package(plugin_dir, plugin_name)
-    else:
-        enter_data_dir(plugin_dir, data_dir.resolve(), plugin_name)
-        package, main = preimported
-    md = find_star(package, main.__name__)
+    """Imports and instantiates the plugin. Must run on the event loop thread."""
+    package, main = import_main(plugin_dir, venv_site_packages, data_dir, plugin_name, preimported)
+    md = find_star(package, main)
     md.module = main
-    md.root_dir_name = plugin_dir.name
-    loaded = instantiate(md, plugin_dir, plugin_name, config_values)
+    md.root_dir_name = plugin_dir.resolve().name
+    loaded = await instantiate(md, plugin_dir.resolve(), plugin_name, config_values)
     loaded.package = package
     return loaded

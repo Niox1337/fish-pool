@@ -1200,24 +1200,13 @@ impl Bot {
         let mut owners: HashMap<String, Arc<PluginProc>> = HashMap::new();
         for p in procs {
             for t in p.tools() {
-                let Some(name) = t.get("name").and_then(Value::as_str) else { continue };
-                if !valid_tool_name(name) {
+                let Some(tool) = tool_definition(&t) else { continue };
+                if owners.contains_key(&tool.name) {
+                    self.logs.warn(&format!("plugin:{}", p.plugin_name), format!("工具 {} 与其他插件重名，已忽略", tool.name));
                     continue;
                 }
-                if owners.contains_key(name) {
-                    self.logs.warn(&format!("plugin:{}", p.plugin_name), format!("工具 {name} 与其他插件重名，已忽略"));
-                    continue;
-                }
-                owners.insert(name.to_string(), p.clone());
-                defs.push(ToolDef {
-                    name: name.to_string(),
-                    description: t.get("description").and_then(Value::as_str).unwrap_or(name).to_string(),
-                    parameters: t
-                        .get("parameters")
-                        .filter(|v| v.is_object())
-                        .cloned()
-                        .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
-                });
+                owners.insert(tool.name.clone(), p.clone());
+                defs.push(tool);
             }
         }
         (defs, owners)
@@ -1307,6 +1296,7 @@ impl Bot {
                 system_prompt,
                 contexts,
                 image_urls,
+                tools,
             } => {
                 let (s, spec) = self.settings();
                 let reply = match spec.filter(|l| !l.api_key.is_empty()) {
@@ -1318,8 +1308,10 @@ impl Bot {
                         if let Some(sp) = system_prompt.filter(|s| !s.is_empty()) {
                             messages.push(ChatMessage::new("system", sp));
                         }
-                        messages.extend(contexts_to_messages(Some(&Value::Array(contexts))));
-                        messages.push(ChatMessage::new("user", prompt));
+                        messages.extend(llm::plugin_contexts(&spec, &contexts));
+                        if prompt.is_some() || !image_urls.is_empty() || contexts.is_empty() {
+                            messages.push(ChatMessage::new("user", prompt.unwrap_or_default()));
+                        }
                         let model = if s.llm.model.is_empty() {
                             spec.model.clone()
                         } else {
@@ -1332,11 +1324,11 @@ impl Bot {
                             image_urls,
                             temperature: s.llm.temperature,
                             max_tokens: s.llm.max_tokens.max(16),
-                            tools: vec![],
+                            tools: tools.iter().filter_map(tool_definition).collect(),
                             tool_choice_none: false,
                         };
-                        match llm::chat(&self.shared.http, req).await {
-                            Ok(text) => json!({"op": "llm_result", "req_id": req_id, "text": text}),
+                        match llm::chat_reply(&self.shared.http, req).await {
+                            Ok(reply) => reply.plugin_result(&req_id),
                             Err(e) => {
                                 self.logs.error("llm", format!("{src} 调用失败: {e:#}"));
                                 json!({"op": "llm_result", "req_id": req_id, "error": format!("{e:#}")})
@@ -1357,6 +1349,16 @@ impl Bot {
 
 fn valid_tool_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn tool_definition(value: &Value) -> Option<ToolDef> {
+    let name = value.get("name")?.as_str()?;
+    valid_tool_name(name).then(|| ToolDef {
+        name: name.to_string(),
+        description: value.get("description").and_then(Value::as_str).unwrap_or(name).to_string(),
+        parameters: value.get("parameters").filter(|v| v.is_object()).cloned()
+            .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+    })
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {

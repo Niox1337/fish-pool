@@ -1,16 +1,7 @@
-"""Function tool schemas for ``@filter.llm_tool`` handlers.
+"""Function tools registered in AstrBot's tool manager, as seen by the node.
 
-The description and parameters come from a Google style docstring::
-
-    \"\"\"Searches memes.
-
-    Args:
-        q(string): keyword
-        limit(number): how many results
-    \"\"\"
-
-Parameters without a docstring entry are taken from the signature. Signature parameters
-without a default value are required.
+A plugin process runs a single plugin, so every active function tool in
+``llm_tools`` belongs to it. Sub agent handoff tools are not exposed.
 """
 
 from __future__ import annotations
@@ -19,101 +10,41 @@ import inspect
 import re
 from typing import Any
 
-JSON_TYPES = {"string", "number", "integer", "boolean", "array", "object"}
-TYPE_ALIASES = {
-    "str": "string",
-    "int": "integer",
-    "float": "number",
-    "bool": "boolean",
-    "list": "array",
-    "dict": "object",
-}
+from astrbot.core.agent.handoff import FunctionTool, HandoffTool
+from astrbot.core.provider.register import llm_tools
+
 TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-_ARGS_SECTION = re.compile(r"^(Args|Arguments|Parameters|Params)\s*:\s*$", re.I)
-_OTHER_SECTION = re.compile(r"^(Returns?|Yields?|Raises?|Examples?|Notes?|Attributes)\s*:\s*$", re.I)
-_PARAM = re.compile(r"^(\w+)\s*(?:\(([^)]*)\))?\s*:\s*(.*)$")
 
-
-def json_type(name: str | None) -> dict[str, Any]:
-    """Maps a docstring or annotation type name to a JSON schema. Unknown names become string."""
-    t = (name or "").strip().lower()
-    m = re.fullmatch(r"(?:array|list)\s*\[(.+)\]", t)
-    if m:
-        return {"type": "array", "items": json_type(m.group(1))}
-    t = TYPE_ALIASES.get(t, t)
-    return {"type": t if t in JSON_TYPES else "string"}
-
-
-def parse_docstring(doc: str | None) -> tuple[str, dict[str, dict[str, Any]]]:
-    """Returns the description and the documented parameters as JSON schemas."""
-    lines = inspect.cleandoc(doc or "").splitlines()
-    desc: list[str] = []
-    params: dict[str, dict[str, Any]] = {}
-    section = "desc"
-    param_indent: int | None = None
-    last: str | None = None
-    for raw in lines:
-        stripped = raw.strip()
-        indent = len(raw) - len(raw.lstrip())
-        if _ARGS_SECTION.match(stripped):
-            section, param_indent, last = "args", None, None
+def plugin_tools() -> list[FunctionTool]:
+    """Active function tools, the last registration of each name winning."""
+    out: dict[str, FunctionTool] = {}
+    for tool in llm_tools.func_list:
+        if isinstance(tool, HandoffTool) or not getattr(tool, "active", True):
             continue
-        if _OTHER_SECTION.match(stripped):
-            section = "other"
-            continue
-        if section == "desc":
-            desc.append(stripped)
-        elif section == "args" and stripped:
-            m = _PARAM.match(stripped)
-            if m and (param_indent is None or indent <= param_indent):
-                param_indent = indent
-                name, type_name, text = m.groups()
-                schema = json_type(type_name)
-                if text.strip():
-                    schema["description"] = text.strip()
-                params[name] = schema
-                last = name
-            elif last is not None:
-                prev = params[last].get("description", "")
-                params[last]["description"] = f"{prev} {stripped}".strip()
-    return "\n".join(desc).strip(), params
+        if isinstance(tool.name, str) and TOOL_NAME.match(tool.name):
+            out[tool.name] = tool
+    return list(out.values())
 
 
-def tool_schema(name: str, fn: Any) -> dict[str, Any]:
-    """Builds ``{"name", "description", "parameters"}`` for a tool handler."""
-    description, documented = parse_docstring(getattr(fn, "__doc__", None))
-    properties: dict[str, dict[str, Any]] = {}
-    required: list[str] = []
-    try:
-        sig_params = list(inspect.signature(fn).parameters.values())
-    except (TypeError, ValueError):
-        sig_params = []
-    positional = [p for p in sig_params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-    if positional and positional[0].name == "self":
-        positional = positional[1:]
-    skip = {positional[0].name} if positional else set()
-    for p in sig_params:
-        if p.name in skip or p.name == "self" or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
-            continue
-        if p.name in documented:
-            properties[p.name] = documented[p.name]
-        else:
-            ann = p.annotation
-            ann_name = getattr(ann, "__name__", ann if isinstance(ann, str) else None)
-            properties[p.name] = json_type(ann_name)
-        if p.default is inspect.Parameter.empty:
-            required.append(p.name)
-    if not sig_params:
-        properties = documented
-    parameters: dict[str, Any] = {"type": "object", "properties": properties}
-    if required:
-        parameters["required"] = required
-    return {"name": name, "description": description or name, "parameters": parameters}
+def inactive_tools() -> list[str]:
+    """Names of registered tools the node cannot call."""
+    exposed = {t.name for t in plugin_tools()}
+    return [str(getattr(t, "name", "?")) for t in llm_tools.func_list if getattr(t, "name", None) not in exposed]
+
+
+def find_tool(name: str) -> FunctionTool | None:
+    return next((t for t in plugin_tools() if t.name == name), None)
+
+
+def tool_schema(tool: FunctionTool) -> dict[str, Any]:
+    """``{"name", "description", "parameters"}`` for the node."""
+    parameters = tool.parameters if isinstance(tool.parameters, dict) and tool.parameters else {"type": "object", "properties": {}}
+    return {"name": tool.name, "description": tool.description or tool.name, "parameters": parameters}
 
 
 def call_kwargs(fn: Any, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Keeps only the arguments the handler accepts, unless it takes ``**kwargs``."""
+    """Keeps only the arguments the callable accepts, unless it takes ``**kwargs``."""
     try:
         params = inspect.signature(fn).parameters.values()
     except (TypeError, ValueError):
@@ -122,3 +53,31 @@ def call_kwargs(fn: Any, arguments: dict[str, Any]) -> dict[str, Any]:
         return dict(arguments)
     names = {p.name for p in params if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
     return {k: v for k, v in arguments.items() if k in names}
+
+
+def invoke(tool: FunctionTool, event: Any, context: Any, arguments: dict[str, Any]) -> Any:
+    """Starts the tool the way AstrBot's local tool executor does. Returns a coroutine, async generator or value."""
+    if tool.handler is not None:
+        return tool.handler(event, **call_kwargs(tool.handler, arguments))
+    overrides_call = any("call" in ty.__dict__ and ty.__dict__["call"] is not FunctionTool.call for ty in type(tool).mro())
+    if overrides_call:
+        from astrbot.core.agent.run_context import ContextWrapper
+        from astrbot.core.astr_agent_context import AstrAgentContext
+
+        wrapper = ContextWrapper(context=AstrAgentContext(context=context, event=event))
+        return tool.call(wrapper, **arguments)
+    run = getattr(tool, "run", None)
+    if run is not None:
+        return run(event, **call_kwargs(run, arguments))
+    raise ValueError(f"tool {tool.name} has no handler")
+
+
+def result_text(value: Any) -> str | None:
+    """Text of a tool return value, including MCP ``CallToolResult`` content."""
+    if value is None:
+        return None
+    content = getattr(value, "content", None)
+    if isinstance(content, list) and not isinstance(value, (str, bytes)):
+        parts = [str(getattr(c, "text", "")) for c in content if getattr(c, "text", None)]
+        return "\n".join(parts) if parts else None
+    return str(value)

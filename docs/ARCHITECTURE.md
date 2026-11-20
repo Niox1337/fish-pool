@@ -14,7 +14,7 @@ fish/
   web/                        React SPA (Vite, TS, Tailwind v4, shadcn/ui, Motion, TanStack Query, Recharts)
   console/                    Cloudflare Worker in Rust (workers-rs), D1, serves web/dist as static assets
   node/                       Rust node agent (tokio, axum, reqwest, rusqlite), runs all bots of all tenants on the Linux node host
-  sidecar/                    Python plugin host: fork server + `astrbot` compatibility package
+  sidecar/                    Python plugin host: fork server running AstrBot plugins (AGPL)
   deploy/                     node Dockerfile, compose, cloudflared config
 ```
 
@@ -331,7 +331,7 @@ Plugin process socket (node ↔ one plugin process):
 - child → node `{"op":"done","event_id","stop": bool, "call_llm": bool}`
 - node → child `{"op":"llm_hook","event_id","request":{"prompt","system_prompt","contexts"}}` → child `{"op":"llm_hook_result","event_id","request":{...}}`
 - node → child `{"op":"tool_call","call_id","event_id","event","name","arguments"}` → child `{"op":"tool_result","call_id","text","sent"}` or `{"op":"tool_result","call_id","error"}`. Returned and yielded strings form `text`. Message results the tool yields are sent to the user with `send` ops for `event_id` before the result, and `sent` is true. The node's default LLM reply offers the tools of all running plugins of the bot (OpenAI `tools` or Claude `tools`), runs each call with a 60 s limit, feeds results back (truncated to 8000 characters) and allows up to 5 tool rounds, after which the model must answer without tools. If the first request with tools gets a 4xx other than 401 or 429, it is retried once without tools. Duplicate tool names keep the plugin that sorts first by name.
-- child → node `{"op":"llm","req_id","prompt","system_prompt"?,"contexts"?,"image_urls"?}` → node `{"op":"llm_result","req_id","text"?,"error"?}` (uses the bot's LLM key)
+- child → node `{"op":"llm","req_id","prompt"?,"system_prompt"?,"contexts"?,"image_urls"?,"tools"?}` → node `{"op":"llm_result","req_id","text"?,"tool_calls"?,"error"?}`. The node uses the bot's configured model. The child can run the returned tool calls and submit the next turn with the tool results in `contexts`.
 - child → node `{"op":"send_to","session","chain"}` (proactive send by unified_msg_origin)
 - child → node `{"op":"log","level","message"}`
 - node → child `{"op":"config","config"}` (config update) and `{"op":"shutdown"}`
@@ -349,10 +349,12 @@ Component = {"type":"plain","text"} | {"type":"image","url"?,"path"?,"base64"?} 
 
 Plugins may run handlers concurrently. The node waits up to 2s for `matched` from every plugin, then runs the default LLM only if nobody matched or every matched plugin ended with `call_llm: true`.
 
-## 9. `astrbot` compatibility package scope (sidecar)
+## 9. AstrBot in the sidecar
 
-Reimplement from scratch the public plugin API names that common plugins import, without copying AstrBot source: `astrbot.api` (`logger`, `AstrBotConfig`, `llm_tool` optional), `astrbot.api.star` (`Star`, `Context`, `register`, `StarTools`), `astrbot.api.event` (`AstrMessageEvent`, `MessageEventResult`, `MessageChain`, `filter` with `command`, `command_group`, `regex`, `event_message_type`, `EventMessageType`, `permission_type`, `PermissionType`, `on_llm_request`, `on_decorating_result`, `on_astrbot_loaded`, `platform_adapter_type`), `astrbot.api.message_components` (`Plain`, `Image`, `At`, `Reply`, `Record`, `Face`), `astrbot.api.platform` (`MessageType`, `AstrBotMessage`), `astrbot.api.provider` (`ProviderRequest`, `LLMResponse`), `astrbot.core.utils.astrbot_path` helpers. Unsupported features raise a clear `NotImplementedError` naming the feature, and the plugin status becomes `error` with that message. The supported list lives in `sidecar/COMPAT.md`.
+The sidecar runs plugins against the real AstrBot package (`astrbot` from PyPI, pinned in `sidecar/uv.lock`), so plugins import AstrBot's own `astrbot.api` and `astrbot.core` modules. The fork server imports AstrBot once before forking (`fish_sidecar/astrbot_boot.py` replaces the console writer and preference scheduler threads with inline versions and keeps OpenTelemetry's fork handler from starting threads, so the server stays single threaded). Each plugin still runs in its own forked process. After the fork the process points AstrBot's root at its plugin data dir and loads the plugin the way AstrBot's plugin manager does.
+
+`fish_sidecar/adapter.py` connects message events and platform entries to the node `send` and `send_to` ops. It connects the `fish` chat provider to the node `llm` op. The plugin `Context` uses AstrBot's own conversation, message history, persona, configuration profile, knowledge base and cron managers. Each plugin instance stores their data in its own AstrBot root. See `sidecar/COMPAT.md` for the supported provider and job types.
 
 ## 10. License boundary
 
-AstrBot is AGPL-3.0. Read it to learn protocols and the plugin API surface, then write new code. Do not translate or copy AstrBot source. The [README](../README.md) records the whale sprite assets' source, modifications and licence.
+AstrBot is AGPL-3.0. The sidecar imports and runs it, so the sidecar (`sidecar/`) is distributed under AGPL-3.0-or-later, with the license text in `sidecar/LICENSE`, and its source stays public in this repository. The console, node and web front end do not include or link AstrBot code. They talk to the sidecar only through the plugin protocol (section 8) over a Unix socket. The [README](../README.md) records the whale sprite assets' source, modifications and licence.

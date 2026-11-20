@@ -58,10 +58,11 @@ pub enum PluginOut {
     },
     Llm {
         req_id: String,
-        prompt: String,
+        prompt: Option<String>,
         system_prompt: Option<String>,
         contexts: Vec<Value>,
         image_urls: Vec<String>,
+        tools: Vec<Value>,
     },
     Log {
         level: String,
@@ -134,7 +135,7 @@ pub fn parse_out(v: &Value) -> Option<PluginOut> {
         }),
         "llm" => Some(PluginOut::Llm {
             req_id: str_opt(v, "req_id")?,
-            prompt: str_opt(v, "prompt").unwrap_or_default(),
+            prompt: str_opt(v, "prompt"),
             system_prompt: str_opt(v, "system_prompt"),
             contexts: v
                 .get("contexts")
@@ -146,6 +147,7 @@ pub fn parse_out(v: &Value) -> Option<PluginOut> {
                 .and_then(|c| c.as_array())
                 .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect())
                 .unwrap_or_default(),
+            tools: v.get("tools").and_then(Value::as_array).cloned().unwrap_or_default(),
         }),
         "log" => Some(PluginOut::Log {
             level: str_opt(v, "level").unwrap_or_else(|| "info".into()),

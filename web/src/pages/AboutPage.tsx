@@ -132,7 +132,11 @@ export default function AboutPage() {
             项目说明
           </h2>
           <p className="mt-4 text-[15px] leading-relaxed text-ink-2">
-            托管班的插件接口是独立实现，可以运行部分 AstrBot 插件，和 AstrBot 项目没有隶属或合作关系。
+            托管班用 AstrBot 本体运行插件，插件宿主随 AstrBot 以 AGPL-3.0 开源，源码见{' '}
+            <a href="https://github.com/Niox1337/fish-pool/tree/main/sidecar" target="_blank" rel="noreferrer" className="text-sky underline underline-offset-2">
+              项目仓库的 sidecar 目录
+            </a>
+            。托管班和 AstrBot 项目没有隶属或合作关系。
           </p>
         </section>
       </main>

@@ -76,15 +76,18 @@ RUN if [ -n "$APT_MIRROR" ]; then \
 COPY --from=uv /uv /usr/local/bin/uv
 RUN useradd --system --uid 10001 --user-group --no-create-home --shell /usr/sbin/nologin fishplug
 
-COPY sidecar/pyproject.toml /app/sidecar/pyproject.toml
+# Dependencies are installed at the versions in uv.lock, the versions the sidecar tests ran against.
+COPY sidecar/pyproject.toml sidecar/uv.lock /app/sidecar/
 RUN if [ -n "$PIP_INDEX" ]; then export UV_DEFAULT_INDEX="$PIP_INDEX"; fi \
+    && cd /app/sidecar \
+    && uv export --frozen --no-dev --no-emit-project --format requirements.txt -o /tmp/sidecar-requirements.txt \
     && UV_PYTHON_DOWNLOADS=never uv pip install --system --break-system-packages --no-cache \
-    --compile-bytecode --python /usr/local/bin/python3 -r /app/sidecar/pyproject.toml
+    --compile-bytecode --python /usr/local/bin/python3 -r /tmp/sidecar-requirements.txt \
+    && rm /tmp/sidecar-requirements.txt
 # The sandbox root is read only, so bytecode caches must exist in the image.
 # The base image ships the standard library without them.
 RUN python3 -m compileall -q -j 0 "$(python3 -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')" > /dev/null || true
 COPY sidecar/fish_sidecar /app/sidecar/fish_sidecar
-COPY sidecar/astrbot /app/sidecar/astrbot
 RUN python3 -m compileall -q -j 0 /app/sidecar
 
 COPY --from=bin /usr/local/bin/fish-node /usr/local/bin/fish-node

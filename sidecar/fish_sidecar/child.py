@@ -13,10 +13,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from astrbot import _fish
-from astrbot.core.provider.provider import LLMError
 from astrbot.core.star.star_handler import EventType
-from fish_sidecar import loader, protocol
+
+from fish_sidecar import astrbot_boot, loader, protocol, runtime
+from fish_sidecar.adapter import LLMError
 from fish_sidecar.dispatch import Dispatcher, describe_error
 
 log = logging.getLogger("astrbot")
@@ -26,24 +26,6 @@ EXIT_LOAD_FAILED = 2
 EXIT_CONNECT_FAILED = 3
 LLM_TIMEOUT_S = 180
 TERMINATE_TIMEOUT_S = 5
-
-_LEVELS = {logging.DEBUG: "debug", logging.INFO: "info", logging.WARNING: "warning", logging.ERROR: "error", logging.CRITICAL: "error"}
-
-
-class _LogHandler(logging.Handler):
-    def __init__(self, runtime: ChildRuntime) -> None:
-        super().__init__(logging.DEBUG)
-        self.runtime = runtime
-        self.setFormatter(logging.Formatter("%(message)s"))
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            message = self.format(record)
-            level = _LEVELS.get(record.levelno, "info")
-            self.runtime.write_threadsafe({"op": "log", "level": level, "message": message})
-        except Exception:
-            pass
-
 
 class _LineWriter(io.TextIOBase):
     """File object that turns each written line into a log op."""
@@ -73,8 +55,16 @@ class _LineWriter(io.TextIOBase):
             self.runtime.write_threadsafe({"op": "log", "level": self.level, "message": line})
 
 
+def _idle_thread(thread: threading.Thread) -> bool:
+    """True for threads that exist while the plugin is idle: asyncio executor workers and AstrBot's SQLite connection workers."""
+    if thread.name.startswith("asyncio"):
+        return True
+    target = getattr(thread, "_target", None)
+    return (getattr(target, "__module__", None) or "").startswith("aiosqlite")
+
+
 class ChildRuntime:
-    """Socket side of the plugin process. Registered with ``astrbot._fish``."""
+    """Socket side of the plugin process. Registered with ``fish_sidecar.runtime``."""
 
     def __init__(self, spec: dict[str, Any]) -> None:
         self.spec = spec
@@ -121,15 +111,22 @@ class ChildRuntime:
         self.write({"op": "send_to", "session": session, "chain": chain})
         await self._drain()
 
-    async def llm(self, prompt: str | None, system_prompt: str | None, contexts: list[dict] | None, image_urls: list[str] | None) -> str:
+    async def llm(
+        self, prompt: str | None, system_prompt: str | None, contexts: list[dict],
+        image_urls: list[str], tools: list[dict],
+    ) -> dict[str, Any]:
         req_id = uuid.uuid4().hex
-        message: dict[str, Any] = {"op": "llm", "req_id": req_id, "prompt": prompt or ""}
+        message: dict[str, Any] = {"op": "llm", "req_id": req_id}
+        if prompt is not None:
+            message["prompt"] = prompt
         if system_prompt:
             message["system_prompt"] = system_prompt
         if contexts:
             message["contexts"] = contexts
         if image_urls:
             message["image_urls"] = image_urls
+        if tools:
+            message["tools"] = tools
         future = self.loop.create_future()
         self.pending[req_id] = future
         self.write(message)
@@ -139,7 +136,7 @@ class ChildRuntime:
             self.pending.pop(req_id, None)
         if reply.get("error"):
             raise LLMError(str(reply["error"]))
-        return str(reply.get("text") or "")
+        return reply
 
     def start_task(self, awaitable: Any, desc: str) -> None:
         if not self.ready:
@@ -181,12 +178,14 @@ class ChildRuntime:
         raise ConnectionError(f"cannot connect to {path}: {last}")
 
     def install_logging(self) -> None:
-        root = logging.getLogger()
-        for handler in list(root.handlers):
-            root.removeHandler(handler)
-        root.addHandler(_LogHandler(self))
-        root.setLevel(logging.INFO)
-        logging.getLogger("astrbot").setLevel(logging.DEBUG if self.spec.get("debug") else logging.INFO)
+        """Sends AstrBot, plugin and standard library log records, and stdout and stderr lines, to the node."""
+        debug = bool(self.spec.get("debug"))
+
+        def sink(level: str, message: str) -> None:
+            if level != "debug" or debug:
+                self.write_threadsafe({"op": "log", "level": level, "message": message})
+
+        astrbot_boot.route_logs(sink)
         sys.stdout = _LineWriter(self, "info")
         sys.stderr = _LineWriter(self, "warning")
 
@@ -198,17 +197,26 @@ class ChildRuntime:
             preimported = template.preimported
             if preimported is None:
                 raise RuntimeError("template did not import the plugin")
-        self.plugin = await asyncio.to_thread(
-            loader.load,
+        # The import runs on the event loop thread, so module level code can create tasks and schedulers.
+        package, main = loader.import_main(
             self.plugin_dir,
             self.spec.get("venv_site_packages"),
             self.data_dir,
             self.plugin_name,
-            self.spec.get("config") or {},
             preimported,
         )
+        moved = await astrbot_boot.migrate_legacy_kv(str(self.data_dir))
+        if moved:
+            self.write({"op": "log", "level": "info", "message": f"已把 {moved} 条插件数据从 {astrbot_boot.LEGACY_KV} 迁入 AstrBot 数据库"})
+        md = loader.find_star(package, main)
+        md.module = main
+        md.root_dir_name = self.plugin_dir.name
+        self.plugin = await loader.instantiate(md, self.plugin_dir, self.plugin_name, self.spec.get("config") or {})
+        self.plugin.package = package
         self.dispatcher = Dispatcher(self, self.plugin.instance, self.plugin.name)
+        await self.plugin.context.kb_manager.initialize()
         await self.plugin.instance.initialize()
+        await self.plugin.context.cron_manager.start(self.plugin.context)
 
     def hello(self) -> None:
         assert self.plugin is not None and self.dispatcher is not None
@@ -257,8 +265,8 @@ class ChildRuntime:
             self.spawn(self._llm_hook(str(message.get("event_id")), message.get("request") or {}))
         elif op == "tool_call" and self.dispatcher is not None:
             self.spawn(self._tool_call(message))
-        elif op == "config" and self.plugin is not None:
-            self.plugin.config.replace_values(message.get("config") or {})
+        elif op == "config" and self.plugin is not None and self.plugin.config is not None:
+            loader.replace_config(self.plugin.config, message.get("config") or {})
         elif op == "idle_check":
             self.write({"op": "idle_result", "busy": self.busy_reasons()})
         elif op == "shutdown":
@@ -286,7 +294,7 @@ class ChildRuntime:
                 reasons.append(f"{len(fds)} 个打开的网络连接")
         except Exception as e:
             reasons.append(f"无法检查事件循环: {e}")
-        threads = [t.name for t in threading.enumerate() if t is not threading.main_thread() and t.is_alive() and not t.name.startswith("asyncio")]
+        threads = [t.name for t in threading.enumerate() if t is not threading.main_thread() and t.is_alive() and not _idle_thread(t)]
         if threads:
             reasons.append("线程 " + ", ".join(sorted(threads)[:3]))
         return reasons
@@ -330,7 +338,7 @@ class ChildRuntime:
         except (ConnectionError, TimeoutError, ValueError, asyncio.IncompleteReadError) as e:
             print(f"fish child {self.proc_id}: {e}", file=sys.__stderr__)
             return EXIT_CONNECT_FAILED
-        _fish.set_runtime(self)
+        runtime.set_runtime(self)
         self.install_logging()
         if self.spec.get("preimported"):
             from fish_sidecar import template
@@ -367,6 +375,7 @@ class ChildRuntime:
 
     async def shutdown(self) -> None:
         if self.plugin is not None:
+            await self.plugin.context.cron_manager.shutdown()
             try:
                 await asyncio.wait_for(self.plugin.instance.terminate(), TERMINATE_TIMEOUT_S)
             except Exception as e:
@@ -374,6 +383,8 @@ class ChildRuntime:
         for task in list(self.tasks):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        if self.plugin is not None:
+            await self.plugin.context.kb_manager.terminate()
         await self._drain()
         if self.writer is not None:
             self.writer.close()

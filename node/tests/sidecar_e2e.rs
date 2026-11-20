@@ -149,7 +149,7 @@ async fn real_sidecar_commands_wake_prefix_and_load_failure() {
         Err(e) => e,
     };
     let load = err.downcast_ref::<LoadError>().expect("load error");
-    assert!(load.0.contains("NotImplementedError"), "{}", load.0);
+    assert!(load.0.contains("ImportError") && load.0.contains("astrbot.core.pipeline"), "{}", load.0);
     assert!(load.0.contains("astrbot.core.pipeline"), "{}", load.0);
 
     sidecar.shutdown().await;
@@ -229,7 +229,7 @@ async fn real_sidecar_load_failure_sets_status_without_restart_loop() {
         let (b, g) = (plugin_status(&node, "pb"), plugin_status(&node, "pc"));
         if b["status"] == "error" && g["status"] == "running" {
             assert!(
-                b["status_detail"].as_str().unwrap().contains("NotImplementedError"),
+                b["status_detail"].as_str().unwrap().contains("ImportError"),
                 "{b}"
             );
             assert_eq!(g["version"], "1.2.3");

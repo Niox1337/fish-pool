@@ -9,18 +9,10 @@ import traceback
 from collections import OrderedDict
 from typing import Any
 
-from astrbot import _wire
-from fish_sidecar import tools
-from astrbot._unsupported import UnsupportedFeature
 from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult, ResultContentType
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
-from astrbot.core.platform.astrbot_message import AstrBotMessage, MessageMember
-from astrbot.core.platform.message_session import MessageSession
-from astrbot.core.platform.message_type import MessageType
-from astrbot.core.platform.platform_metadata import PlatformMetadata
-from astrbot.core.provider.entities import LLMResponse, ProviderRequest
-from astrbot.core.provider.provider import _context_dicts
+from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.filter.command_group import CommandGroupFilter
 from astrbot.core.star.filter.event_message_type import EventMessageTypeFilter
@@ -28,11 +20,12 @@ from astrbot.core.star.filter.permission import PermissionTypeFilter
 from astrbot.core.star.filter.platform_adapter_type import PlatformAdapterTypeFilter
 from astrbot.core.star.filter.regex import RegexFilter
 from astrbot.core.star.star_handler import EventType, StarHandlerMetadata, star_handlers_registry
-from astrbot.core.utils.session_waiter import SessionWaiter, find_waiting_session
+from astrbot.core.utils.session_waiter import FILTERS, USER_SESSIONS, SessionWaiter
+
+from fish_sidecar import adapter, tools
+from fish_sidecar.adapter import build_event
 
 log = logging.getLogger("astrbot")
-
-PLATFORM_ADAPTER_NAMES = {"qq_official": "qq_official", "weixin_ilink": "weixin_oc"}
 
 HOOK_KINDS = {
     EventType.OnLLMRequestEvent: "llm_request",
@@ -55,66 +48,28 @@ TOOL_SENT_DIRECTLY = "工具已把内容直接发给用户"
 TOOL_NO_OUTPUT = "工具执行完成，没有返回内容"
 
 
-def tool_name(md: StarHandlerMetadata) -> str | None:
-    """The function tool name of an ``llm_tool`` handler. Sub agents return None."""
-    if md.event_type != EventType.OnCallingFuncToolEvent or "agent_name" in md.extras_configs:
-        return None
-    name = md.extras_configs.get("tool_name")
-    return name if isinstance(name, str) and tools.TOOL_NAME.match(name) else None
-
-
 def describe_error(e: BaseException) -> str:
-    name = "NotImplementedError" if isinstance(e, UnsupportedFeature) else type(e).__name__
-    return f"{name}: {e}"
+    return f"{type(e).__name__}: {e}"
 
 
-def build_event(data: dict[str, Any]) -> AstrMessageEvent:
-    """Turns a node MessageEvent into an AstrMessageEvent."""
-    is_group = data.get("message_type") == "group"
-    woken = bool(data.get("is_at_or_wake"))
-    text = str(data.get("message_str") or "")
-
-    msg = AstrBotMessage()
-    msg.type = MessageType.GROUP_MESSAGE if is_group else MessageType.FRIEND_MESSAGE
-    msg.self_id = str(data.get("self_id") or "")
-    msg.session_id = str(data.get("session_id") or "")
-    msg.message_id = str(data.get("message_id") or "")
-    msg.group_id = str(data.get("group_id") or "") if is_group else ""
-    sender = data.get("sender") or {}
-    msg.sender = MessageMember(user_id=str(sender.get("user_id") or ""), nickname=sender.get("nickname"))
-    msg.message = _wire.chain_from_wire(data.get("chain"))
-    msg.message_str = text
-    msg.raw_message = data.get("raw")
-    ts = data.get("timestamp") or time.time()
-    msg.timestamp = int(ts / 1000) if ts > 1e11 else int(ts)
-
-    platform = str(data.get("platform") or "")
-    umo = str(data.get("unified_msg_origin") or "")
-    try:
-        session = MessageSession.from_str(umo)
-    except ValueError:
-        session = MessageSession(platform, msg.type, msg.session_id)
-    meta = PlatformMetadata(name=PLATFORM_ADAPTER_NAMES.get(platform, platform), id=session.platform_id)
-    event = AstrMessageEvent(text, msg, meta, session.session_id)
-    event.session = session
-    event.is_at_or_wake_command = woken
-    event.is_wake = woken
-    event.role = "admin" if data.get("is_admin") else "member"
-    return event
+def priority(md: StarHandlerMetadata) -> int:
+    value = md.extras_configs.get("priority", 0)
+    return value if isinstance(value, int) else 0
 
 
-def bind(md: StarHandlerMetadata, instance: Any) -> Any:
-    """Binds a handler defined in the plugin class to the plugin object."""
-    fn = md.handler
-    owner = fn.__qualname__.rpartition(".")[0]
-    if owner and any(cls.__qualname__ == owner for cls in type(instance).__mro__):
-        return fn.__get__(instance, type(instance))
-    return fn
+def find_waiting_session(event: AstrMessageEvent) -> str | None:
+    """The session key of a ``session_waiter`` waiting for this event."""
+    for session_filter in tuple(FILTERS):
+        key = session_filter.filter(event)
+        session = USER_SESSIONS.get(key)
+        if session is not None and not session.session_controller.future.done():
+            return key
+    return None
 
 
 def handler_descriptor(md: StarHandlerMetadata) -> dict[str, Any] | None:
     """The hello entry for a handler, or None when the kind is not reported."""
-    out: dict[str, Any] = {"id": md.handler_full_name, "priority": md.priority}
+    out: dict[str, Any] = {"id": f"{md.handler_module_path}.{md.handler_name}", "priority": priority(md)}
     if md.event_type == EventType.AdapterMessageEvent:
         filters = md.event_filters
         group = next((f for f in filters if isinstance(f, CommandGroupFilter)), None)
@@ -137,10 +92,6 @@ def handler_descriptor(md: StarHandlerMetadata) -> dict[str, Any] | None:
         else:
             return None
         return out
-    name = tool_name(md)
-    if name is not None:
-        out.update(kind="llm_tool", pattern=name, tool=tools.tool_schema(name, md.handler))
-        return out
     kind = HOOK_KINDS.get(md.event_type)
     if kind is None:
         return None
@@ -156,13 +107,18 @@ class Dispatcher:
         self.instance = instance
         self.plugin_name = plugin_name
         self.events: OrderedDict[str, AstrMessageEvent] = OrderedDict()
+        manager = getattr(getattr(instance, "context", None), "platform_manager", None)
+        self.platforms = manager if isinstance(manager, adapter.FishPlatformManager) else None
         self.max_events = 512
 
     def handlers(self, event_type: EventType) -> list[StarHandlerMetadata]:
         return star_handlers_registry.get_handlers_by_event_type(event_type)
 
     def descriptors(self) -> list[dict[str, Any]]:
-        return [d for d in (handler_descriptor(md) for md in star_handlers_registry) if d is not None]
+        out = [d for d in (handler_descriptor(md) for md in star_handlers_registry) if d is not None]
+        for tool in tools.plugin_tools():
+            out.append({"id": f"tool:{tool.name}", "priority": 0, "kind": "llm_tool", "pattern": tool.name, "tool": tools.tool_schema(tool)})
+        return out
 
     def inert_handlers(self) -> list[str]:
         out = [
@@ -170,11 +126,7 @@ class Dispatcher:
             for md in star_handlers_registry
             if md.event_type in INERT_EVENT_TYPES
         ]
-        out += [
-            f"llm_tool:{md.handler_name}"
-            for md in star_handlers_registry
-            if md.event_type == EventType.OnCallingFuncToolEvent and tool_name(md) is None
-        ]
+        out += [f"llm_tool:{name}" for name in tools.inactive_tools()]
         return out
 
     def remember(self, event_id: str, event: AstrMessageEvent) -> None:
@@ -188,7 +140,7 @@ class Dispatcher:
         event = args[0] if args and isinstance(args[0], AstrMessageEvent) else None
         for md in self.handlers(event_type):
             try:
-                ret = bind(md, self.instance)(*args)
+                ret = md.handler(*args)
                 if inspect.isasyncgen(ret):
                     async for item in ret:
                         if event is not None and isinstance(item, MessageEventResult):
@@ -237,9 +189,10 @@ class Dispatcher:
         return activated, None
 
     async def handle_event(self, event_id: str, data: dict[str, Any]) -> None:
-        event = build_event(data)
-        event._fish_event_id = event_id
+        event = build_event(data, event_id)
         self.remember(event_id, event)
+        if self.platforms is not None:
+            self.platforms.remember(event.platform_meta)
         llm_requested = False
         matched_sent = False
         try:
@@ -272,7 +225,7 @@ class Dispatcher:
         """Runs one message handler. Returns True when it asked for an LLM call."""
         requested = False
         try:
-            ret = bind(md, self.instance)(event, **params)
+            ret = md.handler(event, **params)
             if inspect.isasyncgen(ret):
                 async for item in ret:
                     requested = await self.handle_item(event, item) or requested
@@ -331,11 +284,25 @@ class Dispatcher:
         if event.is_stopped():
             return
         try:
-            text = await self.runtime.llm(req.full_prompt(), req.system_prompt or None, _context_dicts(req.contexts), req.image_urls or None)
+            context = self.instance.context
+            request = {
+                "prompt": req.prompt,
+                "system_prompt": req.system_prompt,
+                "contexts": req.contexts,
+                "image_urls": req.image_urls,
+                "extra_user_content_parts": req.extra_user_content_parts,
+            }
+            if req.func_tool and not req.func_tool.empty():
+                response = await context.tool_loop_agent(
+                    event=event, chat_provider_id=adapter.PROVIDER_ID, tools=req.func_tool, **request,
+                )
+            else:
+                response = await context.get_using_provider().text_chat(
+                    tool_calls_result=req.tool_calls_result, **request,
+                )
         except Exception as e:
             log.error("LLM request failed: %s", describe_error(e))
             return
-        response = LLMResponse(role="assistant", completion_text=text)
         await self.call_hooks(EventType.OnLLMResponseEvent, event, response)
         result = MessageEventResult(chain=[Plain(response.completion_text)])
         result.set_result_content_type(ResultContentType.LLM_RESULT)
@@ -358,9 +325,9 @@ class Dispatcher:
         if event is not None:
             await self.call_hooks(EventType.OnLLMRequestEvent, event, req)
         out: dict[str, Any] = {
-            "prompt": req.full_prompt(),
+            "prompt": adapter.full_prompt(req.prompt, req.extra_user_content_parts),
             "system_prompt": req.system_prompt,
-            "contexts": _context_dicts(req.contexts) or [],
+            "contexts": adapter._context_dicts(req.contexts) or [],
         }
         if req.image_urls:
             out["image_urls"] = req.image_urls
@@ -372,16 +339,14 @@ class Dispatcher:
         Returned and yielded strings form the tool result. Yielded or returned message
         results are sent to the user directly, as in AstrBot.
         """
-        md = next((m for m in star_handlers_registry if tool_name(m) == name), None)
-        if md is None:
+        tool = tools.find_tool(name)
+        if tool is None:
             return {"error": f"没有名为 {name} 的工具"}
         event = self.events.get(event_id)
         if event is None:
-            event = build_event(data)
-            event._fish_event_id = event_id
+            event = build_event(data, event_id)
             self.remember(event_id, event)
-        fn = bind(md, self.instance)
-        kwargs = tools.call_kwargs(fn, arguments if isinstance(arguments, dict) else {})
+        args = arguments if isinstance(arguments, dict) else {}
         texts: list[str] = []
         sent_before = event._has_send_oper
         event._has_send_oper = False
@@ -396,10 +361,12 @@ class Dispatcher:
                     await event.send(item)
                 await self.respond(event)
             else:
-                texts.append(str(item))
+                text = tools.result_text(item)
+                if text:
+                    texts.append(text)
 
         try:
-            ret = fn(event, **kwargs)
+            ret = tools.invoke(tool, event, self.instance.context, args)
             if inspect.isasyncgen(ret):
                 async for item in ret:
                     await take(item)
