@@ -78,6 +78,10 @@ export function useBotMutation<TArgs>(botId: string, fn: (args: TArgs) => Promis
   })
 }
 
+export function usePluginMarket() {
+  return useQuery({ queryKey: ['plugin-market'], queryFn: api.pluginMarket, staleTime: 300_000, retry: false })
+}
+
 export function useAdminOverview() {
   return useQuery({ queryKey: [...keys.admin, 'overview'], queryFn: api.adminOverview, refetchInterval: 30_000 })
 }

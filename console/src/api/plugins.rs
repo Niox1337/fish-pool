@@ -18,25 +18,8 @@ pub struct Inspected {
     pub meta: PluginMeta,
     pub repo_url: String,
     pub schema: Option<Value>,
-    pub has_requirements: bool,
     /// Commit the metadata was read at. None when GitHub did not report the latest commit.
     pub commit: Option<String>,
-}
-
-impl Inspected {
-    pub fn view(&self) -> Value {
-        json!({
-            "name": self.meta.name,
-            "display_name": self.meta.display_name,
-            "version": self.meta.version,
-            "author": self.meta.author,
-            "description": self.meta.description,
-            "repo_url": self.repo_url,
-            "schema": self.schema,
-            "has_requirements": self.has_requirements,
-            "commit": self.commit,
-        })
-    }
 }
 
 fn repo_invalid(msg: &str) -> ApiError {
@@ -145,23 +128,16 @@ async fn inspect_at(app: &App, repo: &RepoRef, commit: Option<String>) -> ApiRes
     let meta = github::parse_metadata(&meta_text, &repo)
         .ok_or_else(|| ApiError::new(400, "not_astrbot_plugin", "metadata.yaml 缺少插件名称或格式不正确"))?;
     let schema = raw_file(app, &repo, &branch, "_conf_schema.json").await?.and_then(|t| github::parse_schema(&t));
-    let has_requirements = raw_file(app, &repo, &branch, "requirements.txt").await?.is_some();
     let repo_url = match &repo.branch {
         Some(b) => format!("{}/tree/{b}", repo.canonical_url()),
         None => repo.canonical_url(),
     };
-    Ok(Inspected { meta, repo_url, schema, has_requirements, commit })
+    Ok(Inspected { meta, repo_url, schema, commit })
 }
 
 #[derive(Deserialize)]
-struct RepoReq {
-    repo_url: String,
-}
-
-pub async fn inspect_route(req: &mut Request, app: &App) -> ApiResult<Reply> {
-    app.current_user(req).await?;
-    let body: RepoReq = json_body(req).await?;
-    Ok(Reply::json(inspect(app, &body.repo_url).await?.view()))
+struct InstallReq {
+    plugin_id: String,
 }
 
 async fn plugin_by_id(app: &App, bot_id: &str, pid: &str) -> ApiResult<PluginRow> {
@@ -180,7 +156,7 @@ pub async fn install(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<Re
     let user = app.current_user(req).await?;
     let bot = app.owned_bot(&user, bot_id).await?;
     App::require_service(&user)?;
-    let body: RepoReq = json_body(req).await?;
+    let body: InstallReq = json_body(req).await?;
     let used = app
         .db
         .count("SELECT COUNT(*) AS n FROM plugins p JOIN bots b ON b.id = p.bot_id WHERE b.user_id = ?1", args![user.id])
@@ -188,7 +164,8 @@ pub async fn install(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<Re
     if user.quota_plugins >= 0 && used >= user.quota_plugins {
         return Err(ApiError::quota(format!("最多可以安装 {} 个插件", user.quota_plugins)));
     }
-    let ins = inspect(app, &body.repo_url).await?;
+    let item = super::market::find(req, app, &body.plugin_id).await?;
+    let ins = inspect(app, &item.repo_url).await?;
     let exists = app.db.count("SELECT COUNT(*) AS n FROM plugins WHERE bot_id = ?1 AND name = ?2", args![bot.id, ins.meta.name]).await?;
     if exists > 0 {
         return Err(ApiError::conflict("plugin_exists", "这只小鱼已经安装了同名插件"));

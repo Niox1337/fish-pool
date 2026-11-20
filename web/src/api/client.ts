@@ -17,7 +17,7 @@ import type {
   LogLine,
   Platform,
   Plugin,
-  PluginInspect,
+  MarketPlugin,
   QrStatus,
   QrTask,
   Quota,
@@ -120,8 +120,8 @@ export const api = {
   deleteQqPanel: (id: string, pid: string, panelId: string) =>
     del<{ ok: true }>(`${qqPanelsPath(id, pid)}/${encodeURIComponent(panelId)}`),
 
-  inspectPlugin: (repo_url: string) => post<PluginInspect>('/plugins/inspect', { repo_url }),
-  addPlugin: (id: string, repo_url: string) => post<Plugin>(`/bots/${id}/plugins`, { repo_url }),
+  pluginMarket: () => get<{ items: MarketPlugin[] }>('/plugins/market'),
+  addPlugin: (id: string, plugin_id: string) => post<Plugin>(`/bots/${id}/plugins`, { plugin_id }),
   updatePlugin: (id: string, pid: string, b: { enabled?: boolean; config?: Record<string, unknown>; config_revision?: string }) =>
     patch<Plugin>(`/bots/${id}/plugins/${pid}`, b),
   upgradePlugin: (id: string, pid: string) => post<Plugin>(`/bots/${id}/plugins/${pid}/update`),

@@ -72,6 +72,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.path == "/astrbot-market":
+            return self.reply(200, {
+                "$meta": {"schema_version": 1},
+                "fish/cmd_plugin": {
+                    "name": "cmd_plugin", "author": "fish", "repo": REPO,
+                    "display_name": "本地命令插件", "desc": "Local command fixture",
+                    "version": "1.2.3", "category": "工具",
+                },
+            })
         if self.path.startswith("/v2/panels"):
             return self.qq_panels("GET")
         if self.path == "/v1/models":
@@ -335,6 +344,7 @@ NODE_SECRET={secret}
 GITHUB_API_BASE={external}/gh-api
 GITHUB_RAW_BASE={external}/gh-raw
 GITHUB_GIT_BASE={external}/gh-git
+ASTRBOT_MARKET_URL={external}/astrbot-market
 GITHUB_TOKEN=
 ADMIN_EMAILS=admin@example.com
 ''')
@@ -384,7 +394,11 @@ ADMIN_EMAILS=admin@example.com
         }})
         status = self.expect("real bot status proxied through console", console, "GET", path)
         self.check("real bot is running", status["status"] == "running", status)
-        plugin = self.expect("local command plugin installed through console", console, "POST", path + "/plugins", {"repo_url": REPO})
+        market = self.expect("console reads the AstrBot market catalogue", console, "GET", "/api/plugins/market")
+        item, = market["items"]
+        self.check("catalogue provides the plugin identity and repository", item["id"] == "fish/cmd_plugin"
+                   and item["repo_url"] == REPO and item["display_name"] == "本地命令插件", item)
+        plugin = self.expect("market plugin installed through console", console, "POST", path + "/plugins", {"plugin_id": item["id"]})
         self.check("console inspected fixture metadata", plugin["name"] == "cmd_plugin" and plugin["version"] == "1.2.3", plugin)
         self.until("real sidecar plugin running", lambda: any(p["id"] == plugin["id"] and p["status"] == "running"
                    for p in self.request(console, "GET", path)[1]["plugins"]))

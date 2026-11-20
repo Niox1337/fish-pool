@@ -256,6 +256,16 @@ export async function mockFetch(method: string, path: string, body: any): Promis
   if (path === '/auth/reset') return ok({ ok: true })
   if (!state.user) return err(401, 'unauthorized', '请先登录')
   if (path === '/me') return ok({ user: state.user })
+  if (path === '/plugins/market' && method === 'GET') {
+    return ok({ items: [
+      ['Niox1337', 'astrbot_plugin_gengwiki', '梗Wiki', '让小鱼跟上群里的新梗，顺手回一张表情包。', '娱乐'],
+      ['example', 'astrbot_plugin_notes', '小鱼便签', '把群里的提醒和待办保存下来，随时用指令查看。', '工具'],
+      ['example', 'astrbot_plugin_knowledge', '群聊资料库', '上传资料后，按问题从资料中检索相关内容。', '知识库'],
+    ].map(([author, name, display_name, description, category]) => ({
+      id: author + '/' + name, author, name, display_name, description, category,
+      repo_url: 'https://github.com/' + author + '/' + name, tags: [],
+    })) })
+  }
   if (path === '/me/redeem') {
     const inv = takeInvite(body.code)
     if (inv instanceof Response) return inv
@@ -462,32 +472,18 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     record.version = (record.version ?? 0) + 1
     return ok({ version: record.version })
   }
-  if (path === '/plugins/inspect') {
-    const u = String(body.repo_url)
-    if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+/.test(u)) return err(400, 'repo_invalid', '这不像是 GitHub 仓库地址，应该长这样：https://github.com/作者/仓库')
-    const name = u.replace(/\/tree\/.*$/, '').split('/').filter(Boolean).pop()!.replace(/\.git$/, '')
-    if (!/plugin/i.test(name)) return err(400, 'not_astrbot_plugin', '这个仓库里没找到 metadata.yaml，看起来不是 AstrBot 插件')
-    return ok({
-      name,
-      display_name: name === 'astrbot_plugin_gengwiki' ? '梗Wiki' : name.replace(/^astrbot_plugin_/, '').replace(/_/g, ' '),
-      version: 'v1.0.3',
-      author: u.split('/')[3],
-      description: '从仓库 metadata.yaml 读到的插件简介',
-      repo_url: u,
-      schema: samplePlugin(name, name, 20).schema,
-      has_requirements: true,
-    })
-  }
   r = m(/^\/bots\/(\w+)\/plugins$/)
   if (r) {
     const b = findBot(r[1])!
-    const name = String(body.repo_url).replace(/\/tree\/.*$/, '').split('/').filter(Boolean).pop()!.replace(/\.git$/, '')
+    const [author, name] = String(body.plugin_id).split('/')
+    if (!author || !name) return err(404, 'market_plugin_not_found', '插件市场里没有这个插件')
     if (b.plugins.some((x) => x.name === name)) return err(409, 'plugin_exists', '这条小鱼已经装过这个插件了')
     const total = state.bots.reduce((n, x) => n + x.plugins.length, 0)
     if (state.user.quota.plugins != null && total >= state.user.quota.plugins) return err(403, 'quota_exceeded', `插件额度是 ${state.user.quota.plugins} 个，已经用完了`)
     const p = samplePlugin(name, name.replace(/^astrbot_plugin_/, ''), 18 + Math.round(Math.random() * 30))
     if (name === 'astrbot_plugin_gengwiki') p.display_name = '梗Wiki'
-    p.repo_url = body.repo_url
+    p.repo_url = 'https://github.com/' + author + '/' + name
+    p.author = author
     p.status = 'installing'
     b.plugins.push(p)
     setTimeout(() => {

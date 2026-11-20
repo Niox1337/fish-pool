@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { ArrowRight, Check, ExternalLink, Plus } from 'lucide-react'
+import { ArrowRight, Check, Plus } from 'lucide-react'
 import whaleHappy from '@/assets/whale/happy.webp'
 import whalePortrait from '@/assets/whale/portrait.webp'
 import whaleSurprised from '@/assets/whale/surprised.webp'
@@ -23,7 +23,7 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'AstrBot 插件都能装吗？',
-    a: '常用的 AstrBot 插件接口已经实现，很多插件贴上仓库地址就能运行。插件用到暂时不支持的功能时会停下来，并写明是哪一项功能。',
+    a: '常用的 AstrBot 插件接口已经实现，很多插件在插件市场里点一下就能装好运行。插件用到暂时不支持的功能时会停下来，并写明是哪一项功能。',
   },
   {
     q: '资源怎么算？',
@@ -64,7 +64,7 @@ export default function LandingSections() {
           <ul className="ls-checks">
             <li>
               <Check aria-hidden strokeWidth={3} />
-              插件市场里的仓库地址，贴进来就装
+              插件市场就在控制台里，点一下就装
             </li>
             <li>
               <Check aria-hidden strokeWidth={3} />
@@ -81,10 +81,9 @@ export default function LandingSections() {
 
       <section data-reveal id="plugins" className="ls-book" aria-labelledby="ls-plugins">
         <div className="ls-page">
-          <h2 id="ls-plugins" className="ls-title">一行地址，装上新本领</h2>
+          <h2 id="ls-plugins" className="ls-title">点一下，装上新本领</h2>
           <p className="ls-body">
-            在 <a href={PLUGIN_MARKET} target="_blank" rel="noreferrer">AstrBot 插件市场<ExternalLink aria-hidden /></a>{' '}
-            找到喜欢的插件，复制它的 GitHub 仓库地址，贴到小鱼的插件页。托管班会装好依赖、启动插件，并把安装过程写进日志。
+            小鱼的插件页里就是 AstrBot 插件市场，搜到喜欢的插件点一下安装。托管班会装好依赖、启动插件，并把安装过程写进日志。
           </p>
           <p className="ls-body ls-muted">每个插件单独运行，一个插件出问题不会拖累小鱼本体。</p>
         </div>
@@ -92,12 +91,12 @@ export default function LandingSections() {
           <span className="ls-demo-tag">示例</span>
           <div className="ls-demo" aria-hidden>
             <div className="ls-demo-field">
-              <span>github.com/</span>
-              <span className="ls-demo-typed">someone/astrbot_plugin_weather</span>
+              <span>搜索插件 </span>
+              <span className="ls-demo-typed">天气预报</span>
             </div>
             <span className="ls-demo-add">
               <Plus strokeWidth={3} />
-              装上
+              安装
             </span>
           </div>
           <ol className="ls-shelf" aria-hidden>

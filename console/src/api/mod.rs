@@ -9,6 +9,7 @@ pub(crate) mod keys;
 mod credits;
 mod platforms;
 mod plugins;
+mod market;
 mod usage;
 
 use crate::app::App;
@@ -113,7 +114,7 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Patch, ["bots", id, "platforms", pid]) => platforms::patch(&mut req, app, id, pid).await,
         (Delete, ["bots", id, "platforms", pid]) => platforms::delete(&req, app, id, pid).await,
 
-        (Post, ["plugins", "inspect"]) => plugins::inspect_route(&mut req, app).await,
+        (Get, ["plugins", "market"]) => market::list(&req, app).await,
         (Post, ["bots", id, "plugins"]) => plugins::install(&mut req, app, id).await,
         (Patch, ["bots", id, "plugins", pid]) => plugins::patch(&mut req, app, id, pid).await,
         (Post, ["bots", id, "plugins", pid, "update"]) => plugins::update(&req, app, id, pid).await,

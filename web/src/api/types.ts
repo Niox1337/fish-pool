@@ -186,15 +186,15 @@ export type Bot = {
   plugins: Plugin[]
 }
 
-export type PluginInspect = {
+export type MarketPlugin = {
+  id: string
   name: string
   display_name: string
-  version: string
   author: string
   description: string
   repo_url: string
-  schema: PluginSchema | null
-  has_requirements: boolean
+  category: string
+  tags: string[]
 }
 
 export type QrTask = { task_id: string; qr_url: string; interval_s: number; expires_at: number }

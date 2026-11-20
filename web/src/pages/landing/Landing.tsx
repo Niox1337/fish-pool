@@ -153,9 +153,9 @@ export default function Landing() {
             <StarBadge n={3} className="lp-step-badge" />
             <CodeXml className="lp-step-icon" strokeWidth={2.4} />
             <span className="lp-step-text">
-              贴插件
+              市场一键
               <br />
-              仓库地址
+              装插件
             </span>
           </li>
         </ol>
