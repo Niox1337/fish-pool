@@ -7,7 +7,7 @@ import logoMark from '@/assets/plates/logo-mark.webp'
 
 const rules: { title: string; body: ReactNode }[] = [
   {
-    title: '凭邀请码入学',
+    title: '凭邀请码开通服务',
     body: (
       <>
         现在只能用邀请码注册。每个邀请码带着一段服务天数，注册或在账号页兑换后生效。还没到期时从到期日往后加，已经到期时从兑换当天开始算。服务到期后小鱼会停下，不能再收新小鱼、启动小鱼或装插件，设置、插件和聊天记录都会保留，兑换新的邀请码就能接着用。
@@ -104,14 +104,14 @@ export default function AboutPage() {
               大肥鱼托管班帮你托管 QQ 和微信聊天机器人。每个机器人是一条小鱼，托管班给它分好座位、看着它运行，你只需要扫码接入、选好人设和模型、装上想要的插件。
             </p>
           </div>
-          <Pupil mood="wave" size={112} className="hidden shrink-0 sm:inline-block" />
+          <Pupil mood="portrait" size={112} className="hidden shrink-0 sm:inline-block" />
         </div>
       </header>
 
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-8 sm:py-14">
         <section aria-labelledby="rules" className="scroll-mt-6">
           <h2 id="rules" className="scroll-mt-6 font-display text-2xl font-black text-ink">
-            入学须知
+            托管须知
           </h2>
           <p className="mt-2 max-w-[60ch] text-[15px] leading-relaxed text-ink-2">注册前请读一遍，这些是托管班现在的规矩。</p>
           <ol className="mt-6 grid gap-5">
@@ -131,17 +131,9 @@ export default function AboutPage() {
           <h2 id="credits" className="font-display text-2xl font-black text-ink">
             项目说明
           </h2>
-          <div className="mt-4 grid gap-5 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
-            <Pupil mood="portrait" size={88} className="rounded-2xl bg-paper-2" />
-            <div className="grid gap-3 text-[15px] leading-relaxed text-ink-2">
-              <p>托管班的插件接口是独立实现，可以运行部分 AstrBot 插件，和 AstrBot 项目没有隶属或合作关系。</p>
-              <p>
-                <a href="https://github.com/Niox1337/fish-pool#readme" target="_blank" rel="noreferrer" className="font-semibold text-sky underline">
-                  素材来源与许可
-                </a>
-              </p>
-            </div>
-          </div>
+          <p className="mt-4 text-[15px] leading-relaxed text-ink-2">
+            托管班的插件接口是独立实现，可以运行部分 AstrBot 插件，和 AstrBot 项目没有隶属或合作关系。
+          </p>
         </section>
       </main>
 

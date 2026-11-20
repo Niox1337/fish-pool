@@ -188,7 +188,7 @@ function PluginHealth({ bot }: { bot: Bot }) {
       )}
       {me && (
         <p className="mt-4 text-[13px] text-ink-3 tabular-nums">
-          这条小鱼装了 {bot.plugins.length} 个，账号额度共 {me.quota.plugins} 个
+          这条小鱼装了 {bot.plugins.length} 个，{me.quota.plugins == null ? '账号插件数量不限' : `账号额度共 ${me.quota.plugins} 个`}
         </p>
       )}
     </Panel>

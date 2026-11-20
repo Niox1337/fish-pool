@@ -1,6 +1,6 @@
-import type { CSSProperties } from 'react'
 import { cn } from '@/lib/cn'
 import type { BotStatus } from '@/api/types'
+// Sprite source: YunYueSama, https://github.com/YunYueSama/codex-deepseek-pet. Resized and converted to WebP. Licence in assets/whale-LICENSE.txt.
 import idle from '@/assets/whale/idle.webp'
 import eat from '@/assets/whale/eat.webp'
 import sleep from '@/assets/whale/sleep.webp'
@@ -12,12 +12,7 @@ import portrait from '@/assets/whale/portrait.webp'
 
 export type Mood = 'idle' | 'eat' | 'sleep' | 'wave' | 'dizzy' | 'happy' | 'surprised' | 'portrait'
 
-const sheets: Partial<Record<Mood, { src: string; loop: number }>> = {
-  idle: { src: idle, loop: 4.8 },
-  eat: { src: eat, loop: 3.2 },
-  sleep: { src: sleep, loop: 6.4 },
-  wave: { src: wave, loop: 3.2 },
-}
+const sheets: Partial<Record<Mood, string>> = { idle, eat, sleep, wave }
 const stills: Partial<Record<Mood, string>> = { dizzy, happy, surprised, portrait }
 
 export const statusMood: Record<BotStatus, Mood> = {
@@ -31,24 +26,17 @@ export function Pupil({
   mood,
   size = 72,
   className,
-  play = true,
 }: {
   mood: Mood
   size?: number
   className?: string
-  play?: boolean
 }) {
   const sheet = sheets[mood]
   if (sheet) {
-    const style = {
-      width: size,
-      height: size,
-      backgroundImage: `url(${sheet.src})`,
-      '--pupil-size': `${size}px`,
-      '--pupil-loop': `${sheet.loop}s`,
-      '--pupil-row': `${sheet.loop / 8}s`,
-    } as CSSProperties
-    return <span aria-hidden className={cn('pupil-sheet inline-block shrink-0', className)} style={style} data-play={play || undefined} />
+    return (
+      <span aria-hidden className={cn('pupil-sheet inline-block shrink-0', className)}
+        style={{ width: size, height: size, backgroundImage: `url(${sheet})` }} />
+    )
   }
   return (
     <img

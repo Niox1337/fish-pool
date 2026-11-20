@@ -12,7 +12,7 @@ import { BotStatusPill, PlatformBadge, PluginStatusPill } from '@/pages/console/
 import { cn } from '@/lib/cn'
 import { daysLeft, fmtAgo, fmtDate } from '@/lib/format'
 import { UsageSkeleton, UsageView } from '../usage/UsageView'
-import { LogList, ServiceStatus } from './shared'
+import { LogList, QuotaInputs, ServiceStatus, quotaFieldError, quotaFields, quotaFromForm, quotaToForm } from './shared'
 
 type Detail = { user: AdminUser; bots: Bot[] }
 
@@ -160,40 +160,26 @@ function ServicePanel({ user }: { user: AdminUser }) {
   )
 }
 
-const quotaFields: { key: keyof Quota; label: string; unit: string; max: number }[] = [
-  { key: 'memory_mb', label: '内存', unit: 'MB', max: 65536 },
-  { key: 'storage_mb', label: '存储', unit: 'MB', max: 1048576 },
-  { key: 'bots', label: '小鱼', unit: '条', max: 100 },
-  { key: 'plugins', label: '插件', unit: '个', max: 500 },
-]
-
 function QuotaEditor({ user }: { user: AdminUser }) {
   const patch = usePatchUser(user.id)
-  const toForm = (q: Quota) => Object.fromEntries(quotaFields.map((f) => [f.key, String(q[f.key])])) as Record<keyof Quota, string>
-  const [form, setForm] = useState(() => toForm(user.quota))
+  const [form, setForm] = useState(() => quotaToForm(user.quota))
   const [busy, setBusy] = useState(false)
-  const baseId = useFieldId('quota')
   const quotaSig = JSON.stringify(user.quota)
   const [syncedQuota, setSyncedQuota] = useState(quotaSig)
   if (syncedQuota !== quotaSig) {
     setSyncedQuota(quotaSig)
-    setForm(toForm(user.quota))
+    setForm(quotaToForm(user.quota))
   }
 
-  const errors = Object.fromEntries(
-    quotaFields.map((f) => {
-      const v = Number(form[f.key])
-      return [f.key, form[f.key] === '' || !Number.isInteger(v) || v < 0 || v > f.max ? `填 0 到 ${f.max} 的整数` : undefined]
-    }),
-  ) as Record<keyof Quota, string | undefined>
-  const changed = quotaFields.filter((f) => Number(form[f.key]) !== user.quota[f.key])
-  const valid = quotaFields.every((f) => !errors[f.key])
+  const nextQuota = quotaFromForm(form)
+  const changed = quotaFields.filter((f) => nextQuota[f.key] !== user.quota[f.key])
+  const valid = quotaFields.every((f) => !quotaFieldError(form[f.key], f))
 
   async function save(e: FormEvent) {
     e.preventDefault()
     if (!valid || changed.length === 0) return
     setBusy(true)
-    const quota = Object.fromEntries(changed.map((f) => [f.key, Number(form[f.key])])) as Partial<Quota>
+    const quota = Object.fromEntries(changed.map((f) => [f.key, nextQuota[f.key]])) as Partial<Quota>
     await patch({ quota }, () => '额度已保存，正在同步到节点')
     setBusy(false)
   }
@@ -203,29 +189,15 @@ function QuotaEditor({ user }: { user: AdminUser }) {
       <h2 id="ud-quota" className="font-display text-lg font-black text-ink">
         额度
       </h2>
-      <div className="mt-4 grid grid-cols-2 gap-4">
-        {quotaFields.map((f) => (
-          <Field key={f.key} label={f.label} htmlFor={`${baseId}-${f.key}`} error={errors[f.key]} aside={<span className="text-[13px] text-ink-3">{f.unit}</span>}>
-            <Input
-              id={`${baseId}-${f.key}`}
-              type="number"
-              inputMode="numeric"
-              min={0}
-              max={f.max}
-              value={form[f.key]}
-              onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-              aria-invalid={!!errors[f.key]}
-              className={cn('tabular-nums', Number(form[f.key]) !== user.quota[f.key] && !errors[f.key] && 'border-star-2')}
-            />
-          </Field>
-        ))}
+      <div className="mt-4">
+        <QuotaInputs form={form} onChange={(key, value) => setForm((prev) => ({ ...prev, [key]: value }))} />
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button type="submit" variant="primary" size="sm" loading={busy} disabled={!valid || changed.length === 0}>
           保存额度
         </Button>
         {changed.length > 0 && (
-          <Button size="sm" variant="ghost" onClick={() => setForm(toForm(user.quota))}>
+          <Button size="sm" variant="ghost" onClick={() => setForm(quotaToForm(user.quota))}>
             还原
           </Button>
         )}
@@ -247,7 +219,7 @@ function BotCard({ bot }: { bot: Bot }) {
           </div>
           {bot.status_detail && bot.status !== 'running' && <p className="mt-0.5 text-[13px] text-ink-2">{bot.status_detail}</p>}
           <p className="mt-0.5 text-[13px] text-ink-3 tabular-nums">
-            {fmtDate(bot.created_at)} 入学，最近更新 {fmtAgo(bot.updated_at)}
+            {fmtDate(bot.created_at)} 创建，最近更新 {fmtAgo(bot.updated_at)}
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {bot.platforms.length === 0 ? (

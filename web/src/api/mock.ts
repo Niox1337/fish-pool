@@ -1,6 +1,7 @@
-import type { AdminOverview, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, Usage, User } from './types'
+import type { AdminOverview, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, Quota, Usage, User } from './types'
 
 const MB = 1024 * 1024
+const defaultQuota: Quota = { memory_mb: 128, storage_mb: 128, bots: null, plugins: null }
 const now = () => Date.now()
 const id = () => Math.random().toString(36).slice(2, 12)
 
@@ -48,7 +49,7 @@ function setRunning(b: Bot, delay: number) {
   setTimeout(() => {
     if (!state.bots.includes(b) || b.status !== 'starting') return
     b.status = 'running'
-    pushLog(b.id, { level: 'info', source: 'core', message: '小鱼醒了，开始上课' })
+    pushLog(b.id, { level: 'info', source: 'core', message: '小鱼已开始运行' })
     for (const p of b.platforms) pushLog(b.id, { level: 'info', source: p.kind, message: `已连上${p.display_name}` })
     for (const p of b.plugins) pushLog(b.id, { level: 'info', source: `plugin:${p.name}`, message: '插件已加载' })
   }, delay)
@@ -101,7 +102,7 @@ function seedUser(email: string): User {
     email,
     role: email.startsWith('admin') ? 'admin' : 'user',
     created_at: now(),
-    quota: { memory_mb: 256, storage_mb: 1024, bots: 1, plugins: 8 },
+    quota: { ...defaultQuota },
     service_until: now() + 30 * 86400000,
     service_active: true,
   }
@@ -119,7 +120,7 @@ const invites: Invite[] = [
   { code: 'FISH-7K2M-Q9TD', days: 30, max_uses: 1, used_count: 0, note: '群友试用', created_by_email: 'admin@fish.niox.lol', created_at: now() - 86400000, expires_at: null, revoked_at: null, redemptions: [] },
   { code: 'FISH-9WQE-2RJA', days: 7, max_uses: 5, used_count: 2, note: '活动群批量', created_by_email: 'admin@fish.niox.lol', created_at: now() - 9 * 86400000, expires_at: now() - 2 * 86400000, revoked_at: now() - 3 * 86400000, redemptions: [{ user_id: 'u0', user_email: 'xiaoyu@example.com', days: 7, redeemed_at: now() - 8 * 86400000 }, { user_id: 'u1', user_email: 'qunzhu@example.com', days: 7, redeemed_at: now() - 6 * 86400000 }] },
   { code: 'FISH-3HXV-PB6N', days: 90, max_uses: 1, used_count: 1, note: null, created_by_email: 'admin@fish.niox.lol', created_at: now() - 5 * 86400000, expires_at: null, revoked_at: null, redemptions: [{ user_id: 'u2', user_email: 'astr.fan@example.com', days: 90, redeemed_at: now() - 4 * 86400000 }] },
-]
+].map((invite) => ({ ...invite, quota: null }))
 function takeInvite(code: string): Invite | Response {
   const inv = invites.find((i) => normCode(i.code) === normCode(code ?? ''))
   if (!inv || inv.revoked_at) return err(400, 'invite_invalid', '邀请码不对，再核对一下')
@@ -150,12 +151,12 @@ function usage(): Usage {
     const wave = Math.sin(i / 18) * 0.12 + Math.sin(i / 5) * 0.04
     return { ts: t, memory_bytes: Math.max(0, memory_bytes * (0.82 + wave)), storage_bytes: storage_bytes * (0.9 + i / 2880) }
   })
-  const q = state.user?.quota ?? { memory_mb: 256, storage_mb: 1024 }
+  const q = state.user?.quota ?? defaultQuota
   return { quota: { memory_mb: q.memory_mb, storage_mb: q.storage_mb }, memory_bytes, storage_bytes, sources, history }
 }
 
 const logs: LogLine[] = [
-  { ts: now() - 60000, level: 'info', source: 'core', message: '小鱼醒了，开始上课' },
+  { ts: now() - 60000, level: 'info', source: 'core', message: '小鱼已开始运行' },
   { ts: now() - 50000, level: 'info', source: 'qq_official', message: '已连上 QQ 网关，会话已恢复' },
   { ts: now() - 30000, level: 'info', source: 'plugin:daily_quote', message: '插件已加载，注册指令 /一言' },
   { ts: now() - 8000, level: 'warn', source: 'llm', message: '模型回复较慢，用时 6.2 秒' },
@@ -191,6 +192,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
       inv.used_count++
       inv.redemptions.push({ user_id: state.user.id, user_email: body.email, days: inv.days, redeemed_at: now() })
       state.user.service_until = now() + inv.days * 86400000
+      if (inv.quota) state.user.quota = { ...inv.quota }
     }
     if (body.email.startsWith('expired')) Object.assign(state.user, { service_until: now() - 86400000, service_active: false })
     return ok({ user: state.user })
@@ -235,7 +237,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
 
   if (path === '/bots' && method === 'GET') return ok({ items: state.bots })
   if (path === '/bots' && method === 'POST') {
-    if (state.bots.length >= state.user.quota.bots) return err(403, 'quota_exceeded', '小鱼名额已经用完了')
+    if (state.user.quota.bots != null && state.bots.length >= state.user.quota.bots) return err(403, 'quota_exceeded', '小鱼名额已经用完了')
     const b: Bot = {
       id: id(),
       name: body.name || '大肥鱼',
@@ -370,7 +372,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     const name = String(body.repo_url).replace(/\/tree\/.*$/, '').split('/').filter(Boolean).pop()!.replace(/\.git$/, '')
     if (b.plugins.some((x) => x.name === name)) return err(409, 'plugin_exists', '这条小鱼已经装过这个插件了')
     const total = state.bots.reduce((n, x) => n + x.plugins.length, 0)
-    if (total >= state.user.quota.plugins) return err(403, 'quota_exceeded', `插件额度是 ${state.user.quota.plugins} 个，已经用完了`)
+    if (state.user.quota.plugins != null && total >= state.user.quota.plugins) return err(403, 'quota_exceeded', `插件额度是 ${state.user.quota.plugins} 个，已经用完了`)
     const p = samplePlugin(name, name.replace(/^astrbot_plugin_/, ''), 18 + Math.round(Math.random() * 30))
     p.repo_url = body.repo_url
     p.status = 'installing'
@@ -466,8 +468,12 @@ function adminRoute(method: string, path: string, body: any): Response {
       plugins: { total: 17, running: 15, installing: 0, error: 1, over_quota: 1 },
       platforms: { qq_official: 3, weixin_ilink: 1, error: 1 },
       usage: { memory_bytes: 433 * MB, storage_bytes: 1232 * MB, quota_memory_mb: 256 * all.length, quota_storage_mb: 1024 * all.length },
+      plugin_cpu: { percent: 43.5, reporting_nodes: 1, items: [
+        { node_id: 'node-1', sampled_at: now() - 20_000, user_id: 'u2', bot_id: 'b2', bot_name: 'Astr 搬家', plugin_id: 'pl2', label: 'meme_manager', cpu_percent: 32.4 },
+        { node_id: 'node-1', sampled_at: now() - 20_000, user_id: 'u1', bot_id: 'b1', bot_name: '群聊小鱼', plugin_id: 'pl1', label: 'daily_quote', cpu_percent: 11.1 },
+      ] },
       nodes: [
-        { id: 'node-1', base_url: 'https://node-1.fish.niox.lol', online: true, version: '0.1.0', memory_total_bytes: 1950 * MB, memory_used_bytes: 812 * MB, bots: 4, last_seen: now() - 20000 },
+        { id: 'node-1', base_url: 'https://node-1.fish.niox.lol', online: true, version: '0.1.0', memory_total_bytes: 4096 * MB, memory_used_bytes: 812 * MB, bots: 4, last_seen: now() - 20000 },
       ],
       problems: [
         { user_id: 'u1', user_email: 'qunzhu@example.com', bot_id: 'b1', bot_name: '群聊小鱼', kind: 'platform', id: 'p1', label: 'QQ 官方机器人', status: 'error', status_detail: 'AppSecret 已失效，请重新扫码', updated_at: now() - 40 * 60000 },
@@ -529,11 +535,11 @@ function adminRoute(method: string, path: string, body: any): Response {
     const items = invites.filter((i) =>
       st === 'all' ? true : st === 'revoked' ? !!i.revoked_at : st === 'used' ? !i.revoked_at && i.used_count >= i.max_uses : !i.revoked_at && i.used_count < i.max_uses,
     )
-    return ok({ items: [...items].sort((a, b) => b.created_at - a.created_at), cursor: null })
+    return ok({ items: [...items].sort((a, b) => b.created_at - a.created_at), cursor: null, default_quota: defaultQuota })
   }
   if (path === '/admin/invites' && method === 'POST') {
     const items: Invite[] = Array.from({ length: body.count ?? 1 }, () => ({
-      code: genCode(), days: body.days, max_uses: body.max_uses ?? 1, used_count: 0, note: body.note || null,
+      code: genCode(), days: body.days, quota: body.quota ?? defaultQuota, max_uses: body.max_uses ?? 1, used_count: 0, note: body.note || null,
       created_by_email: state.user!.email, created_at: now(), expires_at: body.expires_at ?? null, revoked_at: null, redemptions: [],
     }))
     invites.push(...items)

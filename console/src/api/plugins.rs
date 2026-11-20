@@ -139,7 +139,7 @@ pub async fn install(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<Re
         .db
         .count("SELECT COUNT(*) AS n FROM plugins p JOIN bots b ON b.id = p.bot_id WHERE b.user_id = ?1", args![user.id])
         .await?;
-    if used >= user.quota_plugins {
+    if user.quota_plugins >= 0 && used >= user.quota_plugins {
         return Err(ApiError::quota(format!("最多可以安装 {} 个插件", user.quota_plugins)));
     }
     let ins = inspect(app, &body.repo_url).await?;

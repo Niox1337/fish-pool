@@ -13,7 +13,7 @@ fish/
   docs/ARCHITECTURE.md        this file
   web/                        React SPA (Vite, TS, Tailwind v4, shadcn/ui, Motion, TanStack Query, Recharts)
   console/                    Cloudflare Worker in Rust (workers-rs), D1, serves web/dist as static assets
-  node/                       Rust node agent (tokio, axum, reqwest, rusqlite), runs all bots of all tenants on the 2C2G host
+  node/                       Rust node agent (tokio, axum, reqwest, rusqlite), runs all bots of all tenants on the Linux node host
   sidecar/                    Python plugin host: fork server + `astrbot` compatibility package
   deploy/                     node Dockerfile, compose, cloudflared config
 ```
@@ -24,7 +24,7 @@ Runtime topology:
 Browser ──HTTPS──> fish.niox.lol  (Worker "fish-console": /api/* handled by Rust, everything else = static SPA assets, SPA fallback to index.html)
                         │  HMAC signed HTTPS
                         ▼
-                  node-1.fish.niox.lol (Cloudflare Tunnel) ──> node agent :8700 on the 2C2G host
+                  node-1.fish.niox.lol (Cloudflare Tunnel) ──> node agent :8700 on the Linux node host
                         │  unix socket JSON lines
                         ▼
                   sidecar fork server ──fork──> one Python process per (bot, plugin)
@@ -55,11 +55,10 @@ Receivers reject when |now - ts| > 60s or signature mismatch. Body for GET is th
 
 ```
 users(id PK, email UNIQUE, password_hash, role TEXT 'user'|'admin', created_at,
-      quota_memory_mb INT DEFAULT 256, quota_storage_mb INT DEFAULT 1024,
-      quota_bots INT DEFAULT 1, quota_plugins INT DEFAULT 8,
+      quota_memory_mb INT, quota_storage_mb INT, quota_bots INT, quota_plugins INT,
       service_until INT NULL, last_login_at INT NULL)   -- ms, null means no service yet
 invite_codes(code PK, days INT, max_uses INT DEFAULT 1, used_count INT DEFAULT 0, note TEXT,
-             created_by, created_at, expires_at INT NULL, revoked_at INT NULL)
+             created_by, created_at, expires_at INT NULL, revoked_at INT NULL, quota_json TEXT NULL)
 invite_redemptions(code, user_id, days, redeemed_at)
 sessions(token_hash PK, user_id, created_at, expires_at, user_agent)
 email_codes(email, purpose 'register'|'reset', code_hash, expires_at, attempts, created_at)
@@ -80,6 +79,7 @@ qr_tasks(kind, task_id, bot_id, node_id, platform_id NULL, expires_at, created_a
 node_tombstones(bot_id PK, node_id, created_at)  -- bot deletes the node has not confirmed yet
 ```
 
+- Registration defaults to 128 MiB of memory, 128 MiB of storage and unlimited bots and plugins. The API represents unlimited counts as `null`, stored as `-1` in `users`. A count of `0` allows no slots. An invite can override the defaults at registration. Redeeming any invite on an existing account extends the service period and preserves its quotas.
 - `desired_running` is the state the user asked for, `status` is the last known live state. `needs_push = 1` marks a desired state the node has not accepted yet (node unreachable). The console retries on `GET /api/bots/:id`, on node events and from the 5 minute cron, and shows status `error` with a `status_detail` meanwhile.
 - `install_rev` is bumped by `POST /api/bots/:id/plugins/:pid/update` and tells the node to reinstall.
 - `qr_tasks` makes QR polling idempotent: the platform created for a task is returned again on later polls.
@@ -167,7 +167,7 @@ Usage
 - `GET /api/usage` → aggregated over the user's bots, proxied from the node:
 ```json
 {
-  "quota": {"memory_mb": 256, "storage_mb": 1024},
+  "quota": {"memory_mb": 128, "storage_mb": 128},
   "memory_bytes": 123, "storage_bytes": 456,
   "sources": [
     {"bot_id": "...", "kind": "core"|"conversations"|"plugin", "plugin_id": null, "label": "核心连接",
@@ -189,20 +189,22 @@ Admin (role `admin` only, otherwise 403 `forbidden`; read routes never return se
   "plugins": {"total": 0, "running": 0, "installing": 0, "error": 0, "over_quota": 0},
   "platforms": {"qq_official": 0, "weixin_ilink": 0, "error": 0},
   "usage": {"memory_bytes": 0, "storage_bytes": 0, "quota_memory_mb": 0, "quota_storage_mb": 0},
+  "plugin_cpu": {"percent": null, "reporting_nodes": 0, "items": []},
   "nodes": [{"id", "base_url", "online": true, "version", "memory_total_bytes", "memory_used_bytes", "bots": 0, "last_seen": 0, "error"?: "..."}],
   "problems": [{"user_id", "user_email", "bot_id", "bot_name", "kind": "bot"|"platform"|"plugin", "id", "label", "status", "status_detail", "updated_at"}]
 }
 ```
   `usage` sums the node usage summaries, `quota_*` sums every user's quota. `problems` lists at most 50 entries in status `error` or `over_quota`, newest first.
+  `plugin_cpu` sums reported CPU usage of plugin processes, where 100% is one logical CPU. `items` contains up to 20 plugins sorted by usage and includes `node_id` and `sampled_at` for each. Nodes without a CPU sample are excluded from `reporting_nodes`.
 - `GET /api/admin/users?q=<email substring>&cursor=` → `{"items": [AdminUser], "cursor": "..."|null}` (50 per page, newest first)
   `AdminUser = User + {bots: n, plugins: n, running: n, errors: n, memory_bytes: n|null, storage_bytes: n|null, last_login_at: n|null}` (usage is null when the node is unreachable)
 - `GET /api/admin/users/:id` → `{"user": AdminUser, "bots": [Bot]}`
 - `GET /api/admin/users/:id/usage` → the Usage object of `GET /api/usage`, for that user
 - `GET /api/admin/users/:id/bots/:bot_id/logs?after=` → logs of that bot
 - `PATCH /api/admin/users/:id` `{quota?: {memory_mb?, storage_mb?, bots?, plugins?}, service_until?: ms|null, extend_days?: n}` → AdminUser (pushes the new quota to the nodes of that user's bots, `extend_days` adds to `max(now, service_until)`)
-- `GET /api/admin/invites?status=unused|used|revoked|all&cursor=` → `{"items": [Invite], "cursor"}` (50 per page, newest first)
-  `Invite = {code, days, max_uses, used_count, note, created_by_email, created_at, expires_at, revoked_at, redemptions: [{user_id, user_email, days, redeemed_at}]}`
-- `POST /api/admin/invites` `{days: 1..3650, count: 1..100, max_uses?: 1..1000 (default 1), note?, expires_at?}` → `{"items": [Invite]}`
+- `GET /api/admin/invites?status=unused|used|revoked|all&cursor=` → `{"items": [Invite], "cursor", "default_quota"}` (50 per page, newest first)
+  `Invite = {code, days, max_uses, used_count, note, created_by_email, created_at, expires_at, revoked_at, quota, redemptions: [{user_id, user_email, days, redeemed_at}]}`
+- `POST /api/admin/invites` `{days: 1..3650, count: 1..100, max_uses?: 1..1000 (default 1), note?, expires_at?, quota?: {memory_mb, storage_mb, bots, plugins}}` → `{"items": [Invite]}`. Legacy invite codes with `quota: null` use the registration defaults.
 - `DELETE /api/admin/invites/:code` → `{"ok": true}` (sets revoked_at, already granted time stays)
 - The overview gains `"users": {"total", "new_7d", "active", "expiring_7d", "expired"}` and `"invites": {"unused", "used_7d"}`.
 - `AdminUser` includes `service_until` and `service_active` through `User`.
@@ -231,7 +233,7 @@ Plugin config schema (`_conf_schema.json`) supported field types for the UI form
 - `GET  /v1/bots/:bot_id/status` → `{"status", "status_detail", "platforms": [{"id","status","status_detail"}], "plugins": [{"id","status","status_detail","version"}]}`
 - `GET  /v1/bots/:bot_id/logs?after=` → same shape as console logs
 - `GET  /v1/usage?user_id=` → usage object of section 5 (node aggregates the bots belonging to that user_id)
-- `GET  /v1/usage/summary` → `{"memory_bytes", "storage_bytes", "users": [{"user_id", "memory_bytes", "storage_bytes"}], "history": [{"ts", "memory_bytes", "storage_bytes"}]}` (whole node, used by the admin overview)
+- `GET /v1/usage/summary` reports node memory, storage, per-user totals, history and `plugin_cpu`. The CPU sample contains `percent`, `sampled_at` and the highest-usage `plugins`, each with `user_id`, `bot_id`, `bot_name`, `plugin_id`, `label` and `cpu_percent`. The sample is `null` before the first sampling round.
 - `POST /v1/qr/qq` → `{"task_id","qr_url","interval_s","expires_at"}`
 - `GET  /v1/qr/qq/:task_id` → `{"status", "app_id"?, "secret"?}` (plaintext over the signed TLS tunnel, the Worker encrypts it before storing)
 - `POST /v1/qr/weixin` → same shape
@@ -261,7 +263,7 @@ Node to console callbacks (optional, best effort, HMAC signed): `POST https://fi
 - QQ QR bind: random 32 byte key (base64) → `POST https://q.qq.com/lite/create_bind_task {"key"}` → `task_id`, QR content `https://q.qq.com/qqbot/openclaw/connect.html?task_id=...`, poll `POST https://q.qq.com/lite/poll_bind_result` every 2s, status 1 pending, 2 completed, 3 expired. On completion decrypt `bot_encrypt_secret` (base64 of nonce12 || ciphertext || tag16, AES-256-GCM with the key) and return `bot_appid` + secret.
 - WeChat iLink: base `https://ilinkai.weixin.qq.com`, QR via `ilink/bot/get_bot_qrcode` and `ilink/bot/get_qrcode_status`, then long poll for updates and send messages. Private chat only, passive reply only, 24 hour window. Study the protocol and implement independently.
 - Usage: memory of plugin processes measured as PSS from `/proc/<pid>/smaps_rollup` (Linux), fallback RSS on macOS. Core memory per bot is an estimate maintained by counters (buffers, caches, session state). Storage measured by walking `data/tenants/<user_id>/<bot_id>/plugins/<plugin>/` (code + venv + data) every 5 min, conversations by SQLite row bytes. Samples kept 24h in SQLite.
-- Quota enforcement: when a bot's user total memory exceeds quota for 3 consecutive samples, the largest plugin process is stopped with status `over_quota`. Storage over quota blocks new installs and plugin writes are best effort. On Linux use cgroup v2 `memory.max` per tenant when the cgroup is writable.
+- On Linux with writable cgroup v2, the node applies the tenant's `memory.max` before the plugin loads. The periodic memory check stops the largest plugin with status `over_quota` when a tenant exceeds quota for three consecutive five-minute samples. A tenant over its storage quota cannot install new plugins. Storage accounting for plugin writes is best effort.
 - Isolation: plugin processes run as an unprivileged uid, inside `bwrap` when available (read only root, write access only to the plugin's data dir, network allowed). Shortcut: no bwrap on macOS dev, upgrade to bwrap/nsjail on the Linux node.
 - Data layout: `data/node.db`, `data/conversations.db`, `data/tenants/<user_id>/<bot_id>/plugins/<plugin_name>/{src,venv,data}`.
 - Config via env: `FISH_NODE_ID`, `FISH_NODE_SECRET`, `FISH_CONSOLE_URL`, `FISH_LISTEN` (default `0.0.0.0:8700`), `FISH_DATA_DIR`, `FISH_SIDECAR_PYTHON`, `FISH_SIDECAR_DIR`.

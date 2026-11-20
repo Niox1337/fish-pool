@@ -630,9 +630,10 @@ impl Bot {
                 data_dir: inst.data.clone(),
                 config: spec.config.clone(),
             };
+            let tenant = shared.cgroups.as_ref().map(|cg| (cg, user.as_str()));
             let launched = tokio::select! {
                 _ = cancel.cancelled() => { shared.sidecar.kill(&proc_id).await; return }
-                r = launch(&shared.sidecar, ls, out_tx.clone()) => r,
+                r = launch(&shared.sidecar, ls, out_tx.clone(), tenant) => r,
             };
             let (proc, mut exit_rx) = match launched {
                 Ok(v) => v,
@@ -664,9 +665,6 @@ impl Bot {
                     continue;
                 }
             };
-            if let Some(cg) = &shared.cgroups {
-                cg.add_pid(&user, proc.pid);
-            }
             self.procs.write().unwrap().insert(spec.id.clone(), proc.clone());
             let version = Some(proc.hello.version.clone())
                 .filter(|v| !v.is_empty())

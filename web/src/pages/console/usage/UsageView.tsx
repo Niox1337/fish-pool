@@ -223,11 +223,11 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
           <FoodBar label="存储" capacity={storeQuota} servings={servings('storage_bytes')} />
           {bots && quota && (
             <dl className="grid grid-cols-2 gap-4 border-t border-paper-3 pt-4 sm:max-w-md">
-              <Stat label="小鱼" value={`${bots.length} / ${quota.bots}`} tone={bots.length > quota.bots ? 'bad' : undefined} />
+              <Stat label="小鱼" value={`${bots.length} / ${quota.bots ?? '不限'}`} tone={quota.bots != null && bots.length > quota.bots ? 'bad' : undefined} />
               <Stat
                 label="插件（所有小鱼合计）"
-                value={`${pluginCount} / ${quota.plugins}`}
-                tone={(pluginCount ?? 0) > quota.plugins ? 'bad' : undefined}
+                value={`${pluginCount} / ${quota.plugins ?? '不限'}`}
+                tone={quota.plugins != null && (pluginCount ?? 0) > quota.plugins ? 'bad' : undefined}
               />
             </dl>
           )}

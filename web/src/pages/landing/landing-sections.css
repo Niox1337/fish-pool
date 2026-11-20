@@ -361,13 +361,6 @@
   padding-top: 12px;
   text-align: center;
 }
-.ls-end-whale {
-  width: 144px;
-  height: 144px;
-  background-size: 400% 800%;
-  background-position: 0 0;
-  background-repeat: no-repeat;
-}
 .ls-end-title {
   margin: 0;
   font-family: var(--font-display);

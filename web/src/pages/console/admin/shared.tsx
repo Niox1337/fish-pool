@@ -1,7 +1,56 @@
-import type { LogLine, User } from '@/api/types'
-import { Pill } from '@/components/ui'
+import type { LogLine, Quota, User } from '@/api/types'
+import { Field, Input, Pill, useFieldId } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import { daysLeft, fmtDate, fmtTime } from '@/lib/format'
+
+export const quotaFields: { key: keyof Quota; label: string; unit: string; min: number; max: number }[] = [
+  { key: 'memory_mb', label: '内存', unit: 'MiB', min: 64, max: 65536 },
+  { key: 'storage_mb', label: '存储', unit: 'MiB', min: 64, max: 1048576 },
+  { key: 'bots', label: '小鱼', unit: '只', min: 0, max: 100 },
+  { key: 'plugins', label: '插件', unit: '个', min: 0, max: 500 },
+]
+
+export type QuotaForm = Record<keyof Quota, string | null>
+
+export function quotaToForm(quota: Quota) {
+  return Object.fromEntries(quotaFields.map(({ key }) => [key, quota[key] == null ? null : String(quota[key])])) as QuotaForm
+}
+
+export function quotaFromForm(form: QuotaForm) {
+  return Object.fromEntries(quotaFields.map(({ key }) => [key, form[key] == null ? null : Number(form[key])])) as Quota
+}
+
+export function quotaFieldError(raw: string | null, { min, max }: { min: number; max: number }) {
+  if (raw === null && min === 0) return undefined
+  const value = Number(raw)
+  return raw?.trim() && Number.isInteger(value) && value >= min && value <= max ? undefined : `填写 ${min} 到 ${max} 的整数`
+}
+
+export function QuotaInputs({ form, onChange }: { form: QuotaForm; onChange: (key: keyof Quota, value: string | null) => void }) {
+  const base = useFieldId('quota')
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {quotaFields.map((f) => {
+        const fieldId = `${base}-${f.key}`
+        const error = quotaFieldError(form[f.key], f)
+        return (
+          <Field key={f.key} label={`${f.label}（${f.unit}）`} htmlFor={fieldId} error={error}>
+            <Input id={fieldId} type="number" inputMode="numeric" min={f.min} max={f.max} disabled={form[f.key] === null}
+              value={form[f.key] ?? ''} placeholder={form[f.key] === null ? '不限' : undefined}
+              onChange={(e) => onChange(f.key, e.target.value)} aria-invalid={!!error} className="tabular-nums" />
+            {f.min === 0 && (
+              <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-ink-2">
+                <input type="checkbox" className="accent-cobalt" aria-label={`${f.label}数量不限`} checked={form[f.key] === null}
+                  onChange={(e) => onChange(f.key, e.target.checked ? null : '1')} />
+                不限
+              </label>
+            )}
+          </Field>
+        )
+      })}
+    </div>
+  )
+}
 
 export function ServiceStatus({ user, compact }: { user: Pick<User, 'role' | 'service_until' | 'service_active'>; compact?: boolean }) {
   if (user.role === 'admin') return <Pill tone="info">一直有效</Pill>

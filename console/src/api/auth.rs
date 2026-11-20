@@ -8,7 +8,7 @@ use crate::crypto::{self, sha256_hex};
 use crate::email;
 use crate::invite;
 use crate::error::{ApiError, ApiResult};
-use crate::models::UserRow;
+use crate::models::{AccountQuota, UserRow, UNLIMITED_COUNT};
 use crate::util::{log, new_id, normalize_email, now_ms, random_bytes, valid_email};
 use serde::Deserialize;
 use serde_json::json;
@@ -254,6 +254,9 @@ pub async fn register(req: &mut Request, app: &App) -> ApiResult<Reply> {
     let id = new_id();
     let role = if is_admin_email(app, &email) { "admin" } else { "user" };
     let now = now_ms();
+    let quota = AccountQuota::default();
+    let bots = quota.bots.unwrap_or(UNLIMITED_COUNT);
+    let plugins = quota.plugins.unwrap_or(UNLIMITED_COUNT);
     let taken = |e: ApiError| if e.code == "conflict" { ApiError::conflict("email_taken", "该邮箱已注册，请直接登录") } else { e };
     match invite_code {
         Some(code) => {
@@ -264,9 +267,14 @@ pub async fn register(req: &mut Request, app: &App) -> ApiResult<Reply> {
                 .batch(vec![
                     invite::claim_stmt(app, &code, &id, now)?,
                     app.db.stmt(
-                        "INSERT INTO users (id, email, password_hash, role, created_at, last_login_at, service_until) \
-                         SELECT ?1, ?2, ?3, ?4, ?5, ?5, ?5 + days * ?7 FROM invite_codes WHERE code = ?6 AND changes() = 1",
-                        args![id, email, hash, role, now, code, invite::DAY_MS],
+                        "INSERT INTO users (id, email, password_hash, role, created_at, last_login_at, service_until, \
+                         quota_memory_mb, quota_storage_mb, quota_bots, quota_plugins) \
+                         SELECT ?1, ?2, ?3, ?4, ?5, ?5, ?5 + days * ?7, \
+                         COALESCE(json_extract(quota_json, '$.memory_mb'), ?8), COALESCE(json_extract(quota_json, '$.storage_mb'), ?9), \
+                         CASE WHEN quota_json IS NULL THEN ?10 ELSE COALESCE(json_extract(quota_json, '$.bots'), ?12) END, \
+                         CASE WHEN quota_json IS NULL THEN ?11 ELSE COALESCE(json_extract(quota_json, '$.plugins'), ?12) END \
+                         FROM invite_codes WHERE code = ?6 AND changes() = 1",
+                        args![id, email, hash, role, now, code, invite::DAY_MS, quota.memory_mb, quota.storage_mb, bots, plugins, UNLIMITED_COUNT],
                     )?,
                     invite::record_stmt(app, &code, &id, now)?,
                 ])
@@ -279,8 +287,9 @@ pub async fn register(req: &mut Request, app: &App) -> ApiResult<Reply> {
         None => {
             app.db
                 .run(
-                    "INSERT INTO users (id, email, password_hash, role, created_at, last_login_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-                    args![id, email, hash, role, now],
+                    "INSERT INTO users (id, email, password_hash, role, created_at, last_login_at, quota_memory_mb, quota_storage_mb, quota_bots, quota_plugins) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9)",
+                    args![id, email, hash, role, now, quota.memory_mb, quota.storage_mb, bots, plugins],
                 )
                 .await
                 .map_err(taken)?;

@@ -12,8 +12,8 @@ import logoMark from '@/assets/plates/logo-mark.webp'
 type Mode = 'login' | 'register' | 'reset'
 
 const titles: Record<Mode, { h: string; sub: string }> = {
-  login: { h: '欢迎回来', sub: '小鱼们在教室里等你。' },
-  register: { h: '带小鱼入学', sub: '填上邀请码和邮箱，入学手续一次办好。' },
+  login: { h: '欢迎回来', sub: '登录后管理你托管的小鱼。' },
+  register: { h: '开通托管', sub: '使用邀请码和邮箱注册。' },
   reset: { h: '找回密码', sub: '往你的邮箱发一个验证码，然后设置新密码。' },
 }
 
@@ -180,7 +180,7 @@ export default function AuthPage({ mode }: { mode: Mode }) {
         navigate(next || '/app', { replace: true })
       } else if (mode === 'register') {
         if (!agree) {
-          setError({ field: 'agree', msg: '需要先同意入学须知' })
+          setError({ field: 'agree', msg: '需要先同意托管须知' })
           return
         }
         const r = await api.register({ email, password, code, invite_code: invite, agree: true })
@@ -221,7 +221,7 @@ export default function AuthPage({ mode }: { mode: Mode }) {
         </Link>
         <div className="m-auto w-full max-w-[400px] py-8">
           <div className="mb-7 flex items-end gap-3">
-            <Pupil mood={mode === 'register' ? 'wave' : mode === 'reset' ? 'surprised' : 'idle'} size={76} />
+            <Pupil mood={mode === 'register' ? 'happy' : mode === 'reset' ? 'surprised' : 'idle'} size={76} />
             <div>
               <h1 className="font-display text-[28px] font-black leading-tight text-ink">{t.h}</h1>
               <p className="mt-1 text-[15px] text-ink-2">{t.sub}</p>
@@ -234,7 +234,7 @@ export default function AuthPage({ mode }: { mode: Mode }) {
                 label="邀请码"
                 htmlFor="invite"
                 error={errFor('invite')}
-                hint="托管班目前按邀请入学，每个邀请码带着一段服务时长。"
+                hint="邀请码包含一段托管服务时长。"
               >
                 <Input
                   id="invite"
@@ -340,7 +340,7 @@ export default function AuthPage({ mode }: { mode: Mode }) {
                   className="mt-1 size-4 shrink-0 accent-cobalt"
                 />
                 <span>
-                  我已阅读<Link to="/about#rules" className="mx-0.5 text-sky underline underline-offset-2">入学须知</Link>，
+                  我已阅读<Link to="/about#rules" className="mx-0.5 text-sky underline underline-offset-2">托管须知</Link>，
                   自己的模型 Key 由我自己负责。
                 </span>
               </label>
@@ -354,14 +354,14 @@ export default function AuthPage({ mode }: { mode: Mode }) {
             )}
 
             <Button type="submit" variant="primary" size="lg" loading={busy} className="mt-1 w-full font-display font-black">
-              {mode === 'login' ? '登录' : mode === 'register' ? '入学' : '设置新密码'}
+              {mode === 'login' ? '登录' : mode === 'register' ? '注册' : '设置新密码'}
             </Button>
           </form>
 
           <p className="mt-6 text-center text-sm text-ink-2">
             {mode === 'login' ? (
               <>
-                还没有账号？<Link to="/register" className="font-semibold text-sky">用邀请码入学</Link>
+                还没有账号？<Link to="/register" className="font-semibold text-sky">用邀请码注册</Link>
               </>
             ) : (
               <>

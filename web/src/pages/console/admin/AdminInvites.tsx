@@ -5,11 +5,12 @@ import { Copy, CopyCheck, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/api/client'
 import { keys, useAdminInvites } from '@/api/hooks'
-import type { Invite } from '@/api/types'
+import type { Invite, Quota } from '@/api/types'
 import { Button, ConfirmDialog, ErrorNote, Field, Input, PageHeader, Pill, Skeleton, useFieldId } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import { fmtDate, fmtDateTime } from '@/lib/format'
 import { copyText } from './copy'
+import { QuotaInputs, quotaFieldError, quotaFields, quotaFromForm, quotaToForm, type QuotaForm } from './shared'
 
 type Filter = 'unused' | 'used' | 'revoked' | 'all'
 const filters: { key: Filter; label: string }[] = [
@@ -31,16 +32,19 @@ function todayInput() {
 
 type Errors = Partial<Record<'days' | 'count' | 'max_uses', string>>
 
-function CreateForm({ onCreated }: { onCreated: (items: Invite[]) => void }) {
+function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreated: (items: Invite[]) => void }) {
   const qc = useQueryClient()
   const [days, setDays] = useState('30')
   const [count, setCount] = useState('1')
   const [maxUses, setMaxUses] = useState('1')
   const [note, setNote] = useState('')
   const [expires, setExpires] = useState('')
+  const [quotaEdits, setQuotaEdits] = useState<Partial<QuotaForm>>({})
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState<Errors>({})
   const ids = { days: useFieldId('inv-days'), count: useFieldId('inv-count'), uses: useFieldId('inv-uses'), note: useFieldId('inv-note'), exp: useFieldId('inv-exp') }
+  const quotaForm = defaultQuota ? { ...quotaToForm(defaultQuota), ...quotaEdits } : undefined
+  const quotaValid = quotaForm && quotaFields.every((field) => !quotaFieldError(quotaForm[field.key], field))
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -52,10 +56,10 @@ function CreateForm({ onCreated }: { onCreated: (items: Invite[]) => void }) {
     if (!Number.isInteger(c) || c < 1 || c > 50) next.count = '一次生成 1 到 50 个'
     if (!Number.isInteger(u) || u < 1 || u > 1000) next.max_uses = '每个码可用 1 到 1000 次'
     setErrors(next)
-    if (Object.keys(next).length) return
+    if (Object.keys(next).length || !quotaForm || !quotaValid) return
     setBusy(true)
     try {
-      const r = await api.adminCreateInvites({ days: d, count: c, max_uses: u, note: note.trim() || undefined, expires_at: expires ? endOfDay(expires) : null })
+      const r = await api.adminCreateInvites({ days: d, count: c, max_uses: u, quota: quotaFromForm(quotaForm), note: note.trim() || undefined, expires_at: expires ? endOfDay(expires) : null })
       qc.invalidateQueries({ queryKey: [...keys.admin, 'invites'] })
       qc.invalidateQueries({ queryKey: [...keys.admin, 'overview'] })
       onCreated(r.items)
@@ -110,6 +114,13 @@ function CreateForm({ onCreated }: { onCreated: (items: Invite[]) => void }) {
           <Input id={ids.uses} type="number" inputMode="numeric" min={1} max={1000} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} aria-invalid={!!errors.max_uses} className="tabular-nums" />
         </Field>
       </div>
+      <fieldset className="grid min-w-0 gap-3 border-t border-paper-3 pt-3">
+        <legend className="pr-2 font-semibold text-ink">新账号配额</legend>
+        <p className="text-sm text-ink-3">注册时按这里的额度分配资源。已有账号兑换只延长托管时间。</p>
+        {quotaForm ? (
+          <QuotaInputs form={quotaForm} onChange={(key, value) => setQuotaEdits((prev) => ({ ...prev, [key]: value }))} />
+        ) : <Skeleton className="h-40" />}
+      </fieldset>
       <Field label="备注" htmlFor={ids.note} hint="只有管理员看得到，比如发给谁、哪个群。">
         <Input id={ids.note} value={note} onChange={(e) => setNote(e.target.value)} maxLength={80} placeholder="群友试用" />
       </Field>
@@ -124,13 +135,17 @@ function CreateForm({ onCreated }: { onCreated: (items: Invite[]) => void }) {
         </div>
       </Field>
       <div>
-        <Button type="submit" variant="primary" loading={busy}>
+        <Button type="submit" variant="primary" loading={busy} disabled={!quotaValid}>
           <Plus aria-hidden />
           生成
         </Button>
       </div>
     </form>
   )
+}
+
+function inviteQuotaLabel(quota: Quota | null) {
+  return quota ? `内存 ${quota.memory_mb} MiB · 存储 ${quota.storage_mb} MiB · 小鱼 ${quota.bots ?? '不限'} · 插件 ${quota.plugins ?? '不限'}` : '注册时使用默认配额'
 }
 
 function Created({ items, onClose }: { items: Invite[]; onClose: () => void }) {
@@ -156,6 +171,7 @@ function Created({ items, onClose }: { items: Invite[]; onClose: () => void }) {
       <p className="mt-1 text-[13px] text-ink-3 tabular-nums">
         每个 {items[0]?.days} 天，可用 {items[0]?.max_uses} 次{items[0]?.expires_at ? `，${fmtDate(items[0].expires_at)} 前兑换` : ''}
       </p>
+      {items[0] && <p className="mt-1 text-[13px] text-ink-3 tabular-nums">{inviteQuotaLabel(items[0].quota)}</p>}
       <ul className="mt-3 grid gap-2 sm:grid-cols-2">
         {items.map((i) => (
           <li key={i.code} className="flex items-center gap-2 rounded-xl border border-paper-3 bg-white py-1.5 pr-1.5 pl-3">
@@ -221,6 +237,7 @@ function InviteRow({ inv }: { inv: Invite }) {
         </span>
       </div>
       {inv.note && <p className="mt-1 text-sm text-ink">{inv.note}</p>}
+      <p className="mt-1 text-[13px] text-ink-2 tabular-nums">{inviteQuotaLabel(inv.quota)}</p>
       <p className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[13px] text-ink-3 tabular-nums">
         <span>{inv.created_by_email} 于 {fmtDate(inv.created_at)} 生成</span>
         <span>{inv.expires_at ? `${fmtDate(inv.expires_at)} 前可兑换` : '不限兑换日期'}</span>
@@ -265,10 +282,10 @@ export default function AdminInvites() {
 
   return (
     <>
-      <PageHeader title="邀请码" description="现在只能凭邀请码入学。每个码带一段服务天数，注册时或在账号页兑换都会加到对方的服务期限上。" />
+      <PageHeader title="邀请码" description="邀请码可用于开通托管或续期。生成时可以指定新账号的资源额度。" />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
         <div className="grid gap-6">
-          <CreateForm onCreated={setCreated} />
+          <CreateForm defaultQuota={list.data?.default_quota} onCreated={setCreated} />
           {created && <Created items={created} onClose={() => setCreated(null)} />}
         </div>
 
@@ -306,7 +323,7 @@ export default function AdminInvites() {
           ) : items.length === 0 ? (
             <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">
               {filter === 'unused'
-                ? '没有能兑换的邀请码了。用左边的表单生成一批，复制发给想入学的人。'
+                ? '没有能兑换的邀请码了。生成后可以复制给要使用托管服务的人。'
                 : filter === 'used'
                   ? '还没有用完的邀请码。'
                   : filter === 'revoked'

@@ -43,6 +43,7 @@ wrangler d1 create fish
 
 - `0001_init.sql` 创建基础表。
 - `0002_admin_subscription.sql` 增加管理员、服务期限和邀请码相关字段及表。
+- `0003_invite_quota.sql` 增加邀请码的注册配额字段。发布使用该字段的 Worker 前先应用迁移。
 
 仍在 `console/` 执行远程迁移，并核对列表：
 
@@ -96,7 +97,9 @@ wrangler secret put GITHUB_TOKEN
 
 ## 开通验证码邮件
 
-默认配置是：
+生产环境目前通过 Resend 从 `noreply@gengwiki.niox.lol` 发信。本机项目根目录的 `.env` 用 `RESEND` 保存密钥，Worker 则读取 `RESEND_API_KEY` Secret。
+
+如要改用 Cloudflare，配置示例如下：
 
 ```toml
 [[send_email]]

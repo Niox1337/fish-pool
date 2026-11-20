@@ -106,7 +106,7 @@ export default function Landing() {
             />
           </label>
           <button type="submit" className="lp-cta">
-            带小鱼入学
+            开始托管
           </button>
         </form>
         <p className="lp-loginlink">
@@ -122,7 +122,7 @@ export default function Landing() {
         <div className="lp-paper lp-paper-steps" aria-hidden />
         <img className="lp-plate lp-steps-cloud" src={stepsCloud} data-plate="assets/plates/steps-cloud.png" alt="" />
         <h2 id="how" className="lp-steps-title">
-          三步入学
+          三步开始托管
         </h2>
         <span className="lp-divider" aria-hidden />
         <ol className="contents">

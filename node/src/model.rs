@@ -41,8 +41,8 @@ pub struct Quota {
 impl Default for Quota {
     fn default() -> Self {
         Quota {
-            memory_mb: 256,
-            storage_mb: 1024,
+            memory_mb: 128,
+            storage_mb: 128,
         }
     }
 }
@@ -297,7 +297,7 @@ mod tests {
         assert!(d.running);
         assert_eq!(d.settings.behavior.wake_prefixes, vec!["/"]);
         assert_eq!(d.settings.llm.context_turns, 12);
-        assert_eq!(d.quota.memory_mb, 256);
+        assert_eq!(d.quota.memory_mb, 128);
     }
 
     #[test]

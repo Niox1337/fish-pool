@@ -5,6 +5,24 @@ use crate::util::mask_secret;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountQuota {
+    pub memory_mb: i64,
+    pub storage_mb: i64,
+    pub bots: Option<i64>,
+    pub plugins: Option<i64>,
+}
+
+// The existing integer columns use -1 for an unlimited count. Zero is a real limit.
+pub const UNLIMITED_COUNT: i64 = -1;
+
+impl Default for AccountQuota {
+    fn default() -> Self {
+        Self { memory_mb: 128, storage_mb: 128, bots: None, plugins: None }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserRow {
     pub id: String,
@@ -42,11 +60,11 @@ impl UserRow {
             "email": self.email,
             "role": self.role,
             "created_at": self.created_at,
-            "quota": {
-                "memory_mb": self.quota_memory_mb,
-                "storage_mb": self.quota_storage_mb,
-                "bots": self.quota_bots,
-                "plugins": self.quota_plugins,
+            "quota": AccountQuota {
+                memory_mb: self.quota_memory_mb,
+                storage_mb: self.quota_storage_mb,
+                bots: (self.quota_bots != UNLIMITED_COUNT).then_some(self.quota_bots),
+                plugins: (self.quota_plugins != UNLIMITED_COUNT).then_some(self.quota_plugins),
             },
             "service_until": self.service_until,
             "service_active": self.service_active_at(now),

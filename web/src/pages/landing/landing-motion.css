@@ -30,17 +30,6 @@
     rotate: 2deg;
   }
 }
-@keyframes ls-wave-x {
-  to {
-    background-position-x: -576px;
-  }
-}
-@keyframes ls-wave-y {
-  to {
-    background-position-y: -1152px;
-  }
-}
-
 @media (prefers-reduced-motion: no-preference) {
   .lp-book,
   .lp-next,
@@ -103,12 +92,6 @@
   .lp[data-motion] .ls-book[data-reveal]:not([data-in]) > .ls-page:last-child {
     opacity: 0;
     transform: perspective(1400px) rotateY(-88deg);
-  }
-
-  .ls-end-whale {
-    animation:
-      ls-wave-x 0.4s steps(4) infinite,
-      ls-wave-y 3.2s steps(8) infinite;
   }
 
   .ls-faq-item {

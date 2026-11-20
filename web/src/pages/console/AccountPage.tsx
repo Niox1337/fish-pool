@@ -202,8 +202,8 @@ export default function AccountPage() {
             <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-4">
               <Stat label="内存" value={fmtMb(me.quota.memory_mb)} />
               <Stat label="存储" value={fmtMb(me.quota.storage_mb)} />
-              <Stat label="小鱼" value={`${me.quota.bots} 条`} sub={botCount != null ? `已收 ${botCount} 条` : undefined} />
-              <Stat label="插件" value={`${me.quota.plugins} 个`} sub={pluginCount != null ? `已装 ${pluginCount} 个` : undefined} />
+              <Stat label="小鱼" value={me.quota.bots == null ? '不限' : `${me.quota.bots} 只`} sub={botCount != null ? `已托管 ${botCount} 只` : undefined} />
+              <Stat label="插件" value={me.quota.plugins == null ? '不限' : `${me.quota.plugins} 个`} sub={pluginCount != null ? `已装 ${pluginCount} 个` : undefined} />
             </dl>
             <p className="mt-4 text-[13px] leading-relaxed text-ink-3">额度由管理员设定，需要更多可以联系发邀请码给你的人。</p>
           </section>

@@ -236,7 +236,7 @@ async fn plugin_round_trip_through_sidecar_protocol() {
     let sidecar = Sidecar::new(cmd, dir.path().join("run"));
     let (out_tx, mut out_rx) = mpsc::channel(16);
 
-    let (proc, mut exit_rx) = launch(&sidecar, spec(dir.path(), "proc-a"), out_tx.clone())
+    let (proc, mut exit_rx) = launch(&sidecar, spec(dir.path(), "proc-a"), out_tx.clone(), None)
         .await
         .expect("launch");
     assert_eq!(proc.hello.name, "stub");
@@ -304,7 +304,7 @@ async fn plugin_round_trip_through_sidecar_protocol() {
 
     // a crashing plugin reports its exit code and closes the socket
     let out_tx_fail = out_tx.clone();
-    let (proc_b, exit_b) = launch(&sidecar, spec(dir.path(), "proc-b"), out_tx)
+    let (proc_b, exit_b) = launch(&sidecar, spec(dir.path(), "proc-b"), out_tx, None)
         .await
         .expect("launch b");
     let _ = next_out(&mut out_rx).await;
@@ -325,7 +325,7 @@ async fn plugin_round_trip_through_sidecar_protocol() {
     ] {
         let mut s = spec(dir.path(), &format!("proc-{fail}"));
         s.config = json!({"fail": fail});
-        let err = match launch(&sidecar, s, out_tx_fail.clone()).await {
+        let err = match launch(&sidecar, s, out_tx_fail.clone(), None).await {
             Ok(_) => panic!("{fail} must fail"),
             Err(e) => e,
         };

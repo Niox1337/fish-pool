@@ -12,7 +12,9 @@ import sys
 import time
 from pathlib import Path
 
-from conftest import TIMEOUT, Control, FakeNode, ForkServerProcess, chain_text
+import pytest
+
+from conftest import TIMEOUT, Control, FakeNode, ForkServerProcess, Lines, chain_text
 
 
 def kinds(proc) -> dict[str, str]:
@@ -168,6 +170,28 @@ def test_relative_import(fork_server, run):
             p = await node.spawn("relimport_plugin")
             r = await p.event("rel")
             assert chain_text(r["sends"][0]) == "from-lib"
+
+    run(scenario())
+
+
+def test_plugin_waits_for_memory_limit_before_loading(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            proc_id, reply, conn = await node.spawn_raw("broken_plugin", wait_for_memory_limit=True)
+            assert reply["op"] == "spawned"
+            reader, writer = await asyncio.wait_for(conn, TIMEOUT)
+            try:
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(reader.readline(), 0.2)
+                writer.write(b"\x01")
+                await writer.drain()
+                message = await Lines(reader).next(lambda m: m.get("level") == "error")
+                assert "plugin load failed" in message["message"]
+                exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == proc_id)
+                assert exited["code"] == 2
+            finally:
+                writer.close()
+                await writer.wait_closed()
 
     run(scenario())
 

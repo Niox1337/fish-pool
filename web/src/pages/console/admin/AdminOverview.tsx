@@ -53,7 +53,7 @@ function Counts({ o }: { o: Overview }) {
       <Block title="小鱼">
         <dl className="grid grid-cols-3 gap-x-3 gap-y-3">
           <Stat label="总数" value={n(o.bots.total)} />
-          <Stat label="在上课" value={n(o.bots.running)} />
+          <Stat label="运行中" value={n(o.bots.running)} />
           <Stat label="正在入座" value={n(o.bots.starting)} />
           <Stat label="在睡觉" value={n(o.bots.stopped)} />
           <Stat label="不舒服" value={n(o.bots.error)} tone={o.bots.error ? 'bad' : undefined} />
@@ -88,6 +88,43 @@ function Counts({ o }: { o: Overview }) {
 
 const kindLabel: Record<AdminProblem['kind'], string> = { bot: '小鱼', platform: '平台', plugin: '插件' }
 const statusLabel: Record<string, string> = { error: '出错', over_quota: '超出配额' }
+
+function PluginCpu({ cpu, nodeCount }: { cpu: Overview['plugin_cpu']; nodeCount: number }) {
+  return (
+    <section aria-labelledby="ov-plugin-cpu">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 id="ov-plugin-cpu" className="font-display text-lg font-black text-ink">插件 CPU 用量</h2>
+        {cpu?.percent != null && (
+          <p className="text-sm text-ink-2">已上报节点合计 <strong className="tabular-nums text-ink">{cpu.percent.toFixed(1)}%</strong></p>
+        )}
+      </div>
+      <p className="mt-1 text-sm text-ink-3">
+        {cpu?.reporting_nodes ?? 0}/{nodeCount} 个节点已上报。每 5 分钟采样，100% 相当于占用一个逻辑核心。
+      </p>
+      {!cpu?.reporting_nodes ? (
+        <p className="mt-3 rounded-2xl border border-dashed border-paper-3 p-4 text-sm text-ink-2">还没有插件 CPU 样本。请确认节点在线且已更新。</p>
+      ) : cpu.items.length === 0 ? (
+        <p className="mt-3 rounded-2xl border border-dashed border-paper-3 p-4 text-sm text-ink-2">已上报节点在本轮没有测到插件 CPU 用量。</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream">
+          {cpu.items.map((item) => (
+            <li key={`${item.node_id}-${item.bot_id}-${item.plugin_id}`} className="flex items-start gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="break-words font-semibold text-ink">{item.label}</p>
+                <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-ink-3">
+                  <Link to={`/app/admin/users/${item.user_id}/usage`} className="break-all text-sky underline underline-offset-2">{item.bot_name}的用量</Link>
+                  <span>{item.node_id}</span>
+                  <span>{fmtAgo(item.sampled_at)}采样</span>
+                </p>
+              </div>
+              <span className="shrink-0 font-semibold tabular-nums text-ink">{item.cpu_percent.toFixed(1)}%</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
 
 function Problems({ items }: { items: AdminProblem[] }) {
   const sorted = [...items].sort((a, b) => b.updated_at - a.updated_at)
@@ -243,6 +280,7 @@ export default function AdminOverview() {
       ) : q.data ? (
         <div className="grid gap-8">
           <Counts o={q.data} />
+          <PluginCpu cpu={q.data.plugin_cpu} nodeCount={q.data.nodes.length} />
           <Problems items={q.data.problems} />
           <Nodes nodes={q.data.nodes} />
         </div>

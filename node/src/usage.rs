@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::bot::Bot;
+use crate::model::Quota;
 use crate::node::Node;
 use crate::plugin::install::dir_size;
 use crate::sign::now_ms;
@@ -13,6 +14,7 @@ use crate::sign::now_ms;
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(300);
 pub const OVER_QUOTA_SAMPLES: u32 = 3;
 const MIB: u64 = 1024 * 1024;
+const CPU_PLUGIN_ROWS: usize = 20;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Source {
@@ -23,6 +25,23 @@ pub struct Source {
     pub memory_bytes: u64,
     pub storage_bytes: u64,
     pub cpu_percent: f64,
+}
+
+#[derive(Serialize)]
+struct PluginCpu {
+    user_id: String,
+    bot_id: String,
+    bot_name: String,
+    plugin_id: String,
+    label: String,
+    cpu_percent: f64,
+}
+
+#[derive(Serialize)]
+struct PluginCpuSample {
+    percent: f64,
+    sampled_at: i64,
+    plugins: Vec<PluginCpu>,
 }
 
 /// Sum of all `Pss:` lines of `/proc/<pid>/smaps_rollup`, in bytes.
@@ -58,6 +77,7 @@ pub fn parse_stat_ticks(text: &str) -> Option<u64> {
 #[derive(Default)]
 pub struct Usage {
     snapshot: Mutex<HashMap<String, Vec<Source>>>,
+    plugin_cpu: Mutex<Option<PluginCpuSample>>,
     cpu_prev: Mutex<HashMap<u32, (u64, Instant)>>,
     over_count: Mutex<HashMap<String, u32>>,
 }
@@ -170,13 +190,15 @@ impl Usage {
         let ts = now_ms();
         let bots = node.all();
         let mut rows = vec![];
+        let mut snapshot = HashMap::new();
+        let mut cpu = PluginCpuSample { percent: 0.0, sampled_at: ts, plugins: Vec::new() };
         let mut per_user: HashMap<String, (u64, u64, u64)> = HashMap::new();
         let mut largest: HashMap<String, (u64, Arc<Bot>, String)> = HashMap::new();
         for bot in &bots {
             let sources = self.collect_bot(bot).await;
-            let (user, quota) = {
+            let (user, bot_name, quota) = {
                 let d = bot.desired.read().unwrap();
-                (d.user_id.clone(), d.quota.memory_mb)
+                (d.user_id.clone(), d.name.clone(), d.quota.memory_mb)
             };
             let mem: u64 = sources.iter().map(|s| s.memory_bytes).sum();
             let sto: u64 = sources.iter().map(|s| s.storage_bytes).sum();
@@ -185,6 +207,19 @@ impl Usage {
             e.0 += mem;
             e.1 += sto;
             e.2 = e.2.max(quota);
+            for s in sources.iter().filter(|s| s.cpu_percent > 0.0) {
+                if let Some(plugin_id) = &s.plugin_id {
+                    cpu.percent += s.cpu_percent;
+                    cpu.plugins.push(PluginCpu {
+                        user_id: user.clone(),
+                        bot_id: bot.id.clone(),
+                        bot_name: bot_name.clone(),
+                        plugin_id: plugin_id.clone(),
+                        label: s.label.clone(),
+                        cpu_percent: s.cpu_percent,
+                    });
+                }
+            }
             for s in sources.iter().filter(|s| s.kind == "plugin" && s.memory_bytes > 0) {
                 if largest.get(&user).is_none_or(|(m, _, _)| s.memory_bytes > *m) {
                     largest.insert(
@@ -193,12 +228,12 @@ impl Usage {
                     );
                 }
             }
-            self.snapshot.lock().unwrap().insert(bot.id.clone(), sources);
+            snapshot.insert(bot.id.clone(), sources);
         }
-        {
-            let ids: Vec<&String> = bots.iter().map(|b| &b.id).collect();
-            self.snapshot.lock().unwrap().retain(|k, _| ids.contains(&k));
-        }
+        cpu.plugins.sort_unstable_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent).then_with(|| a.plugin_id.cmp(&b.plugin_id)));
+        cpu.plugins.truncate(CPU_PLUGIN_ROWS);
+        *self.snapshot.lock().unwrap() = snapshot;
+        *self.plugin_cpu.lock().unwrap() = Some(cpu);
         if let Err(e) = node.shared.db.add_samples(ts, &rows) {
             tracing::warn!("store usage samples: {e}");
         }
@@ -273,6 +308,7 @@ impl Usage {
             "storage_bytes": per_user.values().map(|v| v.1).sum::<u64>(),
             "users": users,
             "history": history,
+            "plugin_cpu": &*self.plugin_cpu.lock().unwrap(),
         })
     }
 
@@ -296,8 +332,9 @@ impl Usage {
             .into_iter()
             .map(|(ts, m, s)| json!({"ts": ts, "memory_bytes": m, "storage_bytes": s}))
             .collect();
+        let quota = if bots.is_empty() { Quota::default() } else { Quota { memory_mb: qmem, storage_mb: qsto } };
         json!({
-            "quota": {"memory_mb": if bots.is_empty() { 256 } else { qmem }, "storage_mb": if bots.is_empty() { 1024 } else { qsto }},
+            "quota": quota,
             "memory_bytes": sources.iter().map(|s| s.memory_bytes).sum::<u64>(),
             "storage_bytes": sources.iter().map(|s| s.storage_bytes).sum::<u64>(),
             "sources": sources,

@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-React + Vite + TypeScript SPA with Tailwind CSS v4, shadcn/ui (Radix), Motion and TanStack Query, Recharts for usage charts. The user rejected SvelteKit and asked for the framework with the strongest visual ecosystem. Built to static files and served by the Rust Cloudflare Worker `fish-console` on the same origin as `/api`. Backend: Rust Worker + D1 for the console, Rust node agent plus a Python plugin host on a 2 vCPU / 2 GB server for running bots.
+React + Vite + TypeScript SPA with Tailwind CSS v4, shadcn/ui (Radix), Motion and TanStack Query, Recharts for usage charts. The user rejected SvelteKit and asked for the framework with the strongest visual ecosystem. Built to static files and served by the Rust Cloudflare Worker `fish-console` on the same origin as `/api`. The console uses a Rust Worker and D1. A Rust node agent and Python plugin host run bots on a server with 4 GB of memory.
 
 ## Users
 
@@ -49,7 +49,7 @@ A small daycare for bots: the platform looks after hosting, restarts, isolation 
 
 - Name: 大肥鱼托管班. The bot instances are affectionately called 小鱼.
 - Theme illustration supplied by the user: a cozy chibi daycare where a pale blue haired teacher (the 梗Wiki mascot, speech bubble hair clip) reads a picture book to four small whale-girl pupils (大肥鱼) in a warm reading corner. The user requires the site to feel warm and cute.
-- The README records the source of the whale sprite assets, the changes made for Fish and the applicable licence. The about page links to this record.
+- The source code and README record the source of the whale sprite assets, the changes made for Fish and the applicable licence.
 - Interface language: Simplified Chinese.
 
 ## Evidence on Hand

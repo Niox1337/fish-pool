@@ -4,7 +4,7 @@ import { QqPenguin, WeChatBubble } from '@/components/icons'
 import { cn } from '@/lib/cn'
 
 const botStatus: Record<BotStatus, { label: string; tone: 'ok' | 'warn' | 'bad' | 'idle' }> = {
-  running: { label: '在上课', tone: 'ok' },
+  running: { label: '运行中', tone: 'ok' },
   starting: { label: '正在入座', tone: 'warn' },
   stopped: { label: '在睡觉', tone: 'idle' },
   error: { label: '不舒服', tone: 'bad' },

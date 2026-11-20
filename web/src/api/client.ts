@@ -11,6 +11,7 @@ import type {
   PluginInspect,
   QrStatus,
   QrTask,
+  Quota,
   Usage,
   User,
 } from './types'
@@ -122,8 +123,8 @@ export const api = {
   adminPatchUser: (id: string, b: { quota?: Partial<User['quota']>; service_until?: number | null; extend_days?: number }) =>
     patch<AdminUser>(`/admin/users/${id}`, b),
   adminInvites: (status: 'unused' | 'used' | 'revoked' | 'all') =>
-    get<{ items: Invite[]; cursor: string | null }>(`/admin/invites?status=${status}`),
-  adminCreateInvites: (b: { days: number; count: number; max_uses?: number; note?: string; expires_at?: number | null }) =>
+    get<{ items: Invite[]; cursor: string | null; default_quota: Quota }>(`/admin/invites?status=${status}`),
+  adminCreateInvites: (b: { days: number; count: number; quota: Quota; max_uses?: number; note?: string; expires_at?: number | null }) =>
     post<{ items: Invite[] }>('/admin/invites', b),
   adminRevokeInvite: (code: string) => del<{ ok: true }>(`/admin/invites/${encodeURIComponent(code)}`),
 }

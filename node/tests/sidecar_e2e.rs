@@ -108,7 +108,7 @@ async fn real_sidecar_commands_wake_prefix_and_load_failure() {
     let sidecar = Sidecar::new(command(&python), dir.path().join("run"));
     let (out_tx, mut out_rx) = mpsc::channel(64);
 
-    let (proc, _exit) = launch(&sidecar, spec(dir.path(), "p1", "cmd_plugin"), out_tx.clone())
+    let (proc, _exit) = launch(&sidecar, spec(dir.path(), "p1", "cmd_plugin"), out_tx.clone(), None)
         .await
         .expect("launch cmd_plugin");
     assert_eq!(proc.hello.name, "cmd_plugin");
@@ -143,7 +143,7 @@ async fn real_sidecar_commands_wake_prefix_and_load_failure() {
     proc.shutdown();
 
     // an import error exits with code 2 and surfaces as a LoadError holding the error log line
-    let err = match launch(&sidecar, spec(dir.path(), "p2", "broken_plugin"), out_tx).await {
+    let err = match launch(&sidecar, spec(dir.path(), "p2", "broken_plugin"), out_tx, None).await {
         Ok(_) => panic!("broken_plugin must not load"),
         Err(e) => e,
     };

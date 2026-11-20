@@ -121,25 +121,8 @@
     scale: 0.96;
   }
 }
-@keyframes pupil-x {
-  to {
-    background-position-x: calc(var(--pupil-size) * -4);
-  }
-}
-@keyframes pupil-y {
-  to {
-    background-position-y: calc(var(--pupil-size) * -8);
-  }
-}
 .pupil-sheet {
   background-size: 400% 800%;
   background-repeat: no-repeat;
   background-position: 0 0;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .pupil-sheet[data-play] {
-    animation:
-      pupil-x var(--pupil-row) steps(4) infinite,
-      pupil-y var(--pupil-loop) steps(8) infinite;
-  }
 }

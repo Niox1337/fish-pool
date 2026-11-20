@@ -78,7 +78,7 @@ pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
     let body: CreateReq = json_body(req).await?;
     let name = check_bot_name(&body.name)?;
     let count = app.db.count("SELECT COUNT(*) AS n FROM bots WHERE user_id = ?1", args![user.id]).await?;
-    if count >= user.quota_bots {
+    if user.quota_bots >= 0 && count >= user.quota_bots {
         return Err(ApiError::quota(format!("最多可以创建 {} 只小鱼", user.quota_bots)));
     }
     let node_id = app.assign_node().await?;

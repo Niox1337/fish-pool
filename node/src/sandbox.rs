@@ -192,12 +192,12 @@ impl Cgroups {
         let _ = write(&dir.join("memory.swap.max"), "0");
     }
 
-    pub fn add_pid(&self, user_id: &str, pid: u32) {
+    pub fn add_pid(&self, user_id: &str, pid: u32) -> std::io::Result<()> {
         let dir = self.tenant(user_id);
-        let _ = std::fs::create_dir_all(&dir);
-        if let Err(e) = write(&dir.join("cgroup.procs"), &pid.to_string()) {
-            tracing::warn!("cgroup add pid {pid}: {e}");
+        if std::fs::read_to_string(dir.join("memory.max"))?.trim() == "max" {
+            return Err(std::io::Error::other("tenant memory.max is unlimited"));
         }
+        write(&dir.join("cgroup.procs"), &pid.to_string())
     }
 
     pub fn remove_tenant(&self, user_id: &str) {

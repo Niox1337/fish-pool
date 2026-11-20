@@ -22,7 +22,7 @@ function BotsCell({ u }: { u: AdminUser }) {
   if (u.bots === 0) return <span className="text-ink-3">没有小鱼</span>
   return (
     <span className="tabular-nums text-ink">
-      {u.bots} 条<span className="text-ink-3">，{u.running} 在上课</span>
+      {u.bots} 条<span className="text-ink-3">，{u.running} 运行中</span>
       {u.errors > 0 && <span className="font-semibold whitespace-nowrap text-bad">，{u.errors} 出错</span>}
     </span>
   )

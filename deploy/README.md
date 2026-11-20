@@ -1,6 +1,6 @@
 # 节点部署
 
-本目录用于在 2C2G 的 Linux 主机上运行大肥鱼托管班的节点 (`fish-node`)。节点容器内包含 Rust 节点程序、Python 插件宿主 (sidecar)、uv 和 bubblewrap。对外访问通过 Cloudflare Tunnel 完成，主机不需要开放任何入站端口。
+本目录用于在 Linux 主机上运行大肥鱼托管班的节点 (`fish-node`)。当前按 4 GB 主机规划。节点容器内包含 Rust 节点程序、Python 插件宿主 (sidecar)、uv 和 bubblewrap。对外访问通过 Cloudflare Tunnel 完成，主机不需要开放任何入站端口。
 
 ## 文件说明
 
@@ -36,7 +36,7 @@
    docker compose -f deploy/compose.yml up -d --build
    ```
 
-## 在 2C2G 主机上构建
+## 在内存较小的主机上构建
 
 release 构建开启了 LTO，2G 内存可能不够用。可以选择以下任一方式:
 
@@ -80,7 +80,7 @@ release 构建开启了 LTO，2G 内存可能不够用。可以选择以下任�
 
 节点以 root 运行，插件以 uid 10001 (`fishplug`) 运行。
 
-- 内存限制: 节点会在自己的 cgroup 下为每个租户创建 `t-<user>` 子组并写入 `memory.max`。这要求 cgroup 目录可写，所以 compose 中设置了 `cgroup: private` 和 `SYS_ADMIN` 能力，入口脚本会尝试重新挂载为可写。如果失败，节点会记录警告并只依靠 5 分钟一次的用量采样来执行配额。
+- 节点为每个租户创建 `t-<user>` cgroup 并写入 `memory.max`，在插件加载前将进程加入该组。Compose 设置了 `cgroup: private` 和 `SYS_ADMIN`，入口脚本会尝试将 cgroup 目录重新挂载为可写。节点无法启用 cgroup 时，每 5 分钟采样一次，连续 3 次超出配额后停止占用内存最大的插件。
 - 文件系统隔离: 节点启动时会探测 bubblewrap。可用时插件宿主运行在只读根文件系统中，只能写自己的租户目录和运行目录，看不到 `node.db` 等节点文件。不可用时会记录警告并直接运行插件宿主，此时插件没有沙箱。
 - seccomp 和 AppArmor 被设置为 unconfined，否则 bubblewrap 无法在容器内创建命名空间。
 

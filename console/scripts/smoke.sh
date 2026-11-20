@@ -289,7 +289,7 @@ req POST /api/auth/register "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"
 check "register without invite fails" 400 '.error.code == "invite_invalid"'
 T0=$(($(date +%s) * 1000))
 req POST /api/auth/register "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"code\":\"$REG_CODE\",\"invite_code\":\"$INVITE_TYPED\",\"agree\":true}"
-check "register succeeds and sets service_until" 200 ".user.email == \"$EMAIL\" and .user.role == \"user\" and .user.quota.bots == 1 and .user.quota.memory_mb == 256 and .user.service_active == true and (.user.service_until - $T0 - 30 * $DAY_MS | fabs) < 120000"
+check "register succeeds and sets service_until" 200 ".user.email == \"$EMAIL\" and .user.role == \"user\" and .user.quota.bots == null and .user.quota.plugins == null and .user.quota.memory_mb == 128 and .user.quota.storage_mb == 128 and .user.service_active == true and (.user.service_until - $T0 - 30 * $DAY_MS | fabs) < 120000"
 USER_ID=$(j .user.id)
 grab_cookie
 grep -i '^set-cookie: fish_session=' "$TMP/headers" | grep -q 'HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000' \
@@ -352,9 +352,12 @@ echo "bots"
 req POST /api/bots '{"name":"小鱼一号"}'
 check "bot created" 200 '.status == "starting" and .settings.llm.key_id != null and .platforms == [] and .plugins == []'
 BOT=$(j .id)
-node_check "node received DesiredBot with decrypted key" "/_debug/desired/$BOT" ".running == true and .llm.api_key == \"sk-good-abcdef1234\" and .llm.model == \"fake-chat\" and .quota.memory_mb == 256 and .name == \"小鱼一号\""
+node_check "node received DesiredBot with decrypted key" "/_debug/desired/$BOT" ".running == true and .llm.api_key == \"sk-good-abcdef1234\" and .llm.model == \"fake-chat\" and .quota.memory_mb == 128 and .name == \"小鱼一号\""
 req POST /api/bots '{"name":"小鱼二号"}'
-check "bot quota enforced" 403 '.error.code == "quota_exceeded"'
+check "default quota allows another bot" 200 '.name == "小鱼二号"'
+SECOND_BOT=$(j .id)
+req DELETE "/api/bots/$SECOND_BOT"
+check "extra bot deleted" 200 '.ok == true'
 req GET /api/bots
 check "bot list" 200 "(.items | length) == 1 and .items[0].id == \"$BOT\""
 req PATCH "/api/bots/$BOT" '{"settings":{"persona":{"system_prompt":"你是测试鱼"},"llm":{"temperature":1.1}}}'
@@ -455,7 +458,7 @@ check "plugin enabled" 200 '.enabled == true'
 
 echo "usage"
 req GET /api/usage
-check "usage aggregated" 200 '.quota.memory_mb == 256 and .memory_bytes > 0 and ([.sources[] | select(.kind == "plugin")] | length) == 1 and (.history | length) == 3'
+check "usage aggregated" 200 '.quota.memory_mb == 128 and .memory_bytes > 0 and ([.sources[] | select(.kind == "plugin")] | length) == 1 and (.history | length) == 3'
 
 echo "admin"
 USER_COOKIE="$COOKIE"
@@ -480,7 +483,8 @@ ADMIN_BODIES=""
 
 curl -s "$NODE/_debug/emit?bot_id=$BOT&kind=plugin_status&id=$PLUG&status=over_quota" > /dev/null
 req GET /api/admin/overview
-check "overview" 200 '.users.total >= 2 and .users.active >= 2 and .bots.total >= 1 and .plugins.total >= 1 and .platforms.qq_official >= 1 and .platforms.weixin_ilink >= 1 and .nodes[0].online == true and .nodes[0].version == "fake" and .nodes[0].last_seen > 0 and .usage.memory_bytes > 0 and .usage.quota_memory_mb >= 512 and (.invites | has("unused") and has("used_7d")) and .invites.used_7d >= 1'
+check "overview" 200 '.users.total >= 2 and .users.active >= 2 and .bots.total >= 1 and .plugins.total >= 1 and .platforms.qq_official >= 1 and .platforms.weixin_ilink >= 1 and .nodes[0].online == true and .nodes[0].version == "fake" and .nodes[0].last_seen > 0 and .usage.memory_bytes > 0 and .usage.quota_memory_mb >= 256 and (.invites | has("unused") and has("used_7d")) and .invites.used_7d >= 1'
+check "overview reports plugin CPU from node" 200 ".plugin_cpu.reporting_nodes == 1 and .plugin_cpu.percent == 1 and (.plugin_cpu.items | any(.plugin_id == \"$PLUG\" and .node_id == \"node-1\" and .cpu_percent == 1 and .sampled_at > 0))"
 check "overview lists problems" 200 "[.problems[] | select(.kind == \"plugin\" and .id == \"$PLUG\" and .status == \"over_quota\" and .user_email == \"$EMAIL\")] | length == 1"
 ADMIN_BODIES="$ADMIN_BODIES$BODY"
 req GET /api/admin/users
@@ -495,7 +499,7 @@ req GET "/api/admin/users/$USER_ID"
 check "admin reads user detail" 200 ".user.email == \"$EMAIL\" and (.bots | length) == 1 and .bots[0].id == \"$BOT\" and (.bots[0].platforms | length) == 2"
 ADMIN_BODIES="$ADMIN_BODIES$BODY"
 req GET "/api/admin/users/$USER_ID/usage"
-check "admin reads user usage" 200 '.memory_bytes > 0 and .quota.memory_mb == 256'
+check "admin reads user usage" 200 '.memory_bytes > 0 and .quota.memory_mb == 128'
 ADMIN_BODIES="$ADMIN_BODIES$BODY"
 req GET "/api/admin/users/$USER_ID/bots/$BOT/logs"
 check "admin reads user bot logs" 200 '(.items | length) == 3'
@@ -504,7 +508,7 @@ check "logs of a foreign bot id" 404 '.error.code == "not_found"'
 req PATCH "/api/admin/users/$USER_ID" '{"quota":{"memory_mb":1}}'
 check "quota out of range rejected" 400 '.error.code == "invalid_input"'
 req PATCH "/api/admin/users/$USER_ID" '{"quota":{"memory_mb":512,"plugins":10}}'
-check "quota patched" 200 '.quota.memory_mb == 512 and .quota.plugins == 10 and .quota.bots == 1 and .bots == 1'
+check "quota patched" 200 '.quota.memory_mb == 512 and .quota.plugins == 10 and .quota.bots == null and .bots == 1'
 ADMIN_BODIES="$ADMIN_BODIES$BODY"
 node_check "new quota pushed to node" "/_debug/desired/$BOT" '.quota.memory_mb == 512'
 no_secrets "admin responses carry no secrets" "$ADMIN_BODIES"
@@ -512,11 +516,14 @@ no_secrets "admin responses carry no secrets" "$ADMIN_BODIES"
 echo "invites"
 req POST /api/admin/invites '{"days":0}'
 check "invite days validated" 400 '.error.code == "invalid_input"'
-req POST /api/admin/invites '{"days":7,"count":3,"note":"smoke"}'
-check "admin creates invites" 200 "(.items | length) == 3 and (.items | all(.code | test(\"^FISH-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$\"))) and .items[0].created_by_email == \"$ADMIN_EMAIL\" and .items[0].days == 7 and .items[0].max_uses == 1 and .items[0].redemptions == []"
-INV_A=$(j '.items[0].code'); INV_B=$(j '.items[1].code'); INV_C=$(j '.items[2].code')
+req POST /api/admin/invites '{"days":7,"quota":{"memory_mb":1,"storage_mb":128,"bots":null,"plugins":null}}'
+check "invite quota validated" 400 '.error.code == "invalid_input"'
+req POST /api/admin/invites '{"days":7,"count":4,"note":"smoke","quota":{"memory_mb":192,"storage_mb":256,"bots":0,"plugins":2}}'
+check "admin creates invites" 200 "(.items | length) == 4 and (.items | all(.code | test(\"^FISH-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$\"))) and .items[0].created_by_email == \"$ADMIN_EMAIL\" and .items[0].days == 7 and .items[0].max_uses == 1 and .items[0].redemptions == []"
+INV_A=$(j '.items[0].code'); INV_B=$(j '.items[1].code'); INV_C=$(j '.items[2].code'); INV_D=$(j '.items[3].code')
 req GET "/api/admin/invites?status=unused"
 check "unused invites listed" 200 "[.items[].code] | index(\"$INV_A\") != null and index(\"$INV_B\") != null"
+check "invite list returns stored and default quotas" 200 '(.default_quota == {memory_mb:128,storage_mb:128,bots:null,plugins:null}) and (.items | any(.quota == {memory_mb:192,storage_mb:256,bots:0,plugins:2}))'
 req DELETE "/api/admin/invites/$INV_A"
 check "invite revoked" 200 '.ok == true'
 req GET "/api/admin/invites?status=revoked"
@@ -530,7 +537,7 @@ check "revoked invite gives invite_invalid" 400 '.error.code == "invite_invalid"
 req GET /api/me
 UNTIL0=$(j .user.service_until)
 req POST /api/me/redeem "{\"code\":\"$(printf '%s' "$INV_B" | tr 'A-Z' 'a-z')\"}"
-check "redeem extends service by 7 days" 200 ".user.service_until == ($UNTIL0 + 7 * $DAY_MS) and .user.service_active == true"
+check "redeem extends service by 7 days and preserves quotas" 200 ".user.service_until == ($UNTIL0 + 7 * $DAY_MS) and .user.service_active == true and .user.quota.memory_mb == 512 and .user.quota.plugins == 10 and .user.quota.bots == null"
 req POST /api/me/redeem "{\"code\":\"$INV_B\"}"
 check "redeemed invite gives invite_used" 400 '.error.code == "invite_used"'
 COOKIE="$ADMIN_COOKIE"
@@ -540,6 +547,17 @@ new_captcha
 COOKIE=""
 req POST /api/auth/email-code "{\"email\":\"$EMAIL2\",\"purpose\":\"register\",\"captcha_id\":\"$CAPTCHA_ID\",\"captcha_answer\":\"$CAPTCHA_ANSWER\",\"invite_code\":\"$INV_A\"}"
 check "registration with revoked invite gives invite_invalid" 400 '.error.code == "invite_invalid"'
+new_captcha
+req POST /api/auth/email-code "{\"email\":\"$EMAIL2\",\"purpose\":\"register\",\"captcha_id\":\"$CAPTCHA_ID\",\"captcha_answer\":\"$CAPTCHA_ANSWER\",\"invite_code\":\"$INV_D\"}"
+check "configured invite sends registration code" 200 '.ok == true'
+sleep 0.5
+CODE2=$(grep -a -E "\[dev\] email code for $EMAIL2: [0-9]{6}" "$TMP/wrangler.log" | tail -1 | sed -E 's/.*: ([0-9]{6}).*/\1/')
+req POST /api/auth/register "{\"email\":\"$EMAIL2\",\"password\":\"$PASSWORD\",\"code\":\"$CODE2\",\"invite_code\":\"$INV_D\",\"agree\":true}"
+check "configured invite sets the new account quotas" 200 '.user.quota == {memory_mb:192,storage_mb:256,bots:0,plugins:2}'
+grab_cookie
+req POST /api/bots '{"name":"没有名额"}'
+check "zero bot slots still prevents creation" 403 '.error.code == "quota_exceeded"'
+
 
 echo "subscription"
 COOKIE="$ADMIN_COOKIE"

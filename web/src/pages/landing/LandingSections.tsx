@@ -3,7 +3,7 @@ import { ArrowRight, Check, ExternalLink, Plus } from 'lucide-react'
 import whaleHappy from '@/assets/whale/happy.webp'
 import whalePortrait from '@/assets/whale/portrait.webp'
 import whaleSurprised from '@/assets/whale/surprised.webp'
-import whaleWave from '@/assets/whale/wave.webp'
+import { Pupil } from '@/components/Pupil'
 import './landing-sections.css'
 
 const PLUGIN_MARKET = 'https://cloud.astrbot.app/plugin'
@@ -31,7 +31,7 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: '怎么拿到邀请码？',
-    a: '托管班目前按邀请入学，邀请码由管理员发放。每个邀请码带着一段服务时长，注册时填上就会开始计算。',
+    a: '托管服务目前需要管理员发放的邀请码。注册后开始计算服务期限。',
   },
 ]
 
@@ -140,10 +140,10 @@ export default function LandingSections() {
         <img className="ls-note-whale" src={whaleSurprised} alt="" width={256} height={256} loading="lazy" />
         <div>
           <h2 id="ls-invite" className="ls-note-title">
-            入学需要邀请码
+            开通托管需要邀请码
           </h2>
           <p className="ls-body">
-            托管班目前按邀请入学。每个邀请码带着一段固定的服务时长，到期后小鱼会先睡一觉，兑换新的邀请码就能继续上学，设置和插件都还在。
+            每个邀请码都带有服务天数。到期时小鱼会停止运行，设置和插件会保留。兑换新的邀请码后即可继续托管。
           </p>
         </div>
       </section>
@@ -164,10 +164,10 @@ export default function LandingSections() {
       </section>
 
       <section className="ls-end" aria-labelledby="ls-end-title">
-        <span className="ls-end-whale" aria-hidden style={{ backgroundImage: `url(${whaleWave})` }} />
+        <Pupil mood="wave" size={144} />
         <h2 id="ls-end-title" className="ls-end-title">准备好了就带小鱼来</h2>
         <Link to="/register" className="ls-end-cta">
-          带小鱼入学
+          开始托管
           <ArrowRight aria-hidden strokeWidth={3} />
         </Link>
       </section>

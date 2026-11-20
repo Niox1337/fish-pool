@@ -164,7 +164,7 @@ function BotView() {
       <section className="grid items-center gap-6 rounded-3xl border border-paper-3 bg-cream p-6 sm:grid-cols-[auto_1fr] sm:p-8">
         <Pupil mood="surprised" size={128} className="mx-auto" />
         <div>
-          <h1 className="font-display text-xl font-black text-ink">这条小鱼不在教室里</h1>
+          <h1 className="font-display text-xl font-black text-ink">找不到这只小鱼</h1>
           <p className="mt-2 text-[15px] leading-relaxed text-ink-2">可能已经退学了，或者链接抄错了一位。回到小鱼列表看看吧。</p>
           <Link
             to="/app"

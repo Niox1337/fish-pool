@@ -23,7 +23,7 @@ function CreateBot({ disabled, reason, first }: { disabled: boolean; reason?: st
     try {
       const bot = await api.createBot(name.trim() || '大肥鱼')
       qc.invalidateQueries({ queryKey: keys.bots })
-      toast.success(`${bot.name} 入学了，正在准备座位`)
+      toast.success(`${bot.name} 已创建，接下来可以绑定聊天平台`)
       navigate(`/app/bots/${bot.id}/connect`)
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : '没能创建，稍后再试')
@@ -40,7 +40,7 @@ function CreateBot({ disabled, reason, first }: { disabled: boolean; reason?: st
       </label>
       <Button type="submit" variant="primary" loading={busy} disabled={disabled} title={reason}>
         <Plus aria-hidden />
-        {first ? '一键入学' : '再收一条'}
+        {first ? '开始托管' : '添加小鱼'}
       </Button>
       {reason && <p className="basis-full text-[13px] text-ink-3">{reason}</p>}
     </form>
@@ -90,8 +90,8 @@ export default function BotsHome() {
   const usage = useUsage()
 
   const list = bots.data ?? []
-  const quota = me?.quota.bots ?? 1
-  const full = list.length >= quota
+  const quota = me?.quota.bots ?? null
+  const full = quota != null && list.length >= quota
   const expired = me ? !me.service_active : false
   const reason = expired
     ? '服务已到期，兑换邀请码后才能收新的小鱼。'
@@ -112,11 +112,11 @@ export default function BotsHome() {
         <ErrorNote error={bots.error} onRetry={() => bots.refetch()} />
       ) : list.length === 0 ? (
         <section className="grid items-center gap-6 rounded-3xl border border-paper-3 bg-cream p-6 sm:grid-cols-[auto_1fr] sm:p-8">
-          <Pupil mood="wave" size={144} className="mx-auto" />
+          <Pupil mood="happy" size={144} className="mx-auto" />
           <div>
-            <h2 className="font-display text-xl font-black text-ink">教室里还空着</h2>
+            <h2 className="font-display text-xl font-black text-ink">还没有托管的小鱼</h2>
             <ol className="mt-3 grid gap-1.5 text-[15px] leading-relaxed text-ink-2">
-              <li>1. 起个名字，一键入学，托管班会给它分好座位。</li>
+              <li>1. 起个名字，创建第一只小鱼。</li>
               <li>2. 在接入页用 QQ 或微信扫码，凭证自动填好。</li>
               <li>3. 在模型 Key 页填上你自己的 Key，小鱼就能开口说话。</li>
             </ol>

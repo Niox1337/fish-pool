@@ -262,7 +262,12 @@ class ChildRuntime:
     async def run(self) -> int:
         try:
             await self.connect()
-        except ConnectionError as e:
+            if self.spec.get("wait_for_memory_limit"):
+                assert self.reader is not None
+                # The node attaches this process to the tenant cgroup before allowing plugin imports.
+                if await asyncio.wait_for(self.reader.readexactly(1), timeout=60) != b"\x01":
+                    raise ConnectionError("memory limit was not confirmed")
+        except (ConnectionError, TimeoutError, asyncio.IncompleteReadError) as e:
             print(f"fish child {self.proc_id}: {e}", file=sys.__stderr__)
             return EXIT_CONNECT_FAILED
         _fish.set_runtime(self)

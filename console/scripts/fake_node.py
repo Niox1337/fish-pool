@@ -184,16 +184,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"items": items, "cursor": str(after + 3)})
         if m == "GET" and p == ["usage", "summary"]:
             with LOCK:
-                users = sorted({d["user_id"] for d in STATE["desired"].values()})
+                bots = {d["bot_id"]: d for d in STATE["desired"].values()}
+            users = sorted({d["user_id"] for d in bots.values()})
             rows = []
+            plugins = []
             for u in users:
                 src = usage_sources(u)
                 rows.append({"user_id": u, "memory_bytes": sum(s["memory_bytes"] for s in src), "storage_bytes": sum(s["storage_bytes"] for s in src)})
+                for s in src:
+                    if s["kind"] == "plugin":
+                        plugins.append({**{k: s[k] for k in ("bot_id", "plugin_id", "label", "cpu_percent")},
+                                        "user_id": u, "bot_name": bots[s["bot_id"]]["name"]})
             mem = sum(r["memory_bytes"] for r in rows)
             sto = sum(r["storage_bytes"] for r in rows)
             now = int(time.time() * 1000)
             history = [{"ts": now - k * 300_000, "memory_bytes": mem, "storage_bytes": sto} for k in range(3)]
-            return self.send_json(200, {"memory_bytes": mem, "storage_bytes": sto, "users": rows, "history": history})
+            cpu = {"percent": sum(p["cpu_percent"] for p in plugins), "sampled_at": now, "plugins": plugins}
+            return self.send_json(200, {"memory_bytes": mem, "storage_bytes": sto, "users": rows, "history": history, "plugin_cpu": cpu})
         if m == "GET" and p == ["usage"]:
             user_id = (query.get("user_id") or [""])[0]
             sources = usage_sources(user_id)

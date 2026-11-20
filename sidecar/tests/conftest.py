@@ -247,7 +247,10 @@ class FakeNode:
             srv.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    async def spawn_raw(self, plugin: str, config: dict | None = None, plugin_dir: str | None = None) -> tuple[str, dict, asyncio.Future]:
+    async def spawn_raw(
+        self, plugin: str, config: dict | None = None, plugin_dir: str | None = None,
+        *, wait_for_memory_limit: bool = False,
+    ) -> tuple[str, dict, asyncio.Future]:
         """Sends spawn and returns the reply plus a future for the child connection."""
         assert self.control is not None
         proc_id = uuid.uuid4().hex[:8]
@@ -272,6 +275,7 @@ class FakeNode:
                 "plugin_name": plugin,
                 "bot_id": "bot1",
                 "socket": sock,
+                "wait_for_memory_limit": wait_for_memory_limit,
             }
         )
         reply = await self.control.lines.next(lambda m: m.get("proc_id") == proc_id and m.get("op") in ("spawned", "error"))

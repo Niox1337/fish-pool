@@ -5,26 +5,19 @@ compatibility_date = "2026-01-01"
 # /api and /api/* run Rust first. Other paths use static assets with an index.html fallback.
 assets = { directory = "../web/dist", binding = "ASSETS", not_found_handling = "single-page-application", run_worker_first = ["/api", "/api/*"] }
 
-# Custom domain. Kept commented until the zone niox.lol is ready to point fish.niox.lol at this Worker.
-# routes = [
-#   { pattern = "fish.niox.lol", custom_domain = true },
-# ]
+routes = [
+  { pattern = "fish.niox.lol", custom_domain = true },
+]
 
 # Builds the SPA and compiles Rust to build/index.js and build/index_bg.wasm.
 [build]
 command = "npm --prefix ../web run build && CC=clang worker-build --release"
 
-# Create the database with `wrangler d1 create fish` and paste its id here.
 [[d1_databases]]
 binding = "DB"
 database_name = "fish"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "e27991c1-f15a-4854-a35e-7644d02f4a9b"
 migrations_dir = "migrations"
-
-# Cloudflare Email Service binding, used when EMAIL_PROVIDER = "cloudflare".
-[[send_email]]
-name = "EMAIL"
-allowed_sender_addresses = ["noreply@niox.lol"]
 
 # Cleanup of expired rows, retries of pending node pushes and node side deletions.
 [triggers]
@@ -35,8 +28,8 @@ enabled = true
 
 [vars]
 # "cloudflare" (send_email binding EMAIL), "resend" (secret RESEND_API_KEY) or "log" (only with FISH_DEV = "1").
-EMAIL_PROVIDER = "cloudflare"
-EMAIL_FROM = "noreply@niox.lol"
+EMAIL_PROVIDER = "resend"
+EMAIL_FROM = "noreply@gengwiki.niox.lol"
 EMAIL_FROM_NAME = "大肥鱼托管班"
 # Seeded into the nodes table on first use. Its HMAC secret is NODE_SECRET (or NODE_SECRET_NODE_1).
 DEFAULT_NODE_ID = "node-1"

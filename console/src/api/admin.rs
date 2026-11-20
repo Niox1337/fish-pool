@@ -8,10 +8,10 @@ use crate::app::{ok_json, App, BOT_COLS};
 use crate::args;
 use crate::error::{ApiError, ApiResult};
 use crate::invite::{self, InviteRow, DAY_MS, INVITE_COLS};
-use crate::models::{admin_user_view, BotRow, UserCounts, UserRow, USER_COUNTS_SQL};
+use crate::models::{admin_user_view, AccountQuota, BotRow, UserCounts, UserRow, UNLIMITED_COUNT, USER_COUNTS_SQL};
 use crate::util::{now_ms, log_error};
 use futures_util::future::join_all;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use wasm_bindgen::JsValue;
@@ -93,6 +93,52 @@ async fn probe_nodes(app: &App, with_health: bool) -> ApiResult<Vec<Probe>> {
 
 fn num(v: &Value, k: &str) -> i64 {
     v.get(k).and_then(Value::as_i64).unwrap_or(0)
+}
+
+#[derive(Deserialize, Serialize)]
+struct PluginCpu {
+    user_id: String,
+    bot_id: String,
+    bot_name: String,
+    plugin_id: String,
+    label: String,
+    cpu_percent: f64,
+}
+
+#[derive(Deserialize)]
+struct PluginCpuSample {
+    percent: f64,
+    sampled_at: i64,
+    plugins: Vec<PluginCpu>,
+}
+
+#[derive(Serialize)]
+struct AdminPluginCpu {
+    node_id: String,
+    sampled_at: i64,
+    #[serde(flatten)]
+    plugin: PluginCpu,
+}
+
+fn plugin_cpu_overview(probes: &[Probe]) -> Value {
+    let mut percent = 0.0;
+    let mut reporting_nodes = 0;
+    let mut items = Vec::new();
+    for p in probes {
+        let Some(sample) = p.summary.as_ref().and_then(|s| s.get("plugin_cpu"))
+            .and_then(|v| PluginCpuSample::deserialize(v).ok()) else { continue; };
+        reporting_nodes += 1;
+        percent += sample.percent;
+        items.extend(sample.plugins.into_iter().map(|plugin| AdminPluginCpu {
+            node_id: p.node.id.clone(),
+            sampled_at: sample.sampled_at,
+            plugin,
+        }));
+    }
+    items.sort_unstable_by(|a, b| b.plugin.cpu_percent.total_cmp(&a.plugin.cpu_percent)
+        .then_with(|| a.plugin.plugin_id.cmp(&b.plugin.plugin_id)));
+    items.truncate(20);
+    json!({ "percent": (reporting_nodes > 0).then_some(percent), "reporting_nodes": reporting_nodes, "items": items })
 }
 
 /// Per user (memory, storage) from node summaries. A user is known only when every node
@@ -275,6 +321,7 @@ pub async fn overview(req: &Request, app: &App) -> ApiResult<Reply> {
         },
         "platforms": {"qq_official": t.platforms_qq, "weixin_ilink": t.platforms_weixin, "error": t.platforms_error},
         "usage": {"memory_bytes": memory, "storage_bytes": storage, "quota_memory_mb": t.quota_memory_mb, "quota_storage_mb": t.quota_storage_mb},
+        "plugin_cpu": plugin_cpu_overview(&probes),
         "invites": {"unused": t.invites_unused, "used_7d": t.invites_used_7d},
         "nodes": nodes,
         "problems": problems,
@@ -414,6 +461,10 @@ pub fn quota_updates(quota: &Value) -> ApiResult<Vec<(&'static str, i64)>> {
     let mut out = Vec::new();
     for (field, col, min, max) in QUOTA_FIELDS {
         if let Some(v) = obj.get(field) {
+            if v.is_null() && matches!(field, "bots" | "plugins") {
+                out.push((col, UNLIMITED_COUNT));
+                continue;
+            }
             let n = v.as_i64().filter(|n| (min..=max).contains(n)).ok_or_else(|| ApiError::bad_request(format!("{field} 应为 {min} 到 {max} 的整数")))?;
             out.push((col, n));
         }
@@ -495,6 +546,7 @@ struct InviteListRow {
     created_at: i64,
     expires_at: Option<i64>,
     revoked_at: Option<i64>,
+    quota_json: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -531,10 +583,11 @@ async fn invite_views(app: &App, rows: Vec<InviteListRow>) -> ApiResult<Vec<Valu
         .into_iter()
         .map(|r| {
             let red = redemptions.remove(&r.code).unwrap_or_default();
+            let quota = r.quota_json.as_deref().and_then(|s| serde_json::from_str::<AccountQuota>(s).ok());
             json!({
                 "code": r.code, "days": r.days, "max_uses": r.max_uses, "used_count": r.used_count, "note": r.note,
                 "created_by_email": r.created_by_email, "created_at": r.created_at, "expires_at": r.expires_at,
-                "revoked_at": r.revoked_at, "redemptions": red,
+                "revoked_at": r.revoked_at, "redemptions": red, "quota": quota,
             })
         })
         .collect())
@@ -559,7 +612,7 @@ pub fn parse_invite_cursor(c: &str) -> ApiResult<(i64, String)> {
 }
 
 const INVITE_SELECT: &str = "SELECT i.code, i.days, i.max_uses, i.used_count, i.note, u.email AS created_by_email, \
-i.created_at, i.expires_at, i.revoked_at FROM invite_codes i LEFT JOIN users u ON u.id = i.created_by";
+i.created_at, i.expires_at, i.revoked_at, i.quota_json FROM invite_codes i LEFT JOIN users u ON u.id = i.created_by";
 
 pub async fn invites(req: &Request, app: &App) -> ApiResult<Reply> {
     app.require_admin(req).await?;
@@ -581,7 +634,7 @@ pub async fn invites(req: &Request, app: &App) -> ApiResult<Reply> {
     } else {
         None
     };
-    Ok(Reply::json(json!({"items": invite_views(app, rows).await?, "cursor": next})))
+    Ok(Reply::json(json!({"items": invite_views(app, rows).await?, "cursor": next, "default_quota": AccountQuota::default()})))
 }
 
 #[derive(Deserialize)]
@@ -594,6 +647,8 @@ struct CreateInvites {
     #[serde(default)]
     note: String,
     expires_at: Option<i64>,
+    #[serde(default)]
+    quota: AccountQuota,
 }
 
 fn one() -> i64 {
@@ -603,6 +658,8 @@ fn one() -> i64 {
 pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
     let admin = app.require_admin(req).await?;
     let body: CreateInvites = json_body(req).await?;
+    quota_updates(&serde_json::to_value(body.quota)?)?;
+    let quota_json = serde_json::to_string(&body.quota)?;
     if !(1..=3650).contains(&body.days) {
         return Err(ApiError::bad_request("days 应为 1 到 3650"));
     }
@@ -627,8 +684,8 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
             .iter()
             .map(|c| {
                 app.db.stmt(
-                    "INSERT INTO invite_codes (code, days, max_uses, used_count, note, created_by, created_at, expires_at) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)",
-                    args![c, body.days, body.max_uses, note, admin.id, now, body.expires_at],
+                    "INSERT INTO invite_codes (code, days, max_uses, used_count, note, created_by, created_at, expires_at, quota_json) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8)",
+                    args![c, body.days, body.max_uses, note, admin.id, now, body.expires_at, quota_json],
                 )
             })
             .collect::<ApiResult<Vec<_>>>()?;
@@ -650,6 +707,7 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
             created_at: now,
             expires_at: body.expires_at,
             revoked_at: None,
+            quota_json: Some(quota_json.clone()),
         })
         .collect();
     Ok(Reply::json(json!({"items": invite_views(app, rows).await?})))

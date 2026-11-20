@@ -1,4 +1,4 @@
-export type Quota = { memory_mb: number; storage_mb: number; bots: number; plugins: number }
+export type Quota = { memory_mb: number; storage_mb: number; bots: number | null; plugins: number | null }
 
 export type User = {
   id: string
@@ -177,6 +177,7 @@ export type AdminProblem = {
 export type Invite = {
   code: string
   days: number
+  quota: Quota | null
   max_uses: number
   used_count: number
   note: string | null
@@ -194,6 +195,20 @@ export type AdminOverview = {
   plugins: { total: number; running: number; installing: number; error: number; over_quota: number }
   platforms: { qq_official: number; weixin_ilink: number; error: number }
   usage: { memory_bytes: number; storage_bytes: number; quota_memory_mb: number; quota_storage_mb: number }
+  plugin_cpu: {
+    percent: number | null
+    reporting_nodes: number
+    items: {
+      node_id: string
+      sampled_at: number
+      user_id: string
+      bot_id: string
+      bot_name: string
+      plugin_id: string
+      label: string
+      cpu_percent: number
+    }[]
+  }
   nodes: AdminNode[]
   problems: AdminProblem[]
 }

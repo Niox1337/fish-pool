@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::sidecar::Sidecar;
 use crate::model::{Component, MessageEvent};
+use crate::sandbox::Cgroups;
 
 #[derive(Clone, Debug, Deserialize, Default, PartialEq)]
 #[serde(default)]
@@ -259,6 +260,7 @@ pub async fn launch(
     sidecar: &Sidecar,
     spec: LaunchSpec,
     out: mpsc::Sender<OutMsg>,
+    tenant: Option<(&Cgroups, &str)>,
 ) -> Result<(Arc<PluginProc>, oneshot::Receiver<i32>)> {
     std::fs::create_dir_all(&sidecar.run_dir)?;
     let sock = sidecar.run_dir.join(format!("{}.sock", spec.proc_id));
@@ -280,6 +282,7 @@ pub async fn launch(
         "plugin_name": spec.plugin_name,
         "bot_id": spec.bot_id,
         "socket": sock,
+        "wait_for_memory_limit": tenant.is_some(),
     });
     let cleanup = |e: anyhow::Error| {
         let _ = std::fs::remove_file(&sock);
@@ -287,7 +290,13 @@ pub async fn launch(
         e
     };
     let pid = sidecar.spawn(req).await.map_err(cleanup)?;
-    let stream = tokio::select! {
+    if let Some((cgroups, user_id)) = tenant {
+        if let Err(e) = cgroups.add_pid(user_id, pid) {
+            sidecar.kill(&spec.proc_id).await;
+            return Err(cleanup(anyhow!("无法将插件进程加入内存配额组: {e}")));
+        }
+    }
+    let mut stream = tokio::select! {
         r = tokio::time::timeout(Duration::from_secs(60), listener.accept()) => match r {
             Ok(Ok((s, _))) => s,
             Ok(Err(e)) => { sidecar.kill(&spec.proc_id).await; return Err(cleanup(e.into())) }
@@ -303,6 +312,12 @@ pub async fn launch(
     };
     drop(listener);
     let _ = std::fs::remove_file(&sock);
+    if tenant.is_some() {
+        if let Err(e) = stream.write_all(b"\x01").await {
+            sidecar.kill(&spec.proc_id).await;
+            return Err(cleanup(e.into()));
+        }
+    }
 
     let (rd, mut wr) = stream.into_split();
     let mut lines = BufReader::new(rd).lines();
