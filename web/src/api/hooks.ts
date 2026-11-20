@@ -73,6 +73,12 @@ export function useAdminOverview() {
   return useQuery({ queryKey: [...keys.admin, 'overview'], queryFn: api.adminOverview, refetchInterval: 30_000 })
 }
 
+export const SYSTEM_REFRESH_MS = 15_000
+
+export function useAdminSystem() {
+  return useQuery({ queryKey: [...keys.admin, 'system'], queryFn: api.adminSystem, refetchInterval: SYSTEM_REFRESH_MS })
+}
+
 export function useAdminUsers(q: string) {
   return useQuery({ queryKey: [...keys.admin, 'users', q], queryFn: () => api.adminUsers(q || undefined), placeholderData: (p) => p })
 }

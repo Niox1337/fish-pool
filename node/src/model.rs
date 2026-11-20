@@ -153,12 +153,20 @@ pub struct PluginSpec {
     pub version: String,
     pub enabled: bool,
     pub config: Value,
+    /// Commit to install. Empty installs the head of the repository's default or named branch.
+    pub commit: String,
+    /// Changes when a reinstall is requested.
+    pub install_rev: i64,
 }
 
 impl PluginSpec {
     /// True when a change between two specs requires reinstalling the plugin code.
     pub fn needs_reinstall(&self, other: &PluginSpec) -> bool {
-        self.repo_url != other.repo_url || self.version != other.version || self.name != other.name
+        self.repo_url != other.repo_url
+            || self.version != other.version
+            || self.name != other.name
+            || self.commit != other.commit
+            || self.install_rev != other.install_rev
     }
 }
 

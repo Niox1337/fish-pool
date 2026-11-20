@@ -81,6 +81,17 @@ pub struct SignedClient {
 }
 
 impl SignedClient {
+    /// Signed GET request builder. The caller sets the timeout.
+    pub fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        let ts = now_ms();
+        let sig = sign(&self.key, ts, "GET", path, b"");
+        self.http
+            .get(format!("{}{}", self.base_url.trim_end_matches('/'), path))
+            .header(HEADER_NODE, &self.node_id)
+            .header(HEADER_TS, ts.to_string())
+            .header(HEADER_SIG, sig)
+    }
+
     pub async fn post_json(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<reqwest::Response> {
         let bytes = serde_json::to_vec(body)?;
         let ts = now_ms();

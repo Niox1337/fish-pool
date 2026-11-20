@@ -30,6 +30,13 @@ pub struct LogBuffer {
 
 pub const MAX_MESSAGE: usize = 2000;
 
+#[derive(Debug, Default, PartialEq)]
+pub struct LogStats {
+    pub errors: u64,
+    pub warns: u64,
+    pub last_error: Option<(i64, String)>,
+}
+
 impl LogBuffer {
     pub fn new(bot_id: &str, cap: usize) -> Self {
         LogBuffer {
@@ -102,6 +109,25 @@ impl LogBuffer {
         (items, cursor.to_string())
     }
 
+    /// Error and warning counts of entries at or after `since`, with the newest error.
+    pub fn stats_since(&self, since: i64) -> LogStats {
+        let g = self.inner.lock().unwrap();
+        let mut s = LogStats::default();
+        for e in g.entries.iter().rev().take_while(|e| e.ts >= since) {
+            match e.level {
+                "error" => {
+                    s.errors += 1;
+                    if s.last_error.is_none() {
+                        s.last_error = Some((e.ts, e.message.clone()));
+                    }
+                }
+                "warn" => s.warns += 1,
+                _ => {}
+            }
+        }
+        s
+    }
+
     pub fn approx_bytes(&self) -> usize {
         self.inner.lock().unwrap().bytes
     }
@@ -130,5 +156,20 @@ mod tests {
         let (items, _) = b.read_after(Some(5), 10);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].source, "llm");
+    }
+
+    #[test]
+    fn stats_count_recent_errors() {
+        let b = LogBuffer::new("b", 10);
+        b.error("core", "old");
+        b.inner.lock().unwrap().entries[0].ts = 1;
+        b.warn("llm", "w");
+        b.error("plugin:x", "first");
+        b.error("plugin:x", "newest");
+        b.info("core", "i");
+        let s = b.stats_since(1000);
+        assert_eq!((s.errors, s.warns), (2, 1));
+        assert_eq!(s.last_error.map(|e| e.1), Some("newest".to_string()));
+        assert_eq!(b.stats_since(0).errors, 3);
     }
 }

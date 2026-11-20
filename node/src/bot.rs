@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::events::Events;
-use crate::llm::{self, ChatMessage, ChatRequest};
+use crate::llm::{self, ChatMessage, ChatRequest, ToolDef};
 use crate::logs::LogBuffer;
 use crate::model::{
     parse_origin, unified_origin, BotSettings, Component, DesiredBot, LlmSpec, MessageEvent, MessageType, PlatformSpec,
@@ -18,7 +18,7 @@ use crate::model::{
 };
 use crate::pipeline::{is_listed, wake, RateLimiter};
 use crate::platform::{loopback, qq, weixin, Inbound, PlatformConn, StatusSink};
-use crate::plugin::install::{self, Installer};
+use crate::plugin::install::Installer;
 use crate::plugin::{launch, restart_backoff, LaunchSpec, LoadError, OutMsg, PluginOut, PluginProc, Sidecar};
 use crate::sandbox::{chown_tree, Cgroups};
 use crate::store::{ConvDb, NodeDb};
@@ -36,6 +36,20 @@ pub struct Shared {
     pub install_sem: Semaphore,
     /// Latest measured storage per user, refreshed by the usage sampler.
     pub storage_by_user: Mutex<HashMap<String, u64>>,
+}
+
+impl Shared {
+    /// Removes shared plugin installs that no bot uses any more.
+    pub async fn gc_shared_plugins(self: &Arc<Self>) {
+        let _permit = self.install_sem.acquire().await;
+        let shared = self.clone();
+        let removed = tokio::task::spawn_blocking(move || shared.installer.gc_shared(&shared.cfg.tenants_dir()))
+            .await
+            .unwrap_or(0);
+        if removed > 0 {
+            tracing::info!("removed {removed} unused shared plugin installs");
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -78,6 +92,7 @@ enum PluginExit {
     Stop,
     Reload,
     Failed(i32),
+    Sleep,
 }
 
 #[derive(Default)]
@@ -90,7 +105,14 @@ struct Runtime {
 const MATCH_WAIT: Duration = Duration::from_secs(2);
 const DONE_WAIT: Duration = Duration::from_secs(120);
 const HOOK_WAIT: Duration = Duration::from_secs(5);
+const TOOL_WAIT: Duration = Duration::from_secs(60);
+/// Rounds of tool calls before the model is told to answer without tools.
+const MAX_TOOL_ROUNDS: usize = 5;
+const MAX_TOOL_RESULT_CHARS: usize = 8000;
 const INFLIGHT_TTL: Duration = Duration::from_secs(600);
+const IDLE_CHECK_WAIT: Duration = Duration::from_secs(5);
+/// Longest time an inbound message waits for sleeping plugins to start.
+const WAKE_WAIT: Duration = Duration::from_secs(30);
 
 /// One tenant bot: desired state, live connections, plugin processes and status.
 pub struct Bot {
@@ -106,6 +128,12 @@ pub struct Bot {
     inflight: Mutex<HashMap<String, (ReplyTarget, Instant)>>,
     over_quota: Mutex<HashSet<String>>,
     handlers: Arc<Semaphore>,
+    /// Time of the last inbound message dispatched to plugins.
+    activity: watch::Sender<Instant>,
+    /// Plugins stopped while idle. Changed only while holding the `procs` write lock.
+    dormant: Mutex<HashSet<String>>,
+    /// Bumped whenever a plugin leaves `dormant`.
+    dormant_gen: watch::Sender<u64>,
 }
 
 fn log_level(l: &str) -> &'static str {
@@ -145,6 +173,9 @@ impl Bot {
             inflight: Mutex::new(HashMap::new()),
             over_quota: Mutex::new(HashSet::new()),
             handlers: Arc::new(Semaphore::new(8)),
+            activity: watch::channel(Instant::now()).0,
+            dormant: Mutex::new(HashSet::new()),
+            dormant_gen: watch::channel(0).0,
         })
     }
 
@@ -280,6 +311,7 @@ impl Bot {
         let _ = self.shared.db.delete_bot(&self.id);
         let dir = self.shared.cfg.bot_dir(&user, &self.id);
         let _ = tokio::fs::remove_dir_all(&dir).await;
+        self.shared.gc_shared_plugins().await;
         self.set_bot_status("stopped", "已删除");
     }
 
@@ -501,14 +533,19 @@ impl Bot {
             .filter(|id| !wanted.contains(id.as_str()))
             .cloned()
             .collect();
+        let mut uninstalled = false;
         for id in removed {
             if let Some(slot) = rt.plugins.remove(&id) {
                 let dir = self.shared.cfg.plugin_dir(&d.user_id, &d.bot_id, &slot.spec.name);
                 self.logs.info(&format!("plugin:{}", slot.spec.name), "插件已卸载");
                 Self::stop_slot(slot).await;
                 let _ = tokio::fs::remove_dir_all(dir).await;
+                uninstalled = true;
             }
             self.board.lock().unwrap().plugins.remove(&id);
+        }
+        if uninstalled {
+            self.shared.gc_shared_plugins().await;
         }
         {
             let ids: HashSet<&str> = wanted.clone();
@@ -572,7 +609,7 @@ impl Bot {
         let rt = self.rt.lock().await;
         let slot = rt.plugins.get(id).ok_or("插件当前未启用或小鱼尚未启动")?;
         let dir = self.shared.cfg.plugin_dir(&self.user_id(), &self.id, &slot.spec.name);
-        if !install::is_installed(&slot.spec, &dir) {
+        if !self.shared.installer.is_installed(&slot.spec, &dir) {
             return Err("插件尚未安装完成，请检查安装状态");
         }
         slot.config.send(slot.spec.config.clone()).map_err(|_| "插件进程不可用，请稍后重试")
@@ -601,6 +638,86 @@ impl Bot {
         }
     }
 
+    /// Resolves once the bot has received no message for `idle` and the plugin reports no
+    /// background work. Never resolves when `idle` is None.
+    async fn wait_idle(
+        &self,
+        proc: &PluginProc,
+        activity: &mut watch::Receiver<Instant>,
+        idle: Option<Duration>,
+        src: &str,
+    ) {
+        let Some(idle) = idle else {
+            return std::future::pending().await;
+        };
+        let mut reported: Option<String> = None;
+        loop {
+            let due = *activity.borrow_and_update() + idle;
+            if Instant::now() < due {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(due)).await;
+                continue;
+            }
+            let reason = match proc.idle_check(IDLE_CHECK_WAIT).await {
+                Some(busy) if busy.is_empty() => return,
+                Some(busy) => busy.join("，"),
+                None => "插件没有回应空闲检查".to_string(),
+            };
+            if reported.as_deref() != Some(reason.as_str()) {
+                self.logs.info(src, format!("插件仍有后台活动（{reason}），暂不休眠"));
+                reported = Some(reason);
+            }
+            tokio::time::sleep(idle).await;
+        }
+    }
+
+    /// Moves a plugin from `procs` to `dormant`. Returns false, changing nothing, when a message
+    /// arrived after `activity` was last read.
+    fn enter_dormant(&self, plugin_id: &str, proc_id: &str, activity: &watch::Receiver<Instant>) -> bool {
+        let mut procs = self.procs.write().unwrap();
+        if activity.has_changed().unwrap_or(true) {
+            return false;
+        }
+        if procs.get(plugin_id).is_some_and(|p| p.proc_id == proc_id) {
+            procs.remove(plugin_id);
+        }
+        self.dormant.lock().unwrap().insert(plugin_id.to_string());
+        true
+    }
+
+    /// Registers a running process when given one and takes the plugin out of `dormant`.
+    fn leave_dormant(&self, plugin_id: &str, proc: Option<Arc<PluginProc>>) {
+        let was_dormant = {
+            let mut procs = self.procs.write().unwrap();
+            if let Some(p) = proc {
+                procs.insert(plugin_id.to_string(), p);
+            }
+            self.dormant.lock().unwrap().remove(plugin_id)
+        };
+        if was_dormant {
+            self.dormant_gen.send_modify(|g| *g += 1);
+        }
+    }
+
+    /// Records inbound activity, which wakes sleeping plugins, and returns the running plugins
+    /// once none is asleep or `WAKE_WAIT` has passed.
+    async fn awake_procs(&self) -> Vec<Arc<PluginProc>> {
+        let mut gen = self.dormant_gen.subscribe();
+        self.activity.send_replace(Instant::now());
+        let deadline = tokio::time::Instant::now() + WAKE_WAIT;
+        loop {
+            {
+                let procs = self.procs.read().unwrap();
+                if self.dormant.lock().unwrap().is_empty() {
+                    return procs.values().cloned().collect();
+                }
+            }
+            if tokio::time::timeout_at(deadline, gen.changed()).await.is_err() {
+                self.logs.warn("core", "有插件没能及时唤醒，这条消息只交给正在运行的插件");
+                return self.procs.read().unwrap().values().cloned().collect();
+            }
+        }
+    }
+
     async fn supervise_plugin(
         self: Arc<Self>,
         spec: PluginSpec,
@@ -610,6 +727,7 @@ impl Bot {
     ) {
         let mut attempt = 0u32;
         let shared = self.shared.clone();
+        let mut activity = self.activity.subscribe();
         loop {
             if cancel.is_cancelled() {
                 return;
@@ -618,7 +736,7 @@ impl Bot {
             let user = self.user_id();
             let plugin_dir = shared.cfg.plugin_dir(&user, &self.id, &spec.name);
 
-            if !install::is_installed(&spec, &plugin_dir) {
+            if !shared.installer.is_installed(&spec, &plugin_dir) {
                 if self.storage_over_quota() {
                     self.set_plugin_status(&spec.id, "error", "存储空间超出配额，无法安装插件", None);
                     self.logs.error(&src, "存储空间超出配额，无法安装插件");
@@ -631,8 +749,14 @@ impl Bot {
                 let res = tokio::select! {
                     _ = cancel.cancelled() => return,
                     r = async {
-                        let _permit = shared.install_sem.acquire().await;
-                        shared.installer.ensure(&spec, &plugin_dir, &self.logs, &src).await
+                        let r = {
+                            let _permit = shared.install_sem.acquire().await;
+                            shared.installer.ensure(&spec, &plugin_dir, &self.logs, &src).await
+                        };
+                        if r.is_ok() {
+                            shared.gc_shared_plugins().await;
+                        }
+                        r
                     } => r,
                 };
                 if let Err(e) = res {
@@ -646,7 +770,14 @@ impl Bot {
                     continue;
                 }
             }
-            let inst = install::layout(&plugin_dir);
+            let Some(inst) = shared.installer.installed(&spec, &plugin_dir) else {
+                // The shared install was removed after the check above, so the next pass installs again.
+                attempt += 1;
+                if !Self::sleep_or_cancel(&cancel, restart_backoff(attempt)).await {
+                    return;
+                }
+                continue;
+            };
             let _ = std::fs::create_dir_all(&inst.data);
             chown_tree(&shared.cfg, &inst.data);
             let proc_id = ulid::Ulid::new().to_string().to_lowercase();
@@ -659,12 +790,20 @@ impl Bot {
                 venv_site_packages: inst.site_packages.clone(),
                 data_dir: inst.data.clone(),
                 config: config.borrow_and_update().clone(),
+                share_key: Some(inst.share_key.clone()),
             };
             let tenant = shared.cgroups.as_ref().map(|cg| (cg, user.as_str()));
             let launched = tokio::select! {
-                _ = cancel.cancelled() => { shared.sidecar.kill(&proc_id).await; return }
+                _ = cancel.cancelled() => {
+                    shared.sidecar.kill(&proc_id).await;
+                    self.leave_dormant(&spec.id, None);
+                    return
+                }
                 r = launch(&shared.sidecar, ls, out_tx.clone(), tenant) => r,
             };
+            if launched.is_err() {
+                self.leave_dormant(&spec.id, None);
+            }
             let (proc, mut exit_rx) = match launched {
                 Ok(v) => v,
                 Err(e) if e.downcast_ref::<LoadError>().is_some() => {
@@ -690,19 +829,27 @@ impl Bot {
                     continue;
                 }
             };
-            self.procs.write().unwrap().insert(spec.id.clone(), proc.clone());
+            self.leave_dormant(&spec.id, Some(proc.clone()));
             let version = Some(proc.hello.version.clone())
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| spec.version.clone());
             self.logs
                 .info(&src, format!("插件已启动 pid={} 版本 {version}", proc.pid));
-            self.set_plugin_status(&spec.id, "running", "", Some(version));
+            self.set_plugin_status(&spec.id, "running", "", Some(version.clone()));
             let started = Instant::now();
-            let outcome = tokio::select! {
-                _ = cancel.cancelled() => PluginExit::Stop,
-                updated = config.changed() => if updated.is_ok() { PluginExit::Reload } else { PluginExit::Stop },
-                code = &mut exit_rx => PluginExit::Failed(code.unwrap_or(-1)),
-                _ = proc.closed.cancelled() => PluginExit::Failed(-1),
+            let idle = shared.cfg.plugin_idle_sleep;
+            let outcome = loop {
+                let o = tokio::select! {
+                    _ = cancel.cancelled() => PluginExit::Stop,
+                    updated = config.changed() => if updated.is_ok() { PluginExit::Reload } else { PluginExit::Stop },
+                    code = &mut exit_rx => PluginExit::Failed(code.unwrap_or(-1)),
+                    _ = proc.closed.cancelled() => PluginExit::Failed(-1),
+                    _ = self.wait_idle(&proc, &mut activity, idle, &src) => PluginExit::Sleep,
+                };
+                if matches!(o, PluginExit::Sleep) && !self.enter_dormant(&spec.id, &proc_id, &activity) {
+                    continue;
+                }
+                break o;
             };
             {
                 let mut procs = self.procs.write().unwrap();
@@ -723,6 +870,35 @@ impl Bot {
                     if matches!(outcome, PluginExit::Stop) {
                         return;
                     }
+                    attempt = 0;
+                }
+                PluginExit::Sleep => {
+                    proc.shutdown();
+                    if tokio::time::timeout(Duration::from_secs(3), &mut exit_rx)
+                        .await
+                        .is_err()
+                    {
+                        shared.sidecar.kill(&proc_id).await;
+                    }
+                    shared.sidecar.forget(&proc_id);
+                    let minutes = idle.map(|d| d.as_secs().div_ceil(60)).unwrap_or(0);
+                    self.logs.info(
+                        &src,
+                        format!("机器人 {minutes} 分钟没有收到消息，插件已休眠，收到消息时自动唤醒"),
+                    );
+                    self.set_plugin_status(&spec.id, "sleeping", "空闲休眠中，收到消息时自动唤醒", Some(version));
+                    let woke = loop {
+                        tokio::select! {
+                            _ = cancel.cancelled() => break false,
+                            changed = activity.changed() => break changed.is_ok(),
+                            updated = config.changed() => if updated.is_err() { break false },
+                        }
+                    };
+                    if !woke {
+                        self.leave_dormant(&spec.id, None);
+                        return;
+                    }
+                    self.logs.info(&src, "收到消息，正在唤醒插件");
                     attempt = 0;
                 }
                 PluginExit::Failed(code) => {
@@ -866,7 +1042,7 @@ impl Bot {
         };
         self.remember_target(&event_id, target.clone());
 
-        let procs: Vec<Arc<PluginProc>> = self.procs.read().unwrap().values().cloned().collect();
+        let procs = self.awake_procs().await;
         let results = futures_util::future::join_all(procs.iter().map(|p| {
             let (mrx, drx) = p.dispatch(&event_id, &ev);
             let event_id = event_id.clone();
@@ -970,23 +1146,111 @@ impl Bot {
         } else {
             s.llm.model.clone()
         };
-        let req = ChatRequest {
-            spec: &spec,
-            model: &model,
-            messages,
-            image_urls: vec![],
-            temperature: s.llm.temperature,
-            max_tokens: s.llm.max_tokens.max(16),
-        };
-        match llm::chat(&self.shared.http, req).await {
-            Ok(text) if !text.is_empty() => {
-                let _ = self.shared.conv.append(&self.id, session, "user", &prompt);
-                let _ = self.shared.conv.append(&self.id, session, "assistant", &text);
-                self.send_to_target(target, &[Component::plain(text)]).await;
+        let (tools, owners) = self.collect_tools();
+        let mut tools_on = !tools.is_empty();
+        let mut sent_by_tools = false;
+        let mut text = String::new();
+        for round in 0..=MAX_TOOL_ROUNDS {
+            let req = ChatRequest {
+                spec: &spec,
+                model: &model,
+                messages: messages.clone(),
+                image_urls: vec![],
+                temperature: s.llm.temperature,
+                max_tokens: s.llm.max_tokens.max(16),
+                tools: if tools_on { tools.clone() } else { vec![] },
+                tool_choice_none: tools_on && round == MAX_TOOL_ROUNDS,
+            };
+            let reply = match llm::chat_reply(&self.shared.http, req).await {
+                Ok(r) => r,
+                Err(e) if tools_on && round == 0 && is_client_error(&e) => {
+                    self.logs.warn("llm", format!("模型不接受插件工具，这次不带工具回复: {e:#}"));
+                    tools_on = false;
+                    continue;
+                }
+                Err(e) => {
+                    self.logs.error("llm", format!("{e:#}"));
+                    return;
+                }
+            };
+            if !tools_on || reply.tool_calls.is_empty() {
+                text = reply.text;
+                break;
             }
-            Ok(_) => self.logs.warn("llm", "模型返回了空回复"),
-            Err(e) => self.logs.error("llm", format!("{e:#}")),
+            messages.push(ChatMessage::assistant_raw(reply.raw.unwrap_or_else(|| json!({"role": "assistant"}))));
+            for call in reply.tool_calls {
+                let result = self.run_tool(&owners, ev, event_id, &call.name, &call.arguments, &mut sent_by_tools).await;
+                messages.push(ChatMessage::tool_result(&call.id, truncate_chars(&result, MAX_TOOL_RESULT_CHARS)));
+            }
         }
+        if !text.is_empty() {
+            let _ = self.shared.conv.append(&self.id, session, "user", &prompt);
+            let _ = self.shared.conv.append(&self.id, session, "assistant", &text);
+            self.send_to_target(target, &[Component::plain(text)]).await;
+        } else if !sent_by_tools {
+            self.logs.warn("llm", "模型返回了空回复");
+        }
+    }
+
+    /// Function tools of all running plugins. The first plugin, by name, wins a duplicate tool name.
+    fn collect_tools(&self) -> (Vec<ToolDef>, HashMap<String, Arc<PluginProc>>) {
+        let mut procs: Vec<Arc<PluginProc>> = self.procs.read().unwrap().values().cloned().collect();
+        procs.sort_by(|a, b| a.plugin_name.cmp(&b.plugin_name));
+        let mut defs = vec![];
+        let mut owners: HashMap<String, Arc<PluginProc>> = HashMap::new();
+        for p in procs {
+            for t in p.tools() {
+                let Some(name) = t.get("name").and_then(Value::as_str) else { continue };
+                if !valid_tool_name(name) {
+                    continue;
+                }
+                if owners.contains_key(name) {
+                    self.logs.warn(&format!("plugin:{}", p.plugin_name), format!("工具 {name} 与其他插件重名，已忽略"));
+                    continue;
+                }
+                owners.insert(name.to_string(), p.clone());
+                defs.push(ToolDef {
+                    name: name.to_string(),
+                    description: t.get("description").and_then(Value::as_str).unwrap_or(name).to_string(),
+                    parameters: t
+                        .get("parameters")
+                        .filter(|v| v.is_object())
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+                });
+            }
+        }
+        (defs, owners)
+    }
+
+    /// Runs one tool call and returns the text handed back to the model.
+    async fn run_tool(
+        &self,
+        owners: &HashMap<String, Arc<PluginProc>>,
+        ev: &MessageEvent,
+        event_id: &str,
+        name: &str,
+        arguments: &Value,
+        sent: &mut bool,
+    ) -> String {
+        let Some(p) = owners.get(name) else {
+            return format!("没有名为 {name} 的工具");
+        };
+        let src = format!("plugin:{}", p.plugin_name);
+        self.logs.info(&src, format!("模型调用工具 {name}"));
+        let call_id = ulid::Ulid::new().to_string().to_lowercase();
+        let Some(v) = p.tool_call(&call_id, event_id, ev, name, arguments, TOOL_WAIT).await else {
+            self.logs.warn(&src, format!("工具 {name} 超过 {} 秒没有返回", TOOL_WAIT.as_secs()));
+            return "工具执行超时".into();
+        };
+        if v.get("sent").and_then(Value::as_bool) == Some(true) {
+            *sent = true;
+        }
+        if let Some(err) = v.get("error").and_then(Value::as_str) {
+            self.logs.warn(&src, format!("工具 {name} 出错: {err}"));
+            return err.to_string();
+        }
+        v.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
     }
 
     async fn send_to_target(&self, t: &ReplyTarget, chain: &[Component]) {
@@ -1068,6 +1332,8 @@ impl Bot {
                             image_urls,
                             temperature: s.llm.temperature,
                             max_tokens: s.llm.max_tokens.max(16),
+                            tools: vec![],
+                            tool_choice_none: false,
                         };
                         match llm::chat(&self.shared.http, req).await {
                             Ok(text) => json!({"op": "llm_result", "req_id": req_id, "text": text}),
@@ -1087,6 +1353,25 @@ impl Bot {
     pub(crate) fn platforms_len(&self) -> usize {
         self.platforms.read().unwrap().len()
     }
+}
+
+fn valid_tool_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…（已截断）", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+/// True for an HTTP 4xx answer from the provider, which usually means the request shape was rejected.
+fn is_client_error(e: &anyhow::Error) -> bool {
+    let msg = e.to_string();
+    msg.strip_prefix("LLM 返回 4").is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        && !msg.starts_with("LLM 返回 401")
+        && !msg.starts_with("LLM 返回 429")
 }
 
 fn contexts_to_messages(v: Option<&Value>) -> Vec<ChatMessage> {
@@ -1129,6 +1414,7 @@ mod tests {
             dev_services: false,
             plugin_uid: None,
             plugin_gid: None,
+            plugin_idle_sleep: None,
         };
         let http = reqwest::Client::new();
         Arc::new(Shared {
@@ -1136,8 +1422,11 @@ mod tests {
                 http: http.clone(),
                 uv: "uv".into(),
                 python: "python3".into(),
+                python_version: String::new(),
                 cache_dir: dir.join("uv"),
+                shared_dir: dir.join("shared"),
                 codeload_base: None,
+                archive_proxy: None,
             },
             sidecar: Arc::new(Sidecar::new(
                 crate::plugin::SidecarCommand {

@@ -10,6 +10,7 @@ from collections import OrderedDict
 from typing import Any
 
 from astrbot import _wire
+from fish_sidecar import tools
 from astrbot._unsupported import UnsupportedFeature
 from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult, ResultContentType
@@ -41,7 +42,6 @@ HOOK_KINDS = {
 }
 
 INERT_EVENT_TYPES = {
-    EventType.OnCallingFuncToolEvent: "llm_tool",
     EventType.OnAgentBeginEvent: "on_agent_begin",
     EventType.OnAgentDoneEvent: "on_agent_done",
     EventType.OnUsingLLMToolEvent: "on_using_llm_tool",
@@ -51,6 +51,16 @@ INERT_EVENT_TYPES = {
 }
 
 PERMISSION_DENIED = "你没有权限使用这个指令"
+TOOL_SENT_DIRECTLY = "工具已把内容直接发给用户"
+TOOL_NO_OUTPUT = "工具执行完成，没有返回内容"
+
+
+def tool_name(md: StarHandlerMetadata) -> str | None:
+    """The function tool name of an ``llm_tool`` handler. Sub agents return None."""
+    if md.event_type != EventType.OnCallingFuncToolEvent or "agent_name" in md.extras_configs:
+        return None
+    name = md.extras_configs.get("tool_name")
+    return name if isinstance(name, str) and tools.TOOL_NAME.match(name) else None
 
 
 def describe_error(e: BaseException) -> str:
@@ -127,6 +137,10 @@ def handler_descriptor(md: StarHandlerMetadata) -> dict[str, Any] | None:
         else:
             return None
         return out
+    name = tool_name(md)
+    if name is not None:
+        out.update(kind="llm_tool", pattern=name, tool=tools.tool_schema(name, md.handler))
+        return out
     kind = HOOK_KINDS.get(md.event_type)
     if kind is None:
         return None
@@ -151,11 +165,17 @@ class Dispatcher:
         return [d for d in (handler_descriptor(md) for md in star_handlers_registry) if d is not None]
 
     def inert_handlers(self) -> list[str]:
-        return [
+        out = [
             f"{INERT_EVENT_TYPES[md.event_type]}:{md.handler_name}"
             for md in star_handlers_registry
             if md.event_type in INERT_EVENT_TYPES
         ]
+        out += [
+            f"llm_tool:{md.handler_name}"
+            for md in star_handlers_registry
+            if md.event_type == EventType.OnCallingFuncToolEvent and tool_name(md) is None
+        ]
+        return out
 
     def remember(self, event_id: str, event: AstrMessageEvent) -> None:
         self.events[event_id] = event
@@ -345,3 +365,55 @@ class Dispatcher:
         if req.image_urls:
             out["image_urls"] = req.image_urls
         return out
+
+    async def handle_tool_call(self, event_id: str, data: dict[str, Any], name: str, arguments: Any) -> dict[str, Any]:
+        """Runs an ``llm_tool`` handler and returns ``{"text", "sent"}`` or ``{"error"}``.
+
+        Returned and yielded strings form the tool result. Yielded or returned message
+        results are sent to the user directly, as in AstrBot.
+        """
+        md = next((m for m in star_handlers_registry if tool_name(m) == name), None)
+        if md is None:
+            return {"error": f"没有名为 {name} 的工具"}
+        event = self.events.get(event_id)
+        if event is None:
+            event = build_event(data)
+            event._fish_event_id = event_id
+            self.remember(event_id, event)
+        fn = bind(md, self.instance)
+        kwargs = tools.call_kwargs(fn, arguments if isinstance(arguments, dict) else {})
+        texts: list[str] = []
+        sent_before = event._has_send_oper
+        event._has_send_oper = False
+
+        async def take(item: Any) -> None:
+            if item is None:
+                return
+            if isinstance(item, (MessageEventResult, MessageChain)):
+                if isinstance(item, MessageEventResult):
+                    event.set_result(item)
+                else:
+                    await event.send(item)
+                await self.respond(event)
+            else:
+                texts.append(str(item))
+
+        try:
+            ret = fn(event, **kwargs)
+            if inspect.isasyncgen(ret):
+                async for item in ret:
+                    await take(item)
+            elif inspect.isawaitable(ret):
+                await take(await ret)
+            else:
+                await take(ret)
+        except Exception as e:
+            log.error("tool %s failed: %s\n%s", name, describe_error(e), traceback.format_exc(limit=8))
+            return {"error": f"工具执行出错：{describe_error(e)}", "sent": event._has_send_oper}
+        finally:
+            sent = event._has_send_oper
+            event._has_send_oper = sent_before or sent
+        text = "\n".join(t for t in texts if t)
+        if not text:
+            text = TOOL_SENT_DIRECTLY if sent else TOOL_NO_OUTPUT
+        return {"text": text, "sent": sent}

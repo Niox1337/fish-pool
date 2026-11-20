@@ -21,6 +21,8 @@ export type LlmKey = {
   via_gateway?: boolean
 }
 
+export type CreateBotInput = { name: string; key_id: string; model: string }
+
 export type BotSettings = {
   persona: { name: string; system_prompt: string; greeting: string }
   llm: {
@@ -97,7 +99,7 @@ export type SchemaField = {
 
 export type PluginSchema = Record<string, SchemaField>
 
-export type PluginStatus = 'installing' | 'running' | 'stopped' | 'error' | 'over_quota'
+export type PluginStatus = 'installing' | 'running' | 'sleeping' | 'stopped' | 'error' | 'over_quota'
 
 export type Plugin = {
   id: string
@@ -113,6 +115,8 @@ export type Plugin = {
   schema: PluginSchema | null
   status: PluginStatus
   status_detail?: string
+  /** Commit the plugin is pinned to. Empty or missing installs the head of its branch. */
+  commit?: string
   updated_at: number
 }
 
@@ -220,7 +224,7 @@ export type AdminOverview = {
   users: { total: number; new_7d: number; active: number; expiring_7d: number; expired: number }
   invites: { unused: number; used_7d: number }
   bots: { total: number; running: number; starting: number; stopped: number; error: number }
-  plugins: { total: number; running: number; installing: number; error: number; over_quota: number }
+  plugins: { total: number; running: number; sleeping: number; installing: number; error: number; over_quota: number }
   platforms: { qq_official: number; weixin_ilink: number; error: number }
   usage: { memory_bytes: number; storage_bytes: number; quota_memory_mb: number; quota_storage_mb: number }
   plugin_cpu: {
@@ -239,4 +243,108 @@ export type AdminOverview = {
   }
   nodes: AdminNode[]
   problems: AdminProblem[]
+}
+
+export type SysPluginRef = { user_id: string; bot_id: string; bot_name: string; plugin_id: string; label: string }
+
+export type SysProcess = {
+  pid: number
+  ppid: number
+  role: 'node' | 'sidecar' | 'plugin' | 'task' | 'other'
+  name: string
+  rss_bytes: number
+  pss_bytes: number | null
+  uss_bytes: number | null
+  swap_bytes: number | null
+  cpu_percent: number | null
+  threads: number | null
+  started_at: number | null
+  plugin?: SysPluginRef
+}
+
+export type SysPoint = {
+  ts: number
+  host_cpu: number | null
+  container_cpu: number | null
+  host_memory_used_bytes: number | null
+  container_memory_bytes: number | null
+}
+
+export type SysCounts = { total?: number } & Record<string, number | string | undefined>
+
+export type NodeSystem = {
+  node_id: string
+  version: string
+  started_at: number
+  interval_s: number
+  sampled_at: number | null
+  host: {
+    cpu_count: number
+    cpu_percent: number | null
+    load: [number, number, number] | null
+    uptime_s: number | null
+    memory_total_bytes: number
+    memory_available_bytes: number | null
+    swap_total_bytes: number | null
+    swap_free_bytes: number | null
+    kernel: string | null
+  } | null
+  container: {
+    memory_current_bytes: number
+    memory_max_bytes: number | null
+    memory_peak_bytes: number | null
+    memory_anon_bytes: number | null
+    memory_file_bytes: number | null
+    oom_kills: number
+    cpu_percent: number | null
+    cpu_limit_cores: number | null
+    pids_current: number | null
+    pids_max: number | null
+  } | null
+  processes: SysProcess[]
+  history: SysPoint[]
+  disk: { path: string; total_bytes: number; free_bytes: number; avail_bytes: number; inodes_total: number; inodes_free: number } | null
+  storage: { node_db_bytes: number; conversations_db_bytes: number; tenants_bytes: number; uv_cache_bytes: number | null }
+  cgroups_enabled: boolean
+  tenants: { user_id: string; memory_current_bytes: number; memory_max_bytes: number | null; memory_peak_bytes: number | null; oom_kills: number; procs: number }[]
+  bots: SysCounts
+  platforms: ({ kind: string } & SysCounts)[]
+  plugins: SysCounts
+  logs: {
+    window_s: number
+    errors: number
+    warns: number
+    bots: { bot_id: string; bot_name: string; user_id: string; errors: number; warns: number; last_error_at: number | null; last_error: string | null }[]
+  }
+}
+
+export type AdminSystemNode = {
+  id: string
+  base_url: string
+  online: boolean
+  latency_ms: number
+  last_seen: number | null
+  error?: string
+  system: NodeSystem | null
+}
+
+export type AdminSystem = {
+  generated_at: number
+  console: {
+    colo: string | null
+    d1: {
+      size_bytes: number | null
+      query_ms: number | null
+      round_trip_ms: number
+      tables: { name: string; rows: number }[]
+      users_admin: number
+      users_login_24h: number
+      sessions_active: number
+      bots_desired_running: number
+      bots_needs_push: number
+      qr_tasks_active: number
+    }
+  }
+  nodes: AdminSystemNode[]
+  users: Record<string, string>
 }

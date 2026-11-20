@@ -63,6 +63,7 @@ function Counts({ o }: { o: Overview }) {
         <dl className="grid grid-cols-3 gap-x-3 gap-y-3">
           <Stat label="总数" value={n(o.plugins.total)} />
           <Stat label="运行中" value={n(o.plugins.running)} />
+          <Stat label="休眠中" value={n(o.plugins.sleeping)} />
           <Stat label="安装中" value={n(o.plugins.installing)} />
           <Stat label="出错" value={n(o.plugins.error)} tone={o.plugins.error ? 'bad' : undefined} />
           <Stat label="超出配额" value={n(o.plugins.over_quota)} tone={o.plugins.over_quota ? 'bad' : undefined} />

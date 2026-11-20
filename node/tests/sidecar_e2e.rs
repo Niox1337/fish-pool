@@ -98,6 +98,7 @@ fn spec(dir: &Path, proc_id: &str, plugin: &str) -> LaunchSpec {
         venv_site_packages: None,
         data_dir: dir.join(proc_id),
         config: json!({}),
+        share_key: Some(format!("{plugin}-test")),
     }
 }
 
@@ -169,6 +170,7 @@ fn node_config(dir: &Path) -> Config {
         dev_services: false,
         plugin_uid: None,
         plugin_gid: None,
+        plugin_idle_sleep: None,
     }
 }
 
@@ -176,9 +178,12 @@ fn node_config(dir: &Path) -> Config {
 fn preinstall(cfg: &Config, plugin: &Value) {
     let name = plugin["name"].as_str().unwrap();
     let pdir = cfg.plugin_dir("u1", "b1", name);
-    let src = pdir.join("src");
+    let key = format!("{name}-test");
+    let entry = cfg.shared_plugins_dir().join(&key);
+    let src = entry.join("src");
     std::fs::create_dir_all(&src).unwrap();
-    std::fs::create_dir_all(pdir.join("venv")).unwrap();
+    std::fs::create_dir_all(entry.join("venv")).unwrap();
+    std::fs::write(entry.join(".fish_shared.json"), "{}").unwrap();
     std::fs::create_dir_all(pdir.join("data")).unwrap();
     for entry in std::fs::read_dir(sample_plugin(name)).unwrap() {
         let entry = entry.unwrap();
@@ -186,7 +191,8 @@ fn preinstall(cfg: &Config, plugin: &Value) {
             std::fs::copy(entry.path(), src.join(entry.file_name())).unwrap();
         }
     }
-    let marker = json!({"repo_url": plugin["repo_url"], "version": plugin["version"], "name": name});
+    let python = fish_node::plugin::install::python_version(&cfg.sidecar_python);
+    let marker = json!({"repo_url": plugin["repo_url"], "version": plugin["version"], "name": name, "python": python, "shared": key});
     std::fs::write(pdir.join(".fish_install.json"), marker.to_string()).unwrap();
 }
 
@@ -245,6 +251,84 @@ async fn real_sidecar_load_failure_sets_status_without_restart_loop() {
         .filter(|i| i.source == "plugin:broken_plugin" && i.message.contains("plugin load failed"))
         .count();
     assert_eq!(launches, 1);
+
+    node.shutdown().await;
+}
+
+async fn wait_status(node: &Arc<Node>, id: &str, want: &str, secs: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        let s = plugin_status(node, id);
+        if s["status"] == want {
+            return;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{id} did not reach {want}: {s}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn say(node: &Arc<Node>, text: &str, n: usize) -> String {
+    let bot = node.get("b1").unwrap();
+    bot.inject_loopback(fish_node::platform::loopback::Inject {
+        text: text.into(),
+        session_id: "s1".into(),
+        message_id: format!("m{n}"),
+    })
+    .await
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let outbox = bot.loopback_outbox();
+        if outbox.len() >= n {
+            return outbox[n - 1].to_string();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no reply to {text}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn real_sidecar_idle_plugins_sleep_and_wake_on_message() {
+    let Some(python) = sidecar_python() else { return };
+    let dir = tempfile::Builder::new().prefix("fn").tempdir_in("/tmp").unwrap();
+    let mut cfg = node_config(dir.path());
+    cfg.dev_services = true;
+    cfg.plugin_idle_sleep = Some(Duration::from_secs(2));
+    let quiet = json!({"id": "pc", "name": "cmd_plugin", "repo_url": "https://github.com/x/cmd", "version": "1", "enabled": true, "config": {}});
+    let bg = json!({"id": "pg", "name": "bg_plugin", "repo_url": "https://github.com/x/bg", "version": "1", "enabled": true, "config": {}});
+    preinstall(&cfg, &quiet);
+    preinstall(&cfg, &bg);
+    let node = Node::new(cfg, Some(command(&python))).unwrap();
+    let desired = serde_json::from_value(json!({
+        "bot_id": "b1", "user_id": "u1", "name": "小鱼", "running": true,
+        "platforms": [], "plugins": [quiet, bg]
+    }))
+    .unwrap();
+    node.put(desired).await.unwrap();
+
+    wait_status(&node, "pc", "sleeping", 30).await;
+    wait_status(&node, "pg", "sleeping", 30).await;
+    let bot = node.get("b1").unwrap();
+    assert!(bot.procs.read().unwrap().is_empty());
+
+    // a message wakes every sleeping plugin before it is dispatched
+    let reply = say(&node, "echo hi", 1).await;
+    assert!(reply.contains("echo:hi"), "{reply}");
+    assert_eq!(plugin_status(&node, "pc")["status"], "running");
+    let reply = say(&node, "bgstart", 2).await;
+    assert!(reply.contains("started"), "{reply}");
+
+    // the plugin with a background task keeps running while the other one sleeps again
+    wait_status(&node, "pc", "sleeping", 15).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(plugin_status(&node, "pg")["status"], "running");
+    let (items, _) = bot.logs.read_after(None, 1000);
+    assert!(
+        items
+            .iter()
+            .any(|i| i.source == "plugin:bg_plugin" && i.message.contains("暂不休眠")),
+        "no busy log"
+    );
 
     node.shutdown().await;
 }

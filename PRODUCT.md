@@ -32,7 +32,7 @@ A small daycare for bots: the platform looks after hosting, restarts, isolation 
 - Site: fish.niox.lol. Same origin API under `/api`.
 - QQ Official Bot binding through QQ's QR bind flow. A bot created this way can only join groups where the user is group owner.
 - WeChat via the iLink bot protocol: private chats only, replies only to incoming messages, 24 hour window, still in gradual rollout on WeChat's side.
-- Plugins are found by the user on https://cloud.astrbot.app/plugin and added by repository URL. Plugin settings come from each plugin's `_conf_schema.json`.
+- Plugins are found by the user on https://cloud.astrbot.app/market and added by repository URL. Plugin settings come from each plugin's `_conf_schema.json`.
 - Every user has a resource quota (memory, storage, bot count, plugin count). Usage is shown per source: bot core, conversation storage, and each plugin's memory and storage.
 - Users must supply their own OpenAI compatible LLM API key. The platform never provides model credit.
 

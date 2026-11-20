@@ -44,16 +44,26 @@ def safe_identifier(name: str) -> str:
     return f"p_{ident}" if ident[0].isdigit() else ident
 
 
-def prepare_paths(plugin_dir: Path, venv_site_packages: str | None, data_dir: Path, plugin_name: str) -> None:
-    """Puts the plugin venv and plugin dir first on sys.path and enters the data dir."""
+def add_import_paths(plugin_dir: Path, venv_site_packages: str | None) -> None:
+    """Puts the plugin venv and plugin dir first on sys.path."""
     if venv_site_packages:
         before = list(sys.path)
         site.addsitedir(venv_site_packages)
         added = [p for p in sys.path if p not in before]
         sys.path[:] = added + before
     sys.path.insert(0, str(plugin_dir))
+    importlib.invalidate_caches()
+
+
+def enter_data_dir(plugin_dir: Path, data_dir: Path, plugin_name: str) -> None:
+    """Enters the data dir, points HOME and the XDG dirs inside it and links ``plugins/<name>`` to the source."""
     data_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(data_dir)
+    home = data_dir / "home"
+    home.mkdir(exist_ok=True)
+    os.environ["HOME"] = str(home)
+    for var, sub in (("XDG_CONFIG_HOME", ".config"), ("XDG_CACHE_HOME", ".cache"), ("XDG_DATA_HOME", ".local/share")):
+        os.environ[var] = str(home / sub)
     link = data_dir / "plugins" / plugin_name
     try:
         link.parent.mkdir(parents=True, exist_ok=True)
@@ -61,7 +71,12 @@ def prepare_paths(plugin_dir: Path, venv_site_packages: str | None, data_dir: Pa
             link.symlink_to(plugin_dir, target_is_directory=True)
     except OSError:
         pass
-    importlib.invalidate_caches()
+
+
+def prepare_paths(plugin_dir: Path, venv_site_packages: str | None, data_dir: Path, plugin_name: str) -> None:
+    """Puts the plugin venv and plugin dir first on sys.path, enters the data dir and points HOME at it."""
+    add_import_paths(plugin_dir, venv_site_packages)
+    enter_data_dir(plugin_dir, data_dir, plugin_name)
 
 
 def _ensure_namespace(name: str) -> None:
@@ -177,10 +192,22 @@ def instantiate(md: StarMetadata, plugin_dir: Path, plugin_name: str, config_val
     )
 
 
-def load(plugin_dir: Path, venv_site_packages: str | None, data_dir: Path, plugin_name: str, config_values: dict | None) -> LoadedPlugin:
+def load(
+    plugin_dir: Path,
+    venv_site_packages: str | None,
+    data_dir: Path,
+    plugin_name: str,
+    config_values: dict | None,
+    preimported: tuple[str, types.ModuleType] | None = None,
+) -> LoadedPlugin:
+    """Imports and instantiates the plugin. ``preimported`` is the package and main module already in sys.modules."""
     plugin_dir = plugin_dir.resolve()
-    prepare_paths(plugin_dir, venv_site_packages, data_dir.resolve(), plugin_name)
-    package, main = import_plugin_package(plugin_dir, plugin_name)
+    if preimported is None:
+        prepare_paths(plugin_dir, venv_site_packages, data_dir.resolve(), plugin_name)
+        package, main = import_plugin_package(plugin_dir, plugin_name)
+    else:
+        enter_data_dir(plugin_dir, data_dir.resolve(), plugin_name)
+        package, main = preimported
     md = find_star(package, main.__name__)
     md.module = main
     md.root_dir_name = plugin_dir.name

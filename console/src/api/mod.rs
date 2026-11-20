@@ -4,6 +4,7 @@ mod admin;
 mod auth;
 mod bots;
 mod internal;
+pub mod archive;
 mod keys;
 mod platforms;
 mod plugins;
@@ -118,6 +119,7 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Get, ["usage"]) => usage::get(&req, app).await,
 
         (Get, ["admin", "overview"]) => admin::overview(&req, app).await,
+        (Get, ["admin", "system"]) => admin::system(&req, app).await,
         (Get, ["admin", "users"]) => admin::users(&req, app).await,
         (Get, ["admin", "users", id]) => admin::user(&req, app, id).await,
         (Patch, ["admin", "users", id]) => admin::patch_user(&mut req, app, id).await,

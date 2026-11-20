@@ -208,6 +208,9 @@ pub struct PluginRow {
     pub status: String,
     pub status_detail: String,
     pub install_rev: i64,
+    /// Commit the plugin is pinned to. Empty installs the head of its branch.
+    #[serde(default)]
+    pub commit_sha: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -236,6 +239,7 @@ impl PluginRow {
             "author": self.author,
             "description": self.description,
             "enabled": self.enabled != 0,
+            "commit": self.commit_sha,
             "config": self.config(),
             "config_revision": self.config_revision(),
             "schema": self.schema(),
@@ -301,6 +305,8 @@ pub struct DesiredPlugin {
     pub config: Value,
     /// Changes when a reinstall is requested.
     pub install_rev: i64,
+    /// Commit to install. Empty installs the head of the repository's branch.
+    pub commit: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -360,6 +366,7 @@ pub fn build_desired(
             enabled: p.enabled != 0,
             config: p.config(),
             install_rev: p.install_rev,
+            commit: p.commit_sha.clone(),
         })
         .collect();
     DesiredBot {
@@ -456,6 +463,7 @@ pub mod fixtures {
             status: "installing".into(),
             status_detail: String::new(),
             install_rev: 5,
+            commit_sha: "c".repeat(40),
             created_at: 1,
             updated_at: 1,
         }
@@ -496,6 +504,7 @@ mod tests {
         assert!(!d.platforms[2].enabled);
         assert_eq!(d.plugins[0].config, json!({"x": 1}));
         assert_eq!(d.plugins[0].install_rev, 5);
+        assert_eq!(d.plugins[0].commit, "c".repeat(40));
 
         let v = serde_json::to_value(&d).unwrap();
         for k in ["bot_id", "user_id", "name", "running", "quota", "settings", "llm", "platforms", "plugins"] {

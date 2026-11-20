@@ -214,6 +214,7 @@ struct Totals {
     bots_error: i64,
     plugins_total: i64,
     plugins_running: i64,
+    plugins_sleeping: i64,
     plugins_installing: i64,
     plugins_error: i64,
     plugins_over_quota: i64,
@@ -239,6 +240,7 @@ const TOTALS_SQL: &str = "SELECT \
 (SELECT COUNT(*) FROM bots WHERE status = 'error') AS bots_error, \
 (SELECT COUNT(*) FROM plugins) AS plugins_total, \
 (SELECT COUNT(*) FROM plugins WHERE status = 'running') AS plugins_running, \
+(SELECT COUNT(*) FROM plugins WHERE status = 'sleeping') AS plugins_sleeping, \
 (SELECT COUNT(*) FROM plugins WHERE status = 'installing') AS plugins_installing, \
 (SELECT COUNT(*) FROM plugins WHERE status = 'error') AS plugins_error, \
 (SELECT COUNT(*) FROM plugins WHERE status = 'over_quota') AS plugins_over_quota, \
@@ -316,7 +318,7 @@ pub async fn overview(req: &Request, app: &App) -> ApiResult<Reply> {
         },
         "bots": {"total": t.bots_total, "running": t.bots_running, "starting": t.bots_starting, "stopped": t.bots_stopped, "error": t.bots_error},
         "plugins": {
-            "total": t.plugins_total, "running": t.plugins_running, "installing": t.plugins_installing,
+            "total": t.plugins_total, "running": t.plugins_running, "sleeping": t.plugins_sleeping, "installing": t.plugins_installing,
             "error": t.plugins_error, "over_quota": t.plugins_over_quota,
         },
         "platforms": {"qq_official": t.platforms_qq, "weixin_ilink": t.platforms_weixin, "error": t.platforms_error},
@@ -325,6 +327,149 @@ pub async fn overview(req: &Request, app: &App) -> ApiResult<Reply> {
         "invites": {"unused": t.invites_unused, "used_7d": t.invites_used_7d},
         "nodes": nodes,
         "problems": problems,
+    })))
+}
+
+// ---------- system ----------
+
+const SYSTEM_TIMEOUT_MS: u64 = 8_000;
+
+/// Row counts of every D1 table plus a few derived counters, read in one query.
+const D1_SQL: &str = "SELECT \
+(SELECT COUNT(*) FROM users) AS users, \
+(SELECT COUNT(*) FROM users WHERE role = 'admin') AS users_admin, \
+(SELECT COUNT(*) FROM users WHERE last_login_at > ?1 - ?2) AS users_login_24h, \
+(SELECT COUNT(*) FROM sessions) AS sessions, \
+(SELECT COUNT(*) FROM sessions WHERE expires_at > ?1) AS sessions_active, \
+(SELECT COUNT(*) FROM bots) AS bots, \
+(SELECT COUNT(*) FROM bots WHERE desired_running = 1) AS bots_desired_running, \
+(SELECT COUNT(*) FROM bots WHERE needs_push = 1) AS bots_needs_push, \
+(SELECT COUNT(*) FROM platforms) AS platforms, \
+(SELECT COUNT(*) FROM plugins) AS plugins, \
+(SELECT COUNT(*) FROM llm_keys) AS llm_keys, \
+(SELECT COUNT(*) FROM invite_codes) AS invite_codes, \
+(SELECT COUNT(*) FROM invite_redemptions) AS invite_redemptions, \
+(SELECT COUNT(*) FROM email_codes) AS email_codes, \
+(SELECT COUNT(*) FROM captchas) AS captchas, \
+(SELECT COUNT(*) FROM rate_events) AS rate_events, \
+(SELECT COUNT(*) FROM qr_tasks) AS qr_tasks, \
+(SELECT COUNT(*) FROM qr_tasks WHERE expires_at > ?1) AS qr_tasks_active, \
+(SELECT COUNT(*) FROM node_tombstones) AS node_tombstones, \
+(SELECT COUNT(*) FROM nodes) AS nodes";
+
+/// Tables reported by [`D1_SQL`], in display order.
+pub const D1_TABLES: [&str; 14] = [
+    "users", "sessions", "bots", "platforms", "plugins", "llm_keys", "invite_codes", "invite_redemptions",
+    "email_codes", "captchas", "rate_events", "qr_tasks", "node_tombstones", "nodes",
+];
+
+/// Shapes the D1 counter row into table rows and named counters.
+pub fn d1_view(row: &Map<String, Value>, duration_ms: Option<f64>, size_bytes: Option<usize>, round_trip_ms: i64) -> Value {
+    let n = |k: &str| row.get(k).and_then(Value::as_i64).unwrap_or(0);
+    let tables: Vec<Value> = D1_TABLES.iter().map(|t| json!({"name": t, "rows": n(t)})).collect();
+    json!({
+        "size_bytes": size_bytes,
+        "query_ms": duration_ms,
+        "round_trip_ms": round_trip_ms,
+        "tables": tables,
+        "users_admin": n("users_admin"),
+        "users_login_24h": n("users_login_24h"),
+        "sessions_active": n("sessions_active"),
+        "bots_desired_running": n("bots_desired_running"),
+        "bots_needs_push": n("bots_needs_push"),
+        "qr_tasks_active": n("qr_tasks_active"),
+    })
+}
+
+/// User ids a node system report refers to, sorted and unique.
+pub fn system_user_ids(system: &Value) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut take = |v: Option<&Value>| {
+        if let Some(s) = v.and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            ids.push(s.to_string());
+        }
+    };
+    for t in system.get("tenants").and_then(Value::as_array).into_iter().flatten() {
+        take(t.get("user_id"));
+    }
+    for p in system.get("processes").and_then(Value::as_array).into_iter().flatten() {
+        take(p.get("plugin").and_then(|x| x.get("user_id")));
+    }
+    for b in system.pointer("/logs/bots").and_then(Value::as_array).into_iter().flatten() {
+        take(b.get("user_id"));
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub async fn system(req: &Request, app: &App) -> ApiResult<Reply> {
+    app.require_admin(req).await?;
+    let now = now_ms();
+    let (rows, meta): (Vec<Map<String, Value>>, _) = app.db.all_meta(D1_SQL, args![now, DAY_MS]).await?;
+    let d1_rtt = now_ms() - now;
+    let row = rows.into_iter().next().unwrap_or_default();
+    let d1 = d1_view(&row, meta.as_ref().and_then(|m| m.duration), meta.as_ref().and_then(|m| m.size_after), d1_rtt);
+
+    app.ensure_default_node().await?;
+    let nodes: Vec<NodeInfo> = app.db.all("SELECT id, base_url, last_seen_at FROM nodes ORDER BY id", &[]).await?;
+    let results = join_all(nodes.into_iter().map(|node| async move {
+        let started = now_ms();
+        let res = match app.node_client(&node.id).await {
+            Ok(c) => c.call(Method::Get, "/v1/system", None, SYSTEM_TIMEOUT_MS).await.map_err(|e| e.detail()),
+            Err(e) => Err(e.message),
+        };
+        (node, res, now_ms() - started)
+    }))
+    .await;
+    let mut user_ids = Vec::new();
+    let mut out = Vec::new();
+    for (mut node, res, latency) in results {
+        if res.is_ok() {
+            app.mark_node_seen(&node.id).await?;
+            node.last_seen_at = Some(now_ms());
+        }
+        let mut n = Map::new();
+        n.insert("id".into(), json!(node.id));
+        n.insert("base_url".into(), json!(node.base_url));
+        n.insert("last_seen".into(), json!(node.last_seen_at));
+        n.insert("latency_ms".into(), json!(latency));
+        match res {
+            Ok(v) => {
+                user_ids.extend(system_user_ids(&v));
+                n.insert("online".into(), json!(true));
+                n.insert("system".into(), v);
+            }
+            Err(e) => {
+                n.insert("online".into(), json!(false));
+                n.insert("system".into(), Value::Null);
+                n.insert("error".into(), json!(e));
+            }
+        }
+        out.push(Value::Object(n));
+    }
+    user_ids.sort();
+    user_ids.dedup();
+    let mut users = Map::new();
+    if !user_ids.is_empty() {
+        #[derive(Deserialize)]
+        struct U {
+            id: String,
+            email: String,
+        }
+        let marks = vec!["?"; user_ids.len()].join(", ");
+        let binds: Vec<JsValue> = user_ids.iter().map(|u| JsValue::from_str(u)).collect();
+        let found: Vec<U> = app.db.all(&format!("SELECT id, email FROM users WHERE id IN ({marks})"), &binds).await?;
+        for u in found {
+            users.insert(u.id, json!(u.email));
+        }
+    }
+    let colo = req.cf().map(|cf| cf.colo());
+    Ok(Reply::json(json!({
+        "generated_at": now_ms(),
+        "console": {"colo": colo, "d1": d1},
+        "nodes": out,
+        "users": users,
     })))
 }
 
@@ -763,6 +908,34 @@ mod tests {
         assert_eq!(parse_invite_cursor("123.FISH-AAAA-BBBB").unwrap(), (123, "FISH-AAAA-BBBB".to_string()));
         assert!(parse_invite_cursor("x.FISH").is_err());
         assert!(parse_invite_cursor("nodot").is_err());
+    }
+
+    #[test]
+    fn d1_view_lists_every_table() {
+        let mut row = Map::new();
+        for (i, t) in D1_TABLES.iter().enumerate() {
+            row.insert(t.to_string(), json!(i));
+        }
+        row.insert("bots_needs_push".into(), json!(2));
+        let v = d1_view(&row, Some(0.4), Some(53_248), 12);
+        assert_eq!(v["tables"].as_array().unwrap().len(), D1_TABLES.len());
+        assert_eq!(v["tables"][2], json!({"name": "bots", "rows": 2}));
+        assert_eq!(v["bots_needs_push"], 2);
+        assert_eq!(v["sessions_active"], 0);
+        assert_eq!(v["size_bytes"], 53_248);
+        assert_eq!(v["query_ms"], 0.4);
+        assert_eq!(v["round_trip_ms"], 12);
+    }
+
+    #[test]
+    fn system_user_ids_are_collected_once() {
+        let v = json!({
+            "tenants": [{"user_id": "u2"}, {"user_id": "u1"}],
+            "processes": [{"role": "node"}, {"role": "plugin", "plugin": {"user_id": "u1"}}, {"role": "plugin", "plugin": {"user_id": "u3"}}],
+            "logs": {"bots": [{"user_id": "u4"}, {"user_id": ""}]}
+        });
+        assert_eq!(system_user_ids(&v), vec!["u1", "u2", "u3", "u4"]);
+        assert!(system_user_ids(&json!({})).is_empty());
     }
 
     #[test]

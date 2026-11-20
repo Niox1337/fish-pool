@@ -138,7 +138,10 @@ pub(super) async fn list(
 ) -> ApiResult {
     let qq = connect(&node, &bot_id, &platform_id)?;
     let path = format!("{PANELS}?scope={}&limit=50", query.scope.as_str());
-    let value = call(&node, &qq, Method::GET, &path, None).await?;
+    let mut value = call(&node, &qq, Method::GET, &path, None).await?;
+    if value == json!({"is_end": true}) {
+        value["records"] = json!([]);
+    }
     if !value.get("records").is_some_and(Value::is_array) {
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "qq_panel_upstream", "QQ 返回的指令面板列表格式错误"));
     }

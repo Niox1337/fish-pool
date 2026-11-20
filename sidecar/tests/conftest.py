@@ -67,9 +67,11 @@ class ForkServerProcess:
 class Lines:
     """JSON lines reader with a backlog for messages that were read but not wanted yet."""
 
-    def __init__(self, reader: asyncio.StreamReader) -> None:
+    def __init__(self, reader: asyncio.StreamReader, hook: Callable[[dict], bool] | None = None) -> None:
         self.reader = reader
         self.backlog: list[dict[str, Any]] = []
+        # Called for every received message. A True result consumes the message.
+        self.hook = hook
 
     async def next(self, pred: Callable[[dict], bool] = lambda m: True, timeout: float = TIMEOUT) -> dict[str, Any]:
         for i, m in enumerate(self.backlog):
@@ -84,6 +86,8 @@ class Lines:
             if not line:
                 raise EOFError(f"socket closed, backlog={self.backlog}")
             m = json.loads(line)
+            if self.hook is not None and self.hook(m):
+                continue
             if pred(m):
                 return m
             self.backlog.append(m)
@@ -91,8 +95,18 @@ class Lines:
 
 class Control:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        self.lines = Lines(reader)
+        self.lines = Lines(reader, self.on_message)
         self.writer = writer
+        self.templates: list[dict] = []
+
+    def on_message(self, m: dict) -> bool:
+        """Confirms template memory groups like the node does when it has no cgroup support."""
+        if m.get("op") != "template":
+            return False
+        self.templates.append(m)
+        reply = {"op": "template_ready", "key": m["key"], "pid": m["pid"], "ok": True}
+        self.writer.write(json.dumps(reply).encode() + b"\n")
+        return True
 
     @classmethod
     async def connect(cls, path: str) -> Control:
@@ -249,7 +263,7 @@ class FakeNode:
 
     async def spawn_raw(
         self, plugin: str, config: dict | None = None, plugin_dir: str | None = None,
-        *, wait_for_memory_limit: bool = False,
+        *, wait_for_memory_limit: bool = False, share_key: str | None = None,
     ) -> tuple[str, dict, asyncio.Future]:
         """Sends spawn and returns the reply plus a future for the child connection."""
         assert self.control is not None
@@ -264,27 +278,36 @@ class FakeNode:
         srv = await asyncio.start_unix_server(on_conn, sock, limit=64 * 1024 * 1024)
         self.servers.append(srv)
         data_dir = os.path.join(self.tmp, proc_id, "data")
-        await self.control.write(
-            {
-                "op": "spawn",
-                "proc_id": proc_id,
-                "plugin_dir": plugin_dir or str(PLUGINS_DIR / plugin),
-                "venv_site_packages": None,
-                "data_dir": data_dir,
-                "config": config or {},
-                "plugin_name": plugin,
-                "bot_id": "bot1",
-                "socket": sock,
-                "wait_for_memory_limit": wait_for_memory_limit,
-            }
-        )
+        spec: dict[str, Any] = {
+            "op": "spawn",
+            "proc_id": proc_id,
+            "plugin_dir": plugin_dir or str(PLUGINS_DIR / plugin),
+            "venv_site_packages": None,
+            "data_dir": data_dir,
+            "plugin_name": plugin,
+            "bot_id": "bot1",
+            "socket": sock,
+            "wait_for_memory_limit": wait_for_memory_limit,
+        }
+        if share_key is None:
+            spec["config"] = config or {}
+        else:
+            spec["share_key"] = share_key
+            spec["config_on_socket"] = True
+        await self.control.write(spec)
         reply = await self.control.lines.next(lambda m: m.get("proc_id") == proc_id and m.get("op") in ("spawned", "error"))
         return proc_id, reply, conn
 
-    async def spawn(self, plugin: str, config: dict | None = None, llm: Callable[[dict], dict] = default_llm) -> PluginProc:
-        proc_id, reply, conn = await self.spawn_raw(plugin, config)
+    async def spawn(
+        self, plugin: str, config: dict | None = None, llm: Callable[[dict], dict] = default_llm,
+        *, share_key: str | None = None, plugin_dir: str | None = None,
+    ) -> PluginProc:
+        proc_id, reply, conn = await self.spawn_raw(plugin, config, plugin_dir, share_key=share_key)
         assert reply["op"] == "spawned", reply
         reader, writer = await asyncio.wait_for(conn, TIMEOUT)
+        if share_key is not None:
+            writer.write(json.dumps({"op": "config", "config": config or {}}).encode() + b"\n")
+            await writer.drain()
         lines = Lines(reader)
         logs = []
         while True:

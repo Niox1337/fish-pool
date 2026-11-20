@@ -65,6 +65,7 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels/{panel_id}", put(qq_panels::update).delete(qq_panels::delete))
         .route("/v1/usage", get(usage))
         .route("/v1/usage/summary", get(usage_summary))
+        .route("/v1/system", get(system))
         .route("/v1/qr/qq", post(qr_qq_create))
         .route("/v1/qr/qq/{task_id}", get(qr_qq_get))
         .route("/v1/qr/weixin", post(qr_wx_create))
@@ -197,6 +198,10 @@ async fn usage(State(node): State<Arc<Node>>, Query(q): Query<UsageQuery>) -> Ap
 
 async fn usage_summary(State(node): State<Arc<Node>>) -> ApiResult {
     Ok(Json(node.usage.summary(&node).await))
+}
+
+async fn system(State(node): State<Arc<Node>>) -> ApiResult {
+    Ok(Json(node.system.report(&node).await))
 }
 
 fn upstream(e: anyhow::Error) -> ApiError {

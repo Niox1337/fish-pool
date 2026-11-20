@@ -10,12 +10,16 @@ services:
         CARGO_REGISTRY: ${CARGO_REGISTRY:-}
         APT_MIRROR: ${APT_MIRROR:-}
         PIP_INDEX: ${PIP_INDEX:-}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim-trixie}
+        NODE_BIN: ${NODE_BIN:-build}
     image: fish-node:latest
     restart: unless-stopped
     environment:
       FISH_NODE_ID: ${FISH_NODE_ID:-node-1}
       FISH_NODE_SECRET: ${FISH_NODE_SECRET:?set FISH_NODE_SECRET in deploy/.env}
       FISH_CONSOLE_URL: ${FISH_CONSOLE_URL:-https://fish.niox.lol}
+      FISH_PLUGIN_IDLE_SECS: ${FISH_PLUGIN_IDLE_SECS:-1800}
+      FISH_SIDECAR_TEMPLATES: ${FISH_SIDECAR_TEMPLATES:-1}
       RUST_LOG: ${RUST_LOG:-info}
       FISH_PIP_INDEX: ${PIP_INDEX:-}
     volumes:
@@ -25,10 +29,11 @@ services:
     cgroup: private
     cap_add:
       - SYS_ADMIN
+      - SYS_PTRACE
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
-    mem_limit: 1600m
+    mem_limit: ${NODE_MEM_LIMIT:-2700m}
     pids_limit: 512
     stop_grace_period: 20s
     logging:

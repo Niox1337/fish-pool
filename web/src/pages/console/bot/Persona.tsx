@@ -111,6 +111,7 @@ export default function Persona({
         <Field
           label="系统提示词"
           htmlFor={ids.prompt}
+          hint="如果安装了人设插件，建议清空此处。"
           error={promptErr || undefined}
           aside={
             <span className="text-[13px] text-ink-3 tabular-nums">{promptLen} / {PROMPT_LIMIT}</span>
@@ -187,7 +188,7 @@ export default function Persona({
           <RangeField
             id={ids.turns}
             label="记住几轮对话"
-            hint="保留更多对话会消耗更多 token。"
+            hint="如果安装了记忆管理插件，建议设为 0 轮。"
             value={s.llm.context_turns}
             min={0}
             max={100}

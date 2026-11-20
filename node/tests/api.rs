@@ -25,6 +25,7 @@ fn config(dir: &std::path::Path) -> Config {
         dev_services: false,
         plugin_uid: None,
         plugin_gid: None,
+        plugin_idle_sleep: None,
     }
 }
 

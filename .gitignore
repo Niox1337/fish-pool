@@ -35,3 +35,4 @@ __pycache__/
 .impeccable/
 /docs/CONSOLE-UI-BRIEF.md
 .DS_Store
+/deploy/dist/

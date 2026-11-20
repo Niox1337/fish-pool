@@ -1,12 +1,13 @@
 import { Suspense, useEffect } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { Cpu, Gauge, KeyRound, LayoutDashboard, LogOut, Ticket, UserRound, Users, Fish } from 'lucide-react'
+import { Activity, Cpu, Gauge, KeyRound, LayoutDashboard, LogOut, Ticket, UserRound, Users, Fish } from 'lucide-react'
 import { api } from '@/api/client'
 import { keys, useMe } from '@/api/hooks'
 import { cn } from '@/lib/cn'
 import { daysLeft, fmtDate } from '@/lib/format'
 import { Skeleton } from '@/components/ui'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import logoMark from '@/assets/plates/logo-mark.webp'
 
 const main = [
@@ -19,6 +20,7 @@ const admin = [
   { to: '/app/admin', label: '总览', icon: LayoutDashboard, end: true },
   { to: '/app/admin/users', label: '用户', icon: Users },
   { to: '/app/admin/invites', label: '邀请码', icon: Ticket },
+  { to: '/app/admin/system', label: '系统', icon: Activity },
 ]
 
 function RailLink({ to, label, icon: Icon, end }: { to: string; label: string; icon: typeof Fish; end?: boolean }) {
@@ -177,16 +179,18 @@ export default function ConsoleShell() {
           </div>
         )}
         <main className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-10">
-          <Suspense
-            fallback={
-              <div className="grid gap-4">
-                <Skeleton className="h-9 w-48" />
-                <Skeleton className="h-40" />
-              </div>
-            }
-          >
-            <Outlet />
-          </Suspense>
+          <ErrorBoundary variant="inline" resetKey={loc.pathname}>
+            <Suspense
+              fallback={
+                <div className="grid gap-4">
+                  <Skeleton className="h-9 w-48" />
+                  <Skeleton className="h-40" />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
 

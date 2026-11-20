@@ -28,21 +28,27 @@ struct Events {
     events: Vec<Event>,
 }
 
-pub async fn node_events(req: &mut Request, app: &App) -> ApiResult<Reply> {
+/// Verifies a node signed request and returns the node id.
+pub async fn node_auth(req: &Request, app: &App, method: &str, body: &[u8]) -> ApiResult<String> {
     let header = |k: &str| req.headers().get(k).ok().flatten();
     let bad_sig = || ApiError::new(401, "bad_signature", "签名校验失败");
     let node_id = header("x-fish-node").ok_or_else(bad_sig)?;
     let (ts, sig) = (header("x-fish-ts"), header("x-fish-sig"));
     let path = signed_path(req.url()?.as_ref()).ok_or_else(bad_sig)?;
-    let body = read_body(req).await?;
     app.ensure_default_node().await?;
     let known = app.db.count("SELECT COUNT(*) AS n FROM nodes WHERE id = ?1", args![node_id]).await? > 0;
     let secret = app.node_secret(&node_id).filter(|_| known).ok_or_else(bad_sig)?;
-    match verify_request(&secret, ts.as_deref(), sig.as_deref(), now_ms(), "POST", &path, &body) {
-        Ok(()) => {}
-        Err(SigError::Skew) => return Err(ApiError::new(401, "bad_signature", "请求时间戳超出允许范围")),
-        Err(_) => return Err(bad_sig()),
+    match verify_request(&secret, ts.as_deref(), sig.as_deref(), now_ms(), method, &path, body) {
+        Ok(()) => Ok(node_id),
+        Err(SigError::Skew) => Err(ApiError::new(401, "bad_signature", "请求时间戳超出允许范围")),
+        Err(_) => Err(bad_sig()),
     }
+}
+
+pub async fn node_events(req: &mut Request, app: &App) -> ApiResult<Reply> {
+    let bad_sig = || ApiError::new(401, "bad_signature", "签名校验失败");
+    let body = read_body(req).await?;
+    let node_id = node_auth(req, app, "POST", &body).await?;
     let payload: Events = serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("事件格式错误：{e}")))?;
     if payload.node_id != node_id {
         return Err(bad_sig());
@@ -103,6 +109,11 @@ pub async fn run_maintenance(app: &App) -> ApiResult<()> {
         if let Err(e) = app.delete_on_node(&t.bot_id, &t.node_id).await {
             log_error(&format!("tombstone {}: {e}", t.bot_id));
         }
+    }
+    match super::plugins::check_updates(app, now).await {
+        Ok(0) => {}
+        Ok(n) => log(&format!("maintenance updated {n} plugins to new upstream commits")),
+        Err(e) => log_error(&format!("plugin update check failed: {}", e.message)),
     }
     let pushed = app.repush_pending(None, 50).await?;
     if pushed > 0 {

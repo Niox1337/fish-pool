@@ -21,6 +21,7 @@ export function BotStatusPill({ status }: { status: BotStatus }) {
 
 const pluginStatus: Record<PluginStatus, { label: string; tone: 'ok' | 'warn' | 'bad' | 'idle' }> = {
   running: { label: '运行中', tone: 'ok' },
+  sleeping: { label: '休眠中', tone: 'idle' },
   installing: { label: '安装中', tone: 'warn' },
   stopped: { label: '已停用', tone: 'idle' },
   error: { label: '出错了', tone: 'bad' },

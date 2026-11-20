@@ -4,7 +4,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router'
 import { Toaster } from 'sonner'
 import App from './App'
+import { reloadForNewVersion } from './components/ErrorBoundary'
 import './index.css'
+
+window.addEventListener('vite:preloadError', (e) => {
+  if (reloadForNewVersion()) e.preventDefault()
+})
 
 const queryClient = new QueryClient({
   defaultOptions: {

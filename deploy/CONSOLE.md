@@ -65,7 +65,7 @@ Worker 从环境读取以下名称。随机密钥都需要分别生成，不要�
 | `NODE_SECRET_NODE_1` | 可选 | 给 `node-1` 单独配置密钥时，用 `openssl rand -base64 32` 生成。它优先于 `NODE_SECRET`，对应节点的 `FISH_NODE_SECRET` 此时必须与它一致。 |
 | `ADMIN_EMAILS` | 可选 | 输入允许直接注册为管理员的邮箱，多个地址用英文逗号分隔。邮箱由所有者提供，不能用 OpenSSL 生成。 |
 | `RESEND_API_KEY` | 仅 `EMAIL_PROVIDER = "resend"` 时必需 | 在 Resend 后台创建发送邮件的 API 凭据，不能用 OpenSSL 生成。默认 Cloudflare 邮件方案不需要它。 |
-| `GITHUB_TOKEN` | 可选 | 在 GitHub 创建访问插件仓库所需的 token，用于提高插件检查的 API 限额，不能用 OpenSSL 生成。缺省时使用未认证的 GitHub API。 |
+| `GITHUB_TOKEN` | 可选 | 在 GitHub 创建访问插件仓库所需的 token，插件检查只在找不到 metadata.yaml 时调用 GitHub API，用来区分仓库不存在和不是插件。配置后这个提示更准确，不能用 OpenSSL 生成。 |
 | `AI_GATEWAY_TOKEN` | 可选 | 在 Cloudflare 后台创建带 AI Gateway Run 权限的 API token。配置后，OpenAI、Anthropic、Google Gemini 和 xAI 的请求由节点经 `AI_GATEWAY` 指向的网关转发。缺省时节点直连这些服务商。 |
 
 在 `console/` 逐项上传，命令会提示输入内容：

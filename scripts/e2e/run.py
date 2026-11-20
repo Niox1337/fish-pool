@@ -28,6 +28,7 @@ PERSONA = "You are the local test fish. Reply with the deterministic test respon
 TEMPERATURE = 0.5
 PROMPT = "Hello from the full stack test"
 REPLY = "local fish reply"
+TOOL_PROMPT = "Please use the echo tool"
 API_KEY = "sk-local-e2e-1234"
 MODEL = "fish-e2e"
 REPO = "https://github.com/fish-e2e/cmd_plugin"
@@ -79,9 +80,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"object": "list", "data": [{"id": MODEL, "object": "model"}]})
         if self.path == "/gh-api/repos/fish-e2e/cmd_plugin":
             return self.reply(200, {"private": False, "default_branch": "main"})
-        if self.path == "/gh-raw/fish-e2e/cmd_plugin/main/metadata.yaml":
+        if self.path in ("/gh-raw/fish-e2e/cmd_plugin/main/metadata.yaml", "/gh-raw/fish-e2e/cmd_plugin/HEAD/metadata.yaml"):
             return self.reply(200, METADATA, "text/plain")
-        if self.path == "/gh-raw/fish-e2e/cmd_plugin/main/_conf_schema.json":
+        if self.path in ("/gh-raw/fish-e2e/cmd_plugin/main/_conf_schema.json", "/gh-raw/fish-e2e/cmd_plugin/HEAD/_conf_schema.json"):
             return self.reply(200, CONFIG_SCHEMA)
         if self.path == "/codeload/fish-e2e/cmd_plugin/zip/HEAD":
             with self.server.lock:
@@ -106,9 +107,18 @@ class Handler(BaseHTTPRequestHandler):
             self.server.requests.append(body)
             with self.server.record.open("a") as f:
                 f.write(json.dumps(body, ensure_ascii=False) + "\n")
+        last = body["messages"][-1]
+        message = {"role": "assistant", "content": REPLY}
+        if last.get("content") == TOOL_PROMPT and body.get("tools"):
+            message = {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "call-local", "type": "function",
+                "function": {"name": "echo_tool", "arguments": json.dumps({"text": "from-llm"})},
+            }]}
+        elif last.get("role") == "tool":
+            message = {"role": "assistant", "content": f"tool said {last['content']}"}
         self.reply(200, {
             "id": "chatcmpl-local", "object": "chat.completion", "model": MODEL,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": REPLY}, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
         })
 
@@ -129,7 +139,10 @@ class Handler(BaseHTTPRequestHandler):
             record = panels.get(panel_id)
             if method == "GET" and url.path == "/v2/panels":
                 scope = parse_qs(url.query).get("scope", [None])[0]
-                return self.reply(200, {"records": [p for p in panels.values() if p["scope"] == scope], "next_cursor": "", "is_end": True})
+                records = [p for p in panels.values() if p["scope"] == scope]
+                if not records:
+                    return self.reply(200, {"is_end": True})
+                return self.reply(200, {"records": records, "next_cursor": "", "is_end": True})
             if method == "POST" and body["target_type"] == "all":
                 panel_id = "p_fixture_1"
                 panels[panel_id] = {"panel_id": panel_id, **body, "version": 1}
@@ -316,6 +329,7 @@ DATA_KEY={base64.b64encode(os.urandom(32)).decode()}
 NODE_SECRET={secret}
 GITHUB_API_BASE={external}/gh-api
 GITHUB_RAW_BASE={external}/gh-raw
+GITHUB_GIT_BASE={external}/gh-git
 GITHUB_TOKEN=
 ADMIN_EMAILS=admin@example.com
 ''')
@@ -342,10 +356,23 @@ ADMIN_EMAILS=admin@example.com
             "email": email, "password": "local-fish-123", "code": code, "invite_code": invite, "agree": True,
         })
         self.check("registered session and service are active", bool(self.cookie) and user["user"]["service_active"])
-        self.expect("LLM credential validated by local models endpoint", console, "POST", "/api/llm-keys", {
-            "name": "Local fixture", "base_url": external + "/v1", "model": MODEL, "api_key": API_KEY,
+        self.expect("first LLM credential saved", console, "POST", "/api/llm-keys", {
+            "name": "Earlier key", "base_url": external + "/v1", "model": "earlier-default", "api_key": API_KEY,
         })
-        bot = self.expect("bot created through console", console, "POST", "/api/bots", {"name": "Local test fish"})["id"]
+        key = self.expect("selected LLM credential validated by local models endpoint", console, "POST", "/api/llm-keys", {
+            "name": "Local fixture", "base_url": external + "/v1", "model": "saved-default", "api_key": API_KEY,
+        })
+        self.expect("bot creation requires a key", console, "POST", "/api/bots", {"name": "Local test fish"}, status=400)
+        self.expect("bot creation requires a model", console, "POST", "/api/bots", {"name": "Local test fish", "key_id": key["id"]}, status=400)
+        self.expect("bot creation rejects an unavailable key", console, "POST", "/api/bots", {
+            "name": "Local test fish", "key_id": "missing", "model": MODEL,
+        }, status=404)
+        created = self.expect("bot created with chosen key and model", console, "POST", "/api/bots", {
+            "name": "Local test fish", "key_id": key["id"], "model": MODEL,
+        })
+        self.check("the chosen key and model were saved", created["settings"]["llm"]["key_id"] == key["id"]
+                   and created["settings"]["llm"]["model"] == MODEL)
+        bot = created["id"]
         path = f"/api/bots/{bot}"
         self.expect("persona and temperature set through console", console, "PATCH", path, {"settings": {
             "persona": {"system_prompt": PERSONA}, "llm": {"temperature": TEMPERATURE},
@@ -409,10 +436,35 @@ ADMIN_EMAILS=admin@example.com
         self.check("command bypassed LLM and conversation history persisted", len(requests) == 2 and requests[1]["messages"] == [
             {"role": "system", "content": PERSONA}, {"role": "user", "content": PROMPT},
             {"role": "assistant", "content": REPLY}, {"role": "user", "content": "Follow-up"}], requests)
+        self.expect("tool chat injected", node, "POST", inject,
+                    {"text": TOOL_PROMPT, "session_id": "local-user", "message_id": "chat-tool"}, signed=True)
+        self.until("LLM answered with the plugin tool result", lambda: reply("chat-tool", "tool said updated:from-llm"))
+        with self.fixture.lock:
+            requests = list(self.fixture.requests)
+        offered = requests[-2].get("tools") or []
+        self.check("LLM was offered the plugin tool with its docstring schema", any(
+            t["function"]["name"] == "echo_tool" and t["function"]["parameters"]["required"] == ["text"] for t in offered), offered)
+        self.check("tool call and result were sent back to the LLM", requests[-1]["messages"][-2:] == [
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call-local", "type": "function",
+             "function": {"name": "echo_tool", "arguments": json.dumps({"text": "from-llm"})}}]},
+            {"role": "tool", "tool_call_id": "call-local", "content": "updated:from-llm"}], requests[-1]["messages"])
         usage = self.expect("console usage endpoint responds", console, "GET", "/api/usage")
         self.check("console reports nonzero bot and plugin memory", usage["memory_bytes"] > 0 and
                    any(s["bot_id"] == bot and s["kind"] == "core" and s["memory_bytes"] > 0 for s in usage["sources"]) and
                    any(s["bot_id"] == bot and s["plugin_id"] == plugin["id"] and s["memory_bytes"] > 0 for s in usage["sources"]), usage)
+        self.expect("real node system report", node, "GET", "/v1/system", signed=True)
+
+        def system_sees_plugin():
+            system = self.request(node, "GET", "/v1/system", signed=True)[1]
+            return (system["host"]["cpu_count"] >= 1 and
+                    system["host"]["memory_total_bytes"] > 0 and system["disk"]["total_bytes"] > 0 and
+                    any(p["role"] == "node" and p["rss_bytes"] > 0 for p in system["processes"]) and
+                    any(p["role"] == "plugin" and p["plugin"]["plugin_id"] == plugin["id"] and p["plugin"]["bot_id"] == bot
+                        for p in system["processes"]) and
+                    system["bots"]["total"] == 1 and system["plugins"].get("running") == 1 and len(system["history"]) >= 1)
+        self.until("node system report sees the node and the plugin process", system_sees_plugin, seconds=45)
+        self.expect("system report requires a signature", node, "GET", "/v1/system", status=401)
+        self.expect("non-admin cannot read the admin system view", console, "GET", "/api/admin/system", status=403)
         qq = self.expect("QQ platform bound in Webhook mode", console, "POST", path + "/platforms/qq/manual",
                          {"app_id": QQ_APP_ID, "secret": QQ_SECRET, "mode": "webhook"})
         self.check("platform view reports Webhook mode", qq["mode"] == "webhook", qq)
@@ -420,6 +472,8 @@ ADMIN_EMAILS=admin@example.com
         panel = {"remark": "Local menu", "items": [{"type": "command", "name": "/echo", "desc": "Local command"}]}
         empty = self.expect("QQ panel list read via the node", console, "GET", panels + "?scope=group")
         self.check("QQ group list starts empty", empty["records"] == [])
+        empty = self.expect("QQ direct-message panel list read via the node", console, "GET", panels + "?scope=c2c")
+        self.check("QQ direct-message list starts empty", empty["records"] == [])
         created = self.expect("QQ group panel published", console, "POST", panels, {"scope": "group", "panel": panel})
         panel_path = panels + "/" + created["panel_id"]
         record = self.expect("QQ group panel read back", console, "GET", panels + "?scope=group")["records"][0]

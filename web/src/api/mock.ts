@@ -1,4 +1,4 @@
-import type { AdminOverview, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, QqPanelRecord, Quota, Usage, User } from './types'
+import type { AdminOverview, AdminSystem, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, QqPanelRecord, Quota, Usage, User } from './types'
 
 const MB = 1024 * 1024
 const defaultQuota: Quota = { memory_mb: 128, storage_mb: 128, bots: null, plugins: null }
@@ -261,6 +261,14 @@ export async function mockFetch(method: string, path: string, body: any): Promis
   if (path === '/bots' && method === 'GET') return ok({ items: state.bots })
   if (path === '/bots' && method === 'POST') {
     if (state.user.quota.bots != null && state.bots.length >= state.user.quota.bots) return err(403, 'quota_exceeded', '小鱼名额已经用完了')
+    if (!body.key_id) return err(400, 'invalid_input', '请选择模型 Key')
+    const model = typeof body.model === 'string' ? body.model.trim() : ''
+    if (!model || [...model].length > 100) return err(400, 'invalid_input', '请选择有效的模型')
+    if (!state.keys.some((key) => key.id === body.key_id)) return err(404, 'not_found', '所选的模型 Key 不存在')
+    const settings = defaultSettings()
+    settings.persona.name = body.name || '大肥鱼'
+    settings.llm.key_id = body.key_id
+    settings.llm.model = model
     const b: Bot = {
       id: id(),
       name: body.name || '大肥鱼',
@@ -268,7 +276,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
       status: 'starting',
       created_at: now(),
       updated_at: now(),
-      settings: defaultSettings(),
+      settings,
       platforms: [],
       plugins: [],
     }
@@ -538,7 +546,7 @@ function adminRoute(method: string, path: string, body: any): Response {
       users: { total: all.length, new_7d: 3, active: all.filter((u) => u.service_active).length, expiring_7d: 1, expired: 1 },
       invites: { unused: invites.filter((i) => !i.revoked_at && i.used_count < i.max_uses).length, used_7d: 2 },
       bots: { total: 4, running: 3, starting: 0, stopped: 0, error: 1 },
-      plugins: { total: 17, running: 15, installing: 0, error: 1, over_quota: 1 },
+      plugins: { total: 17, running: 13, sleeping: 2, installing: 0, error: 1, over_quota: 1 },
       platforms: { qq_official: 3, weixin_ilink: 1, error: 1 },
       usage: { memory_bytes: 433 * MB, storage_bytes: 1232 * MB, quota_memory_mb: 256 * all.length, quota_storage_mb: 1024 * all.length },
       plugin_cpu: { percent: 43.5, reporting_nodes: 1, items: [
@@ -555,6 +563,7 @@ function adminRoute(method: string, path: string, body: any): Response {
     }
     return ok(o)
   }
+  if (path === '/admin/system') return ok(mockSystem())
   if (path.startsWith('/admin/users') && method === 'GET' && !/^\/admin\/users\/\w+/.test(path)) {
     const sp = new URLSearchParams(path.split('?')[1] ?? '')
     const q = sp.get('q') ?? ''
@@ -641,5 +650,71 @@ function demoBot(u: AdminUser): Bot {
       { id: 'p' + u.id, kind: 'qq_official', display_name: 'QQ 官方机器人', app_id: '10238' + u.id.slice(1), secret_masked: 'Xk3…9fQa', enabled: true, status: u.errors ? 'error' : 'connected', status_detail: u.errors ? 'AppSecret 已失效，请重新扫码' : undefined },
     ],
     plugins: Array.from({ length: u.plugins }, (_, i) => ({ ...samplePlugin('astrbot_plugin_demo' + i, '示例插件 ' + (i + 1), 12), status: 'running' as const })),
+  }
+}
+
+function mockSystem(): AdminSystem {
+  const t = now()
+  const wave = (i: number, base: number, amp: number) => Math.max(0, base + amp * Math.sin(i / 9) + amp * 0.4 * Math.sin(i / 2.3))
+  const history = Array.from({ length: 240 }, (_, i) => ({
+    ts: t - (239 - i) * 15_000,
+    host_cpu: Math.round(wave(i, 18, 9) * 10) / 10,
+    container_cpu: Math.round(wave(i, 9, 6) * 10) / 10,
+    host_memory_used_bytes: Math.round((1180 + wave(i, 40, 30)) * MB),
+    container_memory_bytes: Math.round((402 + wave(i, 20, 14)) * MB),
+  }))
+  const plug = (pid: number, user_id: string, bot_id: string, bot_name: string, plugin_id: string, label: string, pss: number, cpu: number) => ({
+    pid, ppid: 41, role: 'plugin' as const, name: 'python3', rss_bytes: Math.round(pss * 1.9 * MB), pss_bytes: pss * MB,
+    uss_bytes: Math.round(pss * 0.8 * MB), swap_bytes: 0, cpu_percent: cpu, threads: 3, started_at: t - pid * 60_000,
+    plugin: { user_id, bot_id, bot_name, plugin_id, label },
+  })
+  return {
+    generated_at: t,
+    console: {
+      colo: 'HKG',
+      d1: {
+        size_bytes: 1_327_104, query_ms: 0.61, round_trip_ms: 14,
+        tables: [['users', 61], ['sessions', 74], ['bots', 4], ['platforms', 5], ['plugins', 17], ['llm_keys', 6], ['invite_codes', 40],
+          ['invite_redemptions', 31], ['email_codes', 3], ['captchas', 12], ['rate_events', 208], ['qr_tasks', 2], ['node_tombstones', 0], ['nodes', 1]]
+          .map(([name, rows]) => ({ name: name as string, rows: rows as number })),
+        users_admin: 1, users_login_24h: 9, sessions_active: 52, bots_desired_running: 4, bots_needs_push: 0, qr_tasks_active: 1,
+      },
+    },
+    users: { u1: 'qunzhu@example.com', u2: 'astr.fan@example.com', u0: 'xiaoyu@example.com' },
+    nodes: [{
+      id: 'node-1', base_url: 'https://fish-node-1.niox.lol', online: true, latency_ms: 187, last_seen: t,
+      system: {
+        node_id: 'node-1', version: '0.1.0', started_at: t - 3 * 3600_000 - 720_000, interval_s: 15, sampled_at: t - 6_000,
+        host: { cpu_count: 2, cpu_percent: 21.4, load: [0.31, 0.24, 0.19], uptime_s: 23 * 86400 + 4 * 3600, memory_total_bytes: 3797 * MB,
+          memory_available_bytes: 2563 * MB, swap_total_bytes: 0, swap_free_bytes: 0, kernel: '6.8.0-51-generic' },
+        container: { memory_current_bytes: 418 * MB, memory_max_bytes: 1600 * MB, memory_peak_bytes: 702 * MB, memory_anon_bytes: 281 * MB,
+          memory_file_bytes: 119 * MB, oom_kills: 0, cpu_percent: 11.8, cpu_limit_cores: null, pids_current: 23, pids_max: 512 },
+        processes: [
+          plug(88, 'u2', 'b2', 'Astr 搬家', 'pl2', 'meme_manager', 96, 6.2),
+          plug(91, 'u1', 'b1', '群聊小鱼', 'pl1', 'daily_quote', 48, 0.4),
+          plug(93, 'u0', 'b0', '大肥鱼', 'pl0', 'astrbot_plugin_weather', 41, 0.1),
+          { pid: 7, ppid: 1, role: 'node', name: 'fish-node', rss_bytes: 38 * MB, pss_bytes: 36 * MB, uss_bytes: 34 * MB, swap_bytes: 0, cpu_percent: 2.1, threads: 9, started_at: t - 3 * 3600_000 - 720_000 },
+          { pid: 41, ppid: 40, role: 'sidecar', name: 'python3', rss_bytes: 61 * MB, pss_bytes: 29 * MB, uss_bytes: 18 * MB, swap_bytes: 0, cpu_percent: 0.1, threads: 1, started_at: t - 3 * 3600_000 },
+          { pid: 40, ppid: 7, role: 'sidecar', name: 'bwrap', rss_bytes: 2 * MB, pss_bytes: 1 * MB, uss_bytes: 1 * MB, swap_bytes: 0, cpu_percent: 0, threads: 1, started_at: t - 3 * 3600_000 },
+          { pid: 1, ppid: 0, role: 'other', name: 'tini', rss_bytes: 1 * MB, pss_bytes: 0.4 * MB, uss_bytes: 0.3 * MB, swap_bytes: 0, cpu_percent: 0, threads: 1, started_at: t - 3 * 3600_000 - 730_000 },
+        ],
+        history,
+        disk: { path: '/data', total_bytes: 69 * 1024 * MB, free_bytes: 59 * 1024 * MB, avail_bytes: 56 * 1024 * MB, inodes_total: 4_587_520, inodes_free: 4_201_334 },
+        storage: { node_db_bytes: 2 * MB, conversations_db_bytes: 11 * MB, tenants_bytes: 1232 * MB, uv_cache_bytes: 1840 * MB },
+        cgroups_enabled: true,
+        tenants: [
+          { user_id: 'u2', memory_current_bytes: 131 * MB, memory_max_bytes: 256 * MB, memory_peak_bytes: 241 * MB, oom_kills: 1, procs: 1 },
+          { user_id: 'u1', memory_current_bytes: 66 * MB, memory_max_bytes: 256 * MB, memory_peak_bytes: 90 * MB, oom_kills: 0, procs: 1 },
+          { user_id: 'u0', memory_current_bytes: 58 * MB, memory_max_bytes: 128 * MB, memory_peak_bytes: 61 * MB, oom_kills: 0, procs: 1 },
+        ],
+        bots: { total: 4, running: 3, error: 1 },
+        platforms: [{ kind: 'qq_official', total: 3, connected: 2, error: 1 }, { kind: 'weixin_ilink', total: 2, connected: 1, connecting: 1 }],
+        plugins: { total: 17, running: 13, sleeping: 2, error: 1, over_quota: 1 },
+        logs: { window_s: 3600, errors: 7, warns: 12, bots: [
+          { bot_id: 'b1', bot_name: '群聊小鱼', user_id: 'u1', errors: 5, warns: 3, last_error_at: t - 4 * 60_000, last_error: 'QQ 网关断开：invalid session，3 秒后重连' },
+          { bot_id: 'b2', bot_name: 'Astr 搬家', user_id: 'u2', errors: 2, warns: 9, last_error_at: t - 31 * 60_000, last_error: '插件 meme_manager 超出内存额度，已停止' },
+        ] },
+      },
+    }],
   }
 }

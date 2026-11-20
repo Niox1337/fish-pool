@@ -315,6 +315,9 @@ print("STAR", md.star_cls_type.__name__)
 for h in star_handlers_registry:
     d = handler_descriptor(h)
     print("HANDLER", h.event_type.name, h.handler_name, d and d["kind"])
+    if d and d["kind"] == "llm_tool":
+        import json
+        print("TOOL", json.dumps(d["tool"], ensure_ascii=False))
 """
     )
     env = dict(os.environ)
@@ -324,3 +327,292 @@ for h in star_handlers_registry:
     assert out.returncode == 0, out.stderr
     assert "STAR " in out.stdout
     assert "HANDLER" in out.stdout
+    import json as _json
+
+    tools = {t["name"]: t for t in (_json.loads(line[5:]) for line in out.stdout.splitlines() if line.startswith("TOOL "))}
+    assert "search_memes" in tools
+    assert tools["search_memes"]["parameters"]["required"] == ["q"]
+    assert tools["search_memes"]["parameters"]["properties"]["q"]["type"] == "string"
+    assert "trending_memes" not in tools or "required" not in tools["trending_memes"]["parameters"]
+
+
+def test_plugin_home_is_inside_data_dir(tmp_path):
+    plugin_dir = tmp_path / "src"
+    plugin_dir.mkdir()
+    data_dir = tmp_path / "data"
+    code = (
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "from fish_sidecar import loader\n"
+        "loader.prepare_paths(Path(sys.argv[1]), None, Path(sys.argv[2]), 'p')\n"
+        "(Path.home() / '.p').mkdir()\n"
+        "print(Path.home(), os.environ['XDG_CACHE_HOME'])\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "HOME": "/nonexistent"}
+    out = subprocess.run(
+        [sys.executable, "-c", code, str(plugin_dir), str(data_dir)], capture_output=True, text=True, env=env, timeout=30
+    )
+    assert out.returncode == 0, out.stderr
+    home = (data_dir / "home").resolve()
+    assert out.stdout.split() == [str(home), str(home / ".cache")]
+    assert (home / ".p").is_dir()
+
+
+def test_llm_tools(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            p = await node.spawn("tool_plugin")
+            tools = {h["pattern"]: h["tool"] for h in p.hello["plugin"]["handlers"] if h["kind"] == "llm_tool"}
+            assert set(tools) == {"lookup", "sticker", "boom"}
+            assert tools["lookup"] == {
+                "name": "lookup",
+                "description": "Looks a word up.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "q": {"type": "string", "description": "the word to look up"},
+                        "limit": {"type": "number", "description": "how many results"},
+                    },
+                    "required": ["q"],
+                },
+            }
+            assert tools["sticker"]["parameters"]["properties"] == {"caption": {"type": "string"}}
+
+            r = await p.event("hello")
+            event_id = r["event_id"]
+            await p.llm_hook(event_id, {"prompt": "hello"})
+
+            async def call(name, arguments, call_id):
+                await p.write({"op": "tool_call", "call_id": call_id, "event_id": event_id, "event": {}, "name": name, "arguments": arguments})
+                sends = []
+                while True:
+                    m = await p.recv(lambda m: (m.get("op") == "tool_result" and m.get("call_id") == call_id) or m.get("op") == "send")
+                    if m["op"] == "send":
+                        sends.append(m)
+                    else:
+                        return m, sends
+
+            res, sends = await call("lookup", {"q": "梗", "extra": 1}, "c1")
+            assert (res["text"], res["sent"], sends) == ("梗:3:yes", False, [])
+            res, sends = await call("sticker", {"caption": "cat"}, "c2")
+            assert res["sent"] is True and res["text"] == "工具已把内容直接发给用户"
+            assert [chain_text(s) for s in sends] == ["[sticker cat]"] and sends[0]["event_id"] == event_id
+            res, _ = await call("sticker", {"caption": "none"}, "c3")
+            assert (res["text"], res["sent"]) == ("no such sticker", False)
+            res, _ = await call("boom", {}, "c4")
+            assert "kaput" in res["error"]
+            res, _ = await call("missing", {}, "c5")
+            assert "missing" in res["error"]
+
+    run(scenario())
+
+
+def test_idle_check_reports_background_work(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            async def idle(p):
+                await p.write({"op": "idle_check"})
+                return (await p.recv(lambda m: m.get("op") == "idle_result"))["busy"]
+
+            quiet = await node.spawn("cmd_plugin")
+            assert await idle(quiet) == []
+            assert (await quiet.event("echo hi"))["matched"]
+            assert await idle(quiet) == []
+
+            bg = await node.spawn("bg_plugin")
+            assert await idle(bg) == []
+            assert (await bg.event("bgstart"))["matched"]
+            busy = await idle(bg)
+            assert any("后台任务" in r for r in busy) and any("定时器" in r for r in busy), busy
+            assert (await bg.event("bgstop"))["matched"]
+            assert await idle(bg) == []
+
+    run(scenario())
+
+
+def test_tool_docstring_parsing():
+    from fish_sidecar import tools
+
+    desc, params = tools.parse_docstring(
+        """Line one.
+        Line two.
+
+        Args:
+            a (int): first
+            b(array[string]): items
+                continued
+            c: untyped
+
+        Returns:
+            str: ignored
+        """
+    )
+    assert desc == "Line one.\nLine two."
+    assert params == {
+        "a": {"type": "integer", "description": "first"},
+        "b": {"type": "array", "items": {"type": "string"}, "description": "items continued"},
+        "c": {"type": "string", "description": "untyped"},
+    }
+
+
+TEMPLATES = sys.platform.startswith("linux")
+
+
+def parent_pid(pid: int) -> int:
+    stat = Path(f"/proc/{pid}/stat").read_text()
+    return int(stat.rsplit(")", 1)[1].split()[1])
+
+
+def test_shared_install_forks_from_one_template(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            a = await node.spawn("share_plugin", {"name": "a"}, share_key="share-1")
+            b = await node.spawn("share_plugin", {"name": "b"}, share_key="share-1")
+            assert len(node.control.templates) == (1 if TEMPLATES else 0)
+            replies = []
+            for p in (a, b):
+                r = await p.event("where")
+                replies.append(chain_text(r["sends"][0]).split("|"))
+                await p.wait_log("share plugin imported")
+                await p.wait_log("share plugin printed")
+            (cwd_a, home_a, data_a, name_a, forked_a), (cwd_b, _, data_b, name_b, _) = replies
+            assert (name_a, name_b) == ("a", "b")
+            assert cwd_a != cwd_b and data_a != data_b
+            assert cwd_a.startswith(os.path.realpath(node.tmp)) and home_a == os.path.join(cwd_a, "home")
+            assert forked_a == str(TEMPLATES)
+            if TEMPLATES:
+                assert parent_pid(a.pid) == fork_server.proc.pid
+            await node.control.write({"op": "kill", "proc_id": a.proc_id})
+            exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == a.proc_id)
+            assert exited["pid"] == a.pid
+            node.procs.remove(a)
+            r = await b.event("where")
+            assert chain_text(r["sends"][0]).split("|")[3] == "b"
+
+    run(scenario())
+
+
+@pytest.mark.skipif(not TEMPLATES, reason="templates need Linux")
+@pytest.mark.parametrize(
+    ("plugin", "command", "reason"),
+    [
+        ("cwd_plugin", "cwd", "工作目录"),
+        ("seed_plugin", "token", "随机数"),
+        ("thread_plugin", None, "线程"),
+        ("clock_plugin", "uptime", "导入时的时间"),
+        ("pid_plugin", "pid", "模板进程号"),
+    ],
+)
+def test_import_that_cannot_be_shared_loads_directly(fork_server, run, plugin, command, reason):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            first = await node.spawn(plugin, share_key=f"{plugin}-1")
+            note = await first.wait_log("未与其他机器人共享导入")
+            assert reason in note["message"]
+            templates = len(node.control.templates)
+            second = await node.spawn(plugin, share_key=f"{plugin}-1")
+            await second.wait_log("未与其他机器人共享导入")
+            assert len(node.control.templates) == templates
+            for p in (first, second):
+                assert parent_pid(p.pid) == fork_server.proc.pid
+                if command:
+                    r = await p.event(command)
+                    assert r["sends"]
+            if plugin == "seed_plugin":
+                tokens = {chain_text((await p.event(command))["sends"][0]) for p in (first, second)}
+                assert len(tokens) == 2
+            if plugin == "pid_plugin":
+                for p in (first, second):
+                    owner, current = chain_text((await p.event(command))["sends"][0]).split("|")
+                    assert owner == current
+
+    run(scenario())
+
+
+@pytest.mark.skipif(not TEMPLATES, reason="templates need Linux")
+def test_template_disabled_by_env(run, monkeypatch):
+    monkeypatch.setenv("FISH_SIDECAR_TEMPLATES", "0")
+    server = ForkServerProcess()
+    try:
+
+        async def scenario():
+            async with FakeNode(server) as node:
+                p = await node.spawn("share_plugin", {"name": "x"}, share_key="share-2")
+                assert node.control.templates == []
+                r = await p.event("where")
+                assert chain_text(r["sends"][0]).split("|")[3:] == ["x", "False"]
+
+        run(scenario())
+    finally:
+        server.stop()
+
+
+@pytest.mark.skipif(not TEMPLATES, reason="templates need Linux")
+def test_kill_before_template_fork_cancels_spawn(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            assert node.control is not None
+            await node.control.write(
+                {
+                    "op": "spawn",
+                    "proc_id": "slow1",
+                    "plugin_dir": str(Path(__file__).parent / "plugins" / "slow_plugin"),
+                    "data_dir": os.path.join(node.tmp, "slow1"),
+                    "plugin_name": "slow_plugin",
+                    "socket": os.path.join(node.tmp, "slow1.sock"),
+                    "share_key": "slow-1",
+                    "config_on_socket": True,
+                }
+            )
+            await asyncio.sleep(0.3)
+            await node.control.write({"op": "kill", "proc_id": "slow1"})
+            reply = await node.control.lines.next(lambda m: m.get("proc_id") == "slow1")
+            assert reply["op"] in ("error", "spawned")
+            if reply["op"] == "spawned":
+                exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == "slow1")
+                assert exited["pid"] == reply["pid"]
+            p = await node.spawn("slow_plugin", share_key="slow-1")
+            assert parent_pid(p.pid) == fork_server.proc.pid
+
+    run(scenario())
+
+
+def test_import_watch_recognizes_clock_readings_and_pid(tmp_path):
+    import datetime
+    import os
+    import time
+    import types
+
+    from fish_sidecar.template import ImportWatch
+
+    watch = ImportWatch(str(tmp_path))
+    watch.start()
+    module = types.ModuleType("probe_mod")
+    module.WALL = time.time()
+    module.MS = int(time.time() * 1000)
+    module.NOW = datetime.datetime.now()
+    module.PID = os.getpid()
+    module.LIMITS = {"timeout": 30.0, "retries": 3, "flag": True, "year": 2026}
+    watch.stop()
+    for name in ("WALL", "MS", "NOW"):
+        assert watch.clock_reading(getattr(module, name)), name
+    assert watch.clock_reading(datetime.datetime.now(datetime.timezone.utc))
+    assert not any(watch.clock_reading(v) for v in module.LIMITS.values())
+    assert not watch.clock_reading(time.time() + 3600)
+    assert watch.pid_read
+
+    plain = types.ModuleType("plain_mod")
+    plain.LIMITS = module.LIMITS
+    watch.scan_values([plain])
+    assert watch.reasons == []
+    watch.scan_values([module])
+    assert watch.reasons and "导入时的时间" in watch.reasons[0]
+
+    pid_only = types.ModuleType("pid_mod")
+    pid_only.PID = os.getpid()
+    other = ImportWatch(str(tmp_path))
+    other.scan_values([pid_only])
+    assert other.reasons == [], "a pid is reported only when the import read it"
+    other.pid_read = True
+    other.scan_values([pid_only])
+    assert "模板进程号" in other.reasons[0]

@@ -165,7 +165,11 @@ impl Usage {
         ];
         for spec in plugins {
             let dir = bot.shared.cfg.plugin_dir(&user, &bot.id, &spec.name);
-            let storage = tokio::task::spawn_blocking(move || dir_size(&dir)).await.unwrap_or(0);
+            let shared = bot.shared.clone();
+            // Each bot is charged the full size of the shared install it uses, as if it had its own copy.
+            let storage = tokio::task::spawn_blocking(move || dir_size(&dir) + shared.installer.shared_size(&dir))
+                .await
+                .unwrap_or(0);
             let pid = bot.procs.read().unwrap().get(&spec.id).map(|p| p.pid).unwrap_or(0);
             let (mem, cpu) = self.process(pid).await;
             out.push(Source {

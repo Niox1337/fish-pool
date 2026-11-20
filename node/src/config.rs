@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
@@ -24,6 +25,9 @@ pub struct Config {
     /// Unprivileged uid and gid for the plugin fork server when the node runs as root.
     pub plugin_uid: Option<u32>,
     pub plugin_gid: Option<u32>,
+    /// A plugin process stops after its bot receives no message for this long and starts again
+    /// on the next message. None disables it.
+    pub plugin_idle_sleep: Option<Duration>,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -38,6 +42,17 @@ pub fn decode_secret(text: &str) -> Vec<u8> {
         Ok(bytes) if !bytes.is_empty() => bytes,
         _ => text.as_bytes().to_vec(),
     }
+}
+
+/// Default for `FISH_PLUGIN_IDLE_SECS`.
+pub const DEFAULT_PLUGIN_IDLE_SECS: u64 = 1800;
+
+/// Parses `FISH_PLUGIN_IDLE_SECS`. Missing or invalid values use the default, 0 disables.
+fn idle_sleep(value: Option<&str>) -> Option<Duration> {
+    let secs = value
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_PLUGIN_IDLE_SECS);
+    (secs > 0).then(|| Duration::from_secs(secs))
 }
 
 fn dev_services_enabled(value: Option<&str>) -> bool {
@@ -78,6 +93,7 @@ impl Config {
             } else {
                 parse_id("FISH_PLUGIN_GID").or(parse_id("FISH_PLUGIN_UID"))
             },
+            plugin_idle_sleep: idle_sleep(env("FISH_PLUGIN_IDLE_SECS").as_deref()),
         })
     }
 
@@ -87,6 +103,15 @@ impl Config {
 
     pub fn tenants_dir(&self) -> PathBuf {
         self.data_dir.join("tenants")
+    }
+
+    /// Plugin code and venvs shared by every bot that installed the same archive.
+    pub fn shared_dir(&self) -> PathBuf {
+        self.data_dir.join("shared")
+    }
+
+    pub fn shared_plugins_dir(&self) -> PathBuf {
+        self.shared_dir().join("plugins")
     }
 
     pub fn bot_dir(&self, user_id: &str, bot_id: &str) -> PathBuf {
@@ -131,6 +156,14 @@ mod tests {
         assert!(!dev_services_enabled(Some("false")));
         assert!(dev_services_enabled(Some("1")));
         assert!(dev_services_enabled(Some("true")));
+    }
+
+    #[test]
+    fn idle_sleep_parsing() {
+        assert_eq!(idle_sleep(None), Some(Duration::from_secs(DEFAULT_PLUGIN_IDLE_SECS)));
+        assert_eq!(idle_sleep(Some("90")), Some(Duration::from_secs(90)));
+        assert_eq!(idle_sleep(Some("0")), None);
+        assert_eq!(idle_sleep(Some("x")), Some(Duration::from_secs(DEFAULT_PLUGIN_IDLE_SECS)));
     }
 
     #[test]

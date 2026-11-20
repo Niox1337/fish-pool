@@ -16,6 +16,7 @@ pub mod qr;
 pub mod sandbox;
 pub mod sign;
 pub mod store;
+pub mod system;
 pub mod usage;
 
 use std::sync::Arc;
@@ -30,6 +31,7 @@ pub async fn run(cfg: config::Config) -> Result<()> {
     let restored = node.restore().await?;
     tracing::info!(dev, restored, "fish-node {} listening on {listen}", node::VERSION);
     usage::spawn_sampler(node.clone());
+    system::spawn_system_sampler(node.clone());
     let app = api::router(node.clone());
     let listener = tokio::net::TcpListener::bind(&listen)
         .await

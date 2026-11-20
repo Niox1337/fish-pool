@@ -6,7 +6,7 @@ import whaleSurprised from '@/assets/whale/surprised.webp'
 import { Pupil } from '@/components/Pupil'
 import './landing-sections.css'
 
-const PLUGIN_MARKET = 'https://cloud.astrbot.app/plugin'
+const PLUGIN_MARKET = 'https://cloud.astrbot.app/market'
 
 const FAQ: { q: string; a: string }[] = [
   {

@@ -162,7 +162,7 @@ function PluginHealth({ bot }: { bot: Bot }) {
   const { data: me } = useMe()
   const count = (f: (s: Bot['plugins'][number]['status']) => boolean) => bot.plugins.filter((p) => f(p.status)).length
   const rows = [
-    { label: '运行中', n: count((s) => s === 'running'), tone: 'text-ok' },
+    { label: '运行中', n: count((s) => s === 'running' || s === 'sleeping'), tone: 'text-ok' },
     { label: '安装中', n: count((s) => s === 'installing'), tone: 'text-warn' },
     { label: '已停用', n: count((s) => s === 'stopped'), tone: 'text-ink-2' },
     { label: '需要看看', n: count((s) => s === 'error' || s === 'over_quota'), tone: 'text-bad' },

@@ -197,7 +197,7 @@ register_after_message_sent = _hook(EventType.OnAfterMessageSentEvent)
 
 
 def register_llm_tool(name: str | None = None, **kwargs: Any):
-    """Records a function tool. Fish LLM calls carry no tools, so it is never invoked."""
+    """Registers a function tool. The node offers it to the default LLM reply."""
 
     def decorator(fn):
         md = get_handler_or_create(fn, EventType.OnCallingFuncToolEvent)

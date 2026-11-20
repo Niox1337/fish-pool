@@ -87,6 +87,7 @@ DATA_KEY=$DATA_KEY
 NODE_SECRET=$NODE_SECRET
 GITHUB_API_BASE=$NODE/gh-api
 GITHUB_RAW_BASE=$NODE/gh-raw
+GITHUB_GIT_BASE=$NODE/gh-git
 ADMIN_EMAILS=admin@example.com
 EOF
 
@@ -349,11 +350,11 @@ req GET /api/llm-keys
 check "keys listed without plaintext" 200 '(.items | length) == 1 and (tostring | contains("sk-good") | not)'
 
 echo "bots"
-req POST /api/bots '{"name":"小鱼一号"}'
-check "bot created" 200 '.status == "starting" and .settings.llm.key_id != null and .platforms == [] and .plugins == []'
+req POST /api/bots "{\"name\":\"小鱼一号\",\"key_id\":\"$KEY_ID\",\"model\":\"fake-chat\"}"
+check "bot created" 200 ".status == \"starting\" and .settings.llm.key_id == \"$KEY_ID\" and .platforms == [] and .plugins == []"
 BOT=$(j .id)
 node_check "node received DesiredBot with decrypted key" "/_debug/desired/$BOT" ".running == true and .llm.api_key == \"sk-good-abcdef1234\" and .llm.model == \"fake-chat\" and .quota.memory_mb == 128 and .name == \"小鱼一号\""
-req POST /api/bots '{"name":"小鱼二号"}'
+req POST /api/bots "{\"name\":\"小鱼二号\",\"key_id\":\"$KEY_ID\",\"model\":\"fake-chat\"}"
 check "default quota allows another bot" 200 '.name == "小鱼二号"'
 SECOND_BOT=$(j .id)
 req DELETE "/api/bots/$SECOND_BOT"
@@ -455,6 +456,18 @@ req PATCH "/api/bots/$BOT/plugins/$PLUG" '{"enabled":false}'
 check "plugin disabled" 200 '.enabled == false and .status == "stopped"'
 req PATCH "/api/bots/$BOT/plugins/$PLUG" '{"enabled":true}'
 check "plugin enabled" 200 '.enabled == true'
+node_check "plugin pinned to the upstream commit" "/_debug/desired/$BOT" ".plugins[0].commit == \"$(printf 'a%.0s' $(seq 40))\""
+REV2=$(curl -s "$NODE/_debug/desired/$BOT" | jq .plugins[0].install_rev)
+NEW_COMMIT=$(printf 'b%.0s' $(seq 40))
+curl -s "$NODE/_debug/commit?sha=$NEW_COMMIT" > /dev/null
+sleep 0.01
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/__scheduled?cron=*/5+*+*+*+*")
+node_check "cron moves plugins to a new upstream commit" "/_debug/desired/$BOT" ".plugins[0].commit == \"$NEW_COMMIT\" and .plugins[0].version == \"v1.1.0\" and .plugins[0].install_rev > $REV2 and .plugins[0].config.times == 3"
+req GET "/api/bots/$BOT"
+check "automatic update shows the new version and commit" 200 "[.plugins[] | select(.id == \"$PLUG\")][0] | .version == \"v1.1.0\" and .commit == \"$NEW_COMMIT\""
+REV3=$(curl -s "$NODE/_debug/desired/$BOT" | jq .plugins[0].install_rev)
+curl -s -o /dev/null "$BASE/__scheduled?cron=*/5+*+*+*+*"
+node_check "a checked repository waits for the next interval" "/_debug/desired/$BOT" ".plugins[0].install_rev == $REV3"
 
 echo "usage"
 req GET /api/usage
@@ -466,6 +479,8 @@ req GET /api/admin/overview
 check "non-admin gets 403 on overview" 403 '.error.code == "forbidden"'
 req GET /api/admin/users
 check "non-admin gets 403 on users" 403 '.error.code == "forbidden"'
+req GET /api/admin/system
+check "non-admin gets 403 on system" 403 '.error.code == "forbidden"'
 req POST /api/admin/invites '{"days":30}'
 check "non-admin cannot create invites" 403 '.error.code == "forbidden"'
 
@@ -483,9 +498,14 @@ ADMIN_BODIES=""
 
 curl -s "$NODE/_debug/emit?bot_id=$BOT&kind=plugin_status&id=$PLUG&status=over_quota" > /dev/null
 req GET /api/admin/overview
-check "overview" 200 '.users.total >= 2 and .users.active >= 2 and .bots.total >= 1 and .plugins.total >= 1 and .platforms.qq_official >= 1 and .platforms.weixin_ilink >= 1 and .nodes[0].online == true and .nodes[0].version == "fake" and .nodes[0].last_seen > 0 and .usage.memory_bytes > 0 and .usage.quota_memory_mb >= 256 and (.invites | has("unused") and has("used_7d")) and .invites.used_7d >= 1'
+check "overview" 200 '.users.total >= 2 and .users.active >= 2 and .bots.total >= 1 and .plugins.total >= 1 and .platforms.qq_official >= 1 and .platforms.weixin_ilink >= 1 and .nodes[0].online == true and .nodes[0].version == "fake" and .nodes[0].last_seen > 0 and .usage.memory_bytes > 0 and .usage.quota_memory_mb >= 256 and (.plugins | has("sleeping")) and (.invites | has("unused") and has("used_7d")) and .invites.used_7d >= 1'
 check "overview reports plugin CPU from node" 200 ".plugin_cpu.reporting_nodes == 1 and .plugin_cpu.percent == 1 and (.plugin_cpu.items | any(.plugin_id == \"$PLUG\" and .node_id == \"node-1\" and .cpu_percent == 1 and .sampled_at > 0))"
 check "overview lists problems" 200 "[.problems[] | select(.kind == \"plugin\" and .id == \"$PLUG\" and .status == \"over_quota\" and .user_email == \"$EMAIL\")] | length == 1"
+ADMIN_BODIES="$ADMIN_BODIES$BODY"
+req GET /api/admin/system
+check "admin system view reports D1 tables" 200 '(.console.d1.tables | length) == 14 and ([.console.d1.tables[] | select(.name == "users")][0].rows >= 2) and .console.d1.round_trip_ms >= 0 and .generated_at > 0'
+check "admin system view embeds node metrics" 200 ".nodes[0].online == true and .nodes[0].latency_ms >= 0 and .nodes[0].system.host.cpu_count == 2 and .nodes[0].system.container.memory_max_bytes > 0 and (.nodes[0].system.processes | any(.role == \"plugin\" and .plugin.plugin_id == \"$PLUG\")) and .nodes[0].last_seen > 0"
+check "admin system view maps user emails" 200 ".users[\"$USER_ID\"] == \"$EMAIL\""
 ADMIN_BODIES="$ADMIN_BODIES$BODY"
 req GET /api/admin/users
 check "admin lists users" 200 "(.items | length) >= 2 and .cursor == null and ([.items[] | select(.email == \"$EMAIL\")][0] | .bots == 1 and .plugins == 1 and .memory_bytes > 0 and .storage_bytes > 0 and .last_login_at > 0 and .service_active == true)"
@@ -611,6 +631,8 @@ check "usage reports node_unreachable" 502 '.error.code == "node_unreachable"'
 req GET /api/bots
 check "D1 kept the change" 200 '.items[0].name == "离线改名" and .items[0].status == "error"'
 COOKIE="$ADMIN_COOKIE"
+req GET /api/admin/system
+check "system view survives node outage" 200 '.nodes[0].online == false and .nodes[0].system == null and (.nodes[0].error | length) > 0 and (.console.d1.tables | length) == 14'
 req GET /api/admin/overview
 check "overview survives node outage" 200 '.nodes[0].online == false and (.nodes[0].error | length) > 0 and .nodes[0].version == null and .usage.memory_bytes == 0'
 req GET /api/admin/users

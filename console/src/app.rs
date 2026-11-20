@@ -31,7 +31,7 @@ pub const SERVICE_EXPIRED_DETAIL: &str = "服务已到期，兑换新的邀请�
 
 pub const USER_COLS: &str = "id, email, password_hash, role, created_at, quota_memory_mb, quota_storage_mb, quota_bots, quota_plugins, last_login_at, service_until";
 pub const PLATFORM_COLS: &str = "id, bot_id, kind, display_name, app_id, secret_enc, extra_json, enabled, status, status_detail, created_at";
-pub const PLUGIN_COLS: &str = "id, bot_id, repo_url, name, display_name, version, author, description, enabled, config_json, schema_json, status, status_detail, install_rev, created_at, updated_at";
+pub const PLUGIN_COLS: &str = "id, bot_id, repo_url, name, display_name, version, author, description, enabled, config_json, schema_json, status, status_detail, install_rev, commit_sha, created_at, updated_at";
 pub const KEY_COLS: &str = "id, user_id, name, base_url, model, api_key_enc, created_at";
 
 /// Reads a cookie value from a `Cookie` header.
@@ -429,7 +429,7 @@ pub fn valid_platform_status(s: &str) -> bool {
     matches!(s, "connected" | "connecting" | "error" | "disabled")
 }
 pub fn valid_plugin_status(s: &str) -> bool {
-    matches!(s, "installing" | "running" | "stopped" | "error" | "over_quota")
+    matches!(s, "installing" | "running" | "sleeping" | "stopped" | "error" | "over_quota")
 }
 
 /// SQL expression for a new bot status_detail that keeps the expiry note while the bot

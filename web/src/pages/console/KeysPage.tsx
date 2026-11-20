@@ -1,11 +1,12 @@
 import { useRef, useState, type FormEvent } from 'react'
+import { useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
 import { keys, useBots, useLlmKeys } from '@/api/hooks'
 import { modelProviders, providerForEndpoint } from '@/api/modelProviders'
-import type { LlmKey } from '@/api/types'
+import type { CreateBotInput, LlmKey } from '@/api/types'
 import { Button, ConfirmDialog, ErrorNote, Field, Input, PageHeader, Skeleton, useFieldId } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import { fmtDate } from '@/lib/format'
@@ -24,7 +25,7 @@ function ProviderPlatformLink({ provider }: { provider: (typeof modelProviders)[
   )
 }
 
-function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: () => void; onCancel?: () => void }) {
+function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmKey) => void; onCancel?: () => void }) {
   const qc = useQueryClient()
   const [provider, setProvider] = useState('')
   const [name, setName] = useState('')
@@ -74,7 +75,7 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: () => void
       qc.invalidateQueries({ queryKey: keys.llmKeys })
       toast.success(`${k.name} 已保存`)
       setApiKey('')
-      onSaved()
+      onSaved(k)
     } catch (err) {
       if (err instanceof ApiError && err.code === 'llm_key_invalid') setErrors({ api_key: err.message })
       else setErrors({ form: err instanceof Error ? err.message : '没能保存，稍后再试' })
@@ -225,6 +226,9 @@ function KeyRow({ k, usedBy }: { k: LlmKey; usedBy: string[] }) {
 }
 
 export default function KeysPage() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const newBot = (location.state as { newBot?: CreateBotInput } | null)?.newBot
   const list = useLlmKeys()
   const bots = useBots()
   const [adding, setAdding] = useState(false)
@@ -232,18 +236,23 @@ export default function KeysPage() {
   const formId = useFieldId('add-key')
   const items = list.data ?? []
   const empty = list.isSuccess && items.length === 0
+  const showForm = !!newBot || empty || adding
 
   function closeForm() {
     setAdding(false)
     requestAnimationFrame(() => addButton.current?.focus())
   }
 
+  function returnToBot(draft: CreateBotInput) {
+    navigate('/app', { replace: true, state: { newBot: draft } })
+  }
+
   return (
     <div className="max-w-2xl">
       <PageHeader
         title="模型 Key"
-        description="添加后在「机器人设置」中选择。"
-        actions={!list.isLoading && !empty && !adding && (
+        description={newBot ? '保存后返回创建小鱼。' : '创建小鱼或调整机器人设置时可以选择。'}
+        actions={!list.isLoading && !showForm && (
           <Button ref={addButton} variant="primary" onClick={() => setAdding(true)}>
             <Plus aria-hidden />
             添加 Key
@@ -251,7 +260,11 @@ export default function KeysPage() {
         )}
       />
       <div className="grid gap-5">
-        {(empty || adding) && <AddKeyForm id={formId} onSaved={closeForm} onCancel={adding && !empty ? closeForm : undefined} />}
+        {showForm && (
+          <AddKeyForm id={formId}
+            onSaved={newBot ? (key) => returnToBot({ ...newBot, key_id: key.id, model: key.model }) : closeForm}
+            onCancel={newBot ? () => returnToBot(newBot) : adding && !empty ? closeForm : undefined} />
+        )}
         {list.isLoading && <Skeleton className="h-24" />}
         {list.error && <ErrorNote error={list.error} onRetry={() => list.refetch()} />}
         {items.length > 0 && (

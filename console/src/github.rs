@@ -66,6 +66,51 @@ pub fn api_repo_url(api_base: &str, r: &RepoRef) -> String {
     format!("{}/repos/{}/{}", api_base.trim_end_matches('/'), r.owner, r.repo)
 }
 
+pub const GIT_BASE: &str = "https://github.com";
+
+/// Git smart HTTP ref advertisement of the repository. It is not subject to the REST API rate limit.
+pub fn refs_url(git_base: &str, r: &RepoRef) -> String {
+    format!("{}/{}/{}.git/info/refs?service=git-upload-pack", git_base.trim_end_matches('/'), r.owner, r.repo)
+}
+
+pub fn api_commit_url(api_base: &str, r: &RepoRef, reference: &str) -> String {
+    format!("{}/repos/{}/{}/commits/{reference}", api_base.trim_end_matches('/'), r.owner, r.repo)
+}
+
+/// True for a full 40 character hexadecimal commit id.
+pub fn is_commit(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Commit of `refs/heads/<branch>` in a git-upload-pack ref advertisement, or of `HEAD` without a branch.
+pub fn advertised_commit(body: &[u8], branch: Option<&str>) -> Option<String> {
+    let want = match branch {
+        Some(b) => format!("refs/heads/{b}"),
+        None => "HEAD".to_string(),
+    };
+    let mut i = 0;
+    while i + 4 <= body.len() {
+        let len = usize::from_str_radix(std::str::from_utf8(&body[i..i + 4]).ok()?, 16).ok()?;
+        if len == 0 {
+            i += 4;
+            continue;
+        }
+        if len < 4 || i + len > body.len() {
+            return None;
+        }
+        let payload = &body[i + 4..i + len];
+        i += len;
+        let line = payload.split(|&b| b == 0).next().unwrap_or_default();
+        let line = String::from_utf8_lossy(line);
+        if let Some((sha, name)) = line.trim_end_matches('\n').split_once(' ') {
+            if name == want && is_commit(sha) {
+                return Some(sha.to_ascii_lowercase());
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PluginMeta {
     pub name: String,
@@ -181,6 +226,28 @@ mod tests {
         assert_eq!(sanitize_name("my-plugin_1"), "my-plugin_1");
         assert_eq!(sanitize_name("../evil"), "evil");
         assert_eq!(sanitize_name("中文"), "");
+    }
+
+    #[test]
+    fn reads_commits_from_ref_advertisements() {
+        fn pkt(line: &str) -> String {
+            format!("{:04x}{line}", line.len() + 4)
+        }
+        let head = "de5ce91a45f102bc73cf8687793f0abb432a8535";
+        let dev = "0123456789abcdef0123456789abcdef01234567";
+        let body = format!(
+            "{}0000{}{}{}0000",
+            pkt("# service=git-upload-pack\n"),
+            pkt(&format!("{head} HEAD\0multi_ack symref=HEAD:refs/heads/main\n")),
+            pkt(&format!("{head} refs/heads/main\n")),
+            pkt(&format!("{} refs/heads/dev\n", dev.to_uppercase())),
+        );
+        assert_eq!(advertised_commit(body.as_bytes(), None).as_deref(), Some(head));
+        assert_eq!(advertised_commit(body.as_bytes(), Some("dev")).as_deref(), Some(dev));
+        assert_eq!(advertised_commit(body.as_bytes(), Some("missing")), None);
+        assert_eq!(advertised_commit(b"<html>sign in</html>", None), None);
+        assert_eq!(advertised_commit(b"00ffshort", None), None);
+        assert!(is_commit(head) && !is_commit("HEAD") && !is_commit(&head[..39]));
     }
 
     #[test]

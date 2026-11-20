@@ -15,11 +15,13 @@ fn running_as_root() -> bool {
 
 // shortcut: one sandbox wraps the whole fork server so every plugin can write to all tenant dirs,
 // upgrade by restricting each forked child to its own data dir inside the sidecar.
-/// Bubblewrap arguments: read only root, private /tmp, node data hidden except tenants and run dirs.
+/// Bubblewrap arguments: read only root, private /tmp, node data hidden except tenants and run dirs,
+/// shared plugin code read only.
 pub fn bwrap_args(cfg: &Config) -> Vec<String> {
     let data = cfg.data_dir.display().to_string();
     let tenants = cfg.tenants_dir().display().to_string();
     let run = cfg.run_dir().display().to_string();
+    let shared = cfg.shared_dir().display().to_string();
     let mut a: Vec<String> = [
         "--ro-bind",
         "/",
@@ -32,6 +34,9 @@ pub fn bwrap_args(cfg: &Config) -> Vec<String> {
         "/tmp",
         "--tmpfs",
         &data,
+        "--ro-bind",
+        &shared,
+        &shared,
         "--bind",
         &tenants,
         &tenants,
@@ -85,6 +90,7 @@ pub fn sidecar_command(cfg: &Config) -> SidecarCommand {
         ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
         ("PYTHONDONTWRITEBYTECODE".to_string(), "1".to_string()),
         ("FISH_NODE_SECRET".to_string(), String::new()),
+        ("MALLOC_ARENA_MAX".to_string(), "2".to_string()),
     ];
     let as_root = running_as_root();
     let (uid, gid) = if as_root {
@@ -175,6 +181,11 @@ impl Cgroups {
         }
     }
 
+    /// The node's own cgroup directory, parent of the tenant groups.
+    pub fn base(&self) -> &Path {
+        &self.base
+    }
+
     fn tenant(&self, user_id: &str) -> PathBuf {
         self.base.join(format!("t-{}", safe_name(user_id)))
     }
@@ -198,6 +209,24 @@ impl Cgroups {
             return Err(std::io::Error::other("tenant memory.max is unlimited"));
         }
         write(&dir.join("cgroup.procs"), &pid.to_string())
+    }
+
+    /// Creates the memory group for plugin template processes and returns its directory.
+    pub fn templates_group(&self, memory_mb: u64) -> Option<PathBuf> {
+        let dir = self.base.join("templates");
+        let setup = || -> std::io::Result<()> {
+            std::fs::create_dir_all(&dir)?;
+            write(&dir.join("memory.max"), &(memory_mb * 1024 * 1024).to_string())?;
+            let _ = write(&dir.join("memory.swap.max"), "0");
+            Ok(())
+        };
+        match setup() {
+            Ok(()) => Some(dir),
+            Err(e) => {
+                tracing::warn!("cgroup templates group: {e}");
+                None
+            }
+        }
     }
 
     pub fn remove_tenant(&self, user_id: &str) {

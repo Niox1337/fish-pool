@@ -10,7 +10,7 @@ use crate::bot::{Bot, Shared};
 use crate::config::Config;
 use crate::events::Events;
 use crate::model::DesiredBot;
-use crate::plugin::install::Installer;
+use crate::plugin::install::{self, Installer};
 use crate::plugin::{Sidecar, SidecarCommand};
 use crate::qr::QrTasks;
 use crate::sandbox::{self, Cgroups};
@@ -19,12 +19,15 @@ use crate::store::{ConvDb, NodeDb};
 use crate::usage::{system_memory, Usage};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Memory limit of the group that holds plugin template processes.
+const TEMPLATE_MEMORY_MB: u64 = 512;
 
 pub struct Node {
     pub shared: Arc<Shared>,
     bots: Mutex<HashMap<String, Arc<Bot>>>,
     pub qr: Arc<QrTasks>,
     pub usage: Usage,
+    pub system: crate::system::System,
 }
 
 pub fn http_client() -> reqwest::Client {
@@ -42,6 +45,7 @@ impl Node {
     pub fn new(cfg: Config, sidecar_cmd: Option<SidecarCommand>) -> Result<Arc<Node>> {
         std::fs::create_dir_all(cfg.tenants_dir())?;
         std::fs::create_dir_all(cfg.run_dir())?;
+        std::fs::create_dir_all(cfg.shared_plugins_dir())?;
         let cache = cfg.data_dir.join("uv-cache");
         std::fs::create_dir_all(&cache)?;
         #[cfg(unix)]
@@ -51,29 +55,38 @@ impl Node {
             let _ = std::fs::set_permissions(&cfg.data_dir, std::fs::Permissions::from_mode(0o711));
         }
         let http = http_client();
-        let events = Events::start(cfg.console_url.clone().map(|base_url| SignedClient {
+        let console = cfg.console_url.clone().map(|base_url| SignedClient {
             http: http.clone(),
             base_url,
             node_id: cfg.node_id.clone(),
             key: cfg.secret.clone(),
-        }));
+        });
+        let codeload_base = if cfg.dev_services {
+            std::env::var("FISH_CODELOAD_BASE").ok()
+        } else {
+            None
+        };
+        let archive_proxy = if codeload_base.is_some() { None } else { console.clone() };
+        let events = Events::start(console);
         let cmd = sidecar_cmd.unwrap_or_else(|| sandbox::sidecar_command(&cfg));
+        let cgroups = Cgroups::init(&cfg);
+        let sidecar = Sidecar::new(cmd, cfg.run_dir());
+        sidecar.set_template_cgroup(cgroups.as_ref().and_then(|c| c.templates_group(TEMPLATE_MEMORY_MB)));
         let shared = Arc::new(Shared {
             db: Arc::new(NodeDb::open(&cfg.data_dir.join("node.db"))?),
             conv: Arc::new(ConvDb::open(&cfg.data_dir.join("conversations.db"))?),
-            sidecar: Arc::new(Sidecar::new(cmd, cfg.run_dir())),
+            sidecar: Arc::new(sidecar),
             events,
-            cgroups: Cgroups::init(&cfg),
+            cgroups,
             installer: Installer {
                 http: http.clone(),
                 uv: cfg.uv.clone(),
                 python: cfg.sidecar_python.clone(),
+                python_version: install::python_version(&cfg.sidecar_python),
                 cache_dir: cache,
-                codeload_base: if cfg.dev_services {
-                    std::env::var("FISH_CODELOAD_BASE").ok()
-                } else {
-                    None
-                },
+                shared_dir: cfg.shared_plugins_dir(),
+                codeload_base,
+                archive_proxy,
             },
             install_sem: Semaphore::new(1),
             storage_by_user: Mutex::new(HashMap::new()),
@@ -92,6 +105,7 @@ impl Node {
             bots: Mutex::new(HashMap::new()),
             qr: Arc::new(QrTasks::new(http)),
             usage: Usage::default(),
+            system: crate::system::System::default(),
         }))
     }
 
@@ -130,6 +144,7 @@ impl Node {
     pub async fn restore(&self) -> Result<usize> {
         let saved = self.shared.db.load_bots()?;
         let n = saved.len();
+        self.shared.gc_shared_plugins().await;
         for d in saved {
             let bot = Bot::new(self.shared.clone(), d.clone());
             self.bots.lock().unwrap().insert(d.bot_id.clone(), bot.clone());

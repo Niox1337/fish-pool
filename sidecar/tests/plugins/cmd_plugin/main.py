@@ -44,6 +44,15 @@ class CmdPlugin(Star):
     async def quiet(self, event: AstrMessageEvent):
         event.stop_event()
 
+    @filter.llm_tool(name="echo_tool")
+    async def echo_tool(self, event: AstrMessageEvent, text: str):
+        """Echoes text with the configured prefix.
+
+        Args:
+            text(string): text to echo
+        """
+        return f"{self.echo_prefix}:{text}"
+
     @filter.command("crash")
     async def crash(self, event: AstrMessageEvent):
         raise RuntimeError("boom")

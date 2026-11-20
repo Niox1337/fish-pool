@@ -81,6 +81,13 @@ impl Db {
         res.results::<T>().map_err(db_err)
     }
 
+    /// Like [`Db::all`], also returning the D1 result metadata (duration, database size).
+    pub async fn all_meta<T: DeserializeOwned>(&self, sql: &str, args: &[JsValue]) -> ApiResult<(Vec<T>, Option<worker::D1ResultMeta>)> {
+        let res = self.stmt(sql, args)?.all().await.map_err(db_err)?;
+        let meta = res.meta().ok().flatten();
+        Ok((res.results::<T>().map_err(db_err)?, meta))
+    }
+
     /// Runs a statement and returns the number of changed rows.
     pub async fn run(&self, sql: &str, args: &[JsValue]) -> ApiResult<i64> {
         let res = self.stmt(sql, args)?.run().await.map_err(db_err)?;

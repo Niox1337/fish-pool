@@ -4,10 +4,12 @@ import type {
   QqPanelRecord,
   QqPanelScope,
   AdminOverview,
+  AdminSystem,
   AdminUser,
   Invite,
   Bot,
   BotSettings,
+  CreateBotInput,
   LlmKey,
   LogLine,
   Platform,
@@ -91,7 +93,7 @@ export const api = {
 
   bots: () => get<{ items: Bot[] }>('/bots'),
   bot: (id: string) => get<Bot>(`/bots/${id}`),
-  createBot: (name: string) => post<Bot>('/bots', { name }),
+  createBot: (input: CreateBotInput) => post<Bot>('/bots', input),
   updateBot: (id: string, b: { name?: string; avatar?: string; settings?: BotSettings }) => patch<Bot>(`/bots/${id}`, b),
   botAction: (id: string, action: 'start' | 'stop' | 'restart') => post<Bot>(`/bots/${id}/${action}`),
   deleteBot: (id: string) => del<{ ok: true }>(`/bots/${id}`),
@@ -123,6 +125,7 @@ export const api = {
   usage: () => get<Usage>('/usage'),
 
   adminOverview: () => get<AdminOverview>('/admin/overview'),
+  adminSystem: () => get<AdminSystem>('/admin/system'),
   adminUsers: (q?: string, cursor?: string) => {
     const p = new URLSearchParams()
     if (q) p.set('q', q)

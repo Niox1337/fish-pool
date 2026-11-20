@@ -19,8 +19,14 @@ fn write_line(w: &Mutex<UnixStream>, v: &Value) {
     let _ = g.write_all(format!("{v}\n").as_bytes());
 }
 
-fn fake_plugin(stream: UnixStream, proc_id: String, ctrl: Arc<Mutex<UnixStream>>, config: Value) {
+fn fake_plugin(stream: UnixStream, proc_id: String, ctrl: Arc<Mutex<UnixStream>>) {
     let w = Mutex::new(stream.try_clone().unwrap());
+    let mut reader = BufReader::new(stream);
+    let mut first = String::new();
+    reader.read_line(&mut first).unwrap();
+    let first: Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(first["op"], "config");
+    let config = first["config"].clone();
     write_line(
         &w,
         &json!({"op": "log", "level": "info", "message": format!("loading with {config}")}),
@@ -58,7 +64,7 @@ fn fake_plugin(stream: UnixStream, proc_id: String, ctrl: Arc<Mutex<UnixStream>>
         ]}}),
     );
     let mut code = 0;
-    for line in BufReader::new(stream).lines() {
+    for line in reader.lines() {
         let Ok(line) = line else { break };
         let v: Value = serde_json::from_str(&line).unwrap();
         let event_id = v["event_id"].clone();
@@ -147,9 +153,10 @@ fn run_stub(sock: &str) {
                     &writer,
                     &json!({"op": "spawned", "proc_id": proc_id, "pid": std::process::id()}),
                 );
+                assert!(v.get("config").is_none(), "the config goes over the plugin socket");
+                assert_eq!(v["config_on_socket"], true);
                 let ctrl = writer.clone();
-                let config = v["config"].clone();
-                std::thread::spawn(move || fake_plugin(stream, proc_id, ctrl, config));
+                std::thread::spawn(move || fake_plugin(stream, proc_id, ctrl));
             }
             "kill" => {
                 if let Some(s) = children.lock().unwrap().remove(&proc_id) {
@@ -216,6 +223,7 @@ fn spec(dir: &std::path::Path, proc_id: &str) -> LaunchSpec {
         venv_site_packages: None,
         data_dir: dir.join("data"),
         config: json!({"greeting": "hi"}),
+        share_key: None,
     }
 }
 
@@ -290,7 +298,7 @@ async fn plugin_round_trip_through_sidecar_protocol() {
     assert_eq!(hooked["system_prompt"], "sys [hooked]");
 
     // config update
-    proc.send_config(&json!({"greeting": "yo"}));
+    proc.writer().send(&json!({"op": "config", "config": {"greeting": "yo"}}));
     let cfg = next_out(&mut out_rx).await;
     assert!(matches!(&cfg.msg, PluginOut::Log { message, .. } if message.contains("yo")));
 

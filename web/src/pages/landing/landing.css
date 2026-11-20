@@ -286,15 +286,15 @@
 }
 
 .lp-steps-title {
-  left: var(--r-steps-title-x);
+  left: var(--r-steps-cloud-x);
   top: var(--r-steps-title-y);
-  width: var(--r-steps-title-w);
+  width: var(--r-steps-cloud-w);
   height: var(--r-steps-title-h);
   display: grid;
   place-items: center;
   font-family: var(--font-display);
   font-weight: 900;
-  font-size: 3.8cqw;
+  font-size: 3cqw;
   line-height: 1;
   color: var(--color-ink);
   -webkit-text-stroke: 0.1em #fff;

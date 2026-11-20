@@ -8,10 +8,14 @@ use crate::model::LlmSpec;
 const CLAUDE_BASE_URL: &str = "https://api.anthropic.com/v1";
 const CLAUDE_API_VERSION: &str = "2026-10-21";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Provider native assistant message that requested tools. Sent back unchanged.
+    pub raw: Option<Value>,
+    /// Set on `tool` messages.
+    pub tool_call_id: Option<String>,
 }
 
 impl ChatMessage {
@@ -19,8 +23,50 @@ impl ChatMessage {
         ChatMessage {
             role: role.to_string(),
             content: content.into(),
+            ..Default::default()
         }
     }
+
+    /// The assistant turn that asked for tool calls, in the provider's own format.
+    pub fn assistant_raw(raw: Value) -> Self {
+        ChatMessage {
+            role: "assistant".into(),
+            raw: Some(raw),
+            ..Default::default()
+        }
+    }
+
+    pub fn tool_result(call_id: &str, content: impl Into<String>) -> Self {
+        ChatMessage {
+            role: "tool".into(),
+            content: content.into(),
+            tool_call_id: Some(call_id.to_string()),
+            ..Default::default()
+        }
+    }
+}
+
+/// A function the model may call. `parameters` is a JSON schema object.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolDef {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ChatReply {
+    pub text: String,
+    pub tool_calls: Vec<ToolCall>,
+    /// Assistant message to append before the tool results when `tool_calls` is not empty.
+    pub raw: Option<Value>,
 }
 
 pub struct ChatRequest<'a> {
@@ -30,6 +76,43 @@ pub struct ChatRequest<'a> {
     pub image_urls: Vec<String>,
     pub temperature: f32,
     pub max_tokens: u32,
+    pub tools: Vec<ToolDef>,
+    /// Keeps the tool definitions but tells the model not to call any.
+    pub tool_choice_none: bool,
+}
+
+fn openai_message(m: &ChatMessage) -> Value {
+    if let Some(raw) = &m.raw {
+        return raw.clone();
+    }
+    match &m.tool_call_id {
+        Some(id) => json!({"role": "tool", "tool_call_id": id, "content": m.content}),
+        None => json!({"role": m.role, "content": m.content}),
+    }
+}
+
+/// Claude messages. Consecutive tool results become one user turn of `tool_result` blocks.
+fn claude_messages(messages: &[ChatMessage]) -> Vec<Value> {
+    let mut out: Vec<Value> = vec![];
+    for m in messages.iter().filter(|m| m.role != "system") {
+        if let Some(raw) = &m.raw {
+            out.push(json!({"role": "assistant", "content": raw}));
+        } else if let Some(id) = &m.tool_call_id {
+            let block = json!({"type": "tool_result", "tool_use_id": id, "content": m.content});
+            let merged = out.last_mut().and_then(|last| {
+                let is_results = last["role"] == "user"
+                    && last["content"].as_array().is_some_and(|c| c.iter().all(|b| b["type"] == "tool_result"));
+                if is_results { last["content"].as_array_mut() } else { None }
+            });
+            match merged {
+                Some(blocks) => blocks.push(block),
+                None => out.push(json!({"role": "user", "content": [block]})),
+            }
+        } else {
+            out.push(json!({"role": m.role, "content": m.content}));
+        }
+    }
+    out
 }
 
 /// Builds the provider's chat request body.
@@ -37,34 +120,43 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
     let base_url = req.spec.base_url.trim_end_matches('/');
     let claude = base_url == CLAUDE_BASE_URL;
     let n = req.messages.len();
-    let messages: Vec<Value> = req
-        .messages
-        .iter()
-        .enumerate()
-        .filter(|(_, message)| !claude || message.role != "system")
-        .map(|(i, m)| {
-            if i + 1 == n && m.role == "user" && !req.image_urls.is_empty() {
-                let mut parts = vec![json!({"type": "text", "text": m.content})];
-                for u in &req.image_urls {
-                    let part = if claude {
-                        let source = match u.strip_prefix("data:").and_then(|uri| uri.split_once(";base64,")) {
-                            Some((media_type, data)) => json!({"type": "base64", "media_type": media_type, "data": data}),
-                            None => json!({"type": "url", "url": u}),
-                        };
-                        json!({"type": "image", "source": source})
-                    } else {
-                        json!({"type": "image_url", "image_url": {"url": u}})
-                    };
-                    parts.push(part);
-                }
-                json!({"role": "user", "content": parts})
+    let plain_tail = req.messages.last().is_some_and(|m| m.role == "user" && m.raw.is_none() && m.tool_call_id.is_none());
+    let mut messages: Vec<Value> = if claude {
+        claude_messages(&req.messages)
+    } else {
+        req.messages.iter().map(openai_message).collect()
+    };
+    if plain_tail && !req.image_urls.is_empty() {
+        let m = &req.messages[n - 1];
+        let mut parts = vec![json!({"type": "text", "text": m.content})];
+        for u in &req.image_urls {
+            let part = if claude {
+                let source = match u.strip_prefix("data:").and_then(|uri| uri.split_once(";base64,")) {
+                    Some((media_type, data)) => json!({"type": "base64", "media_type": media_type, "data": data}),
+                    None => json!({"type": "url", "url": u}),
+                };
+                json!({"type": "image", "source": source})
             } else {
-                json!({"role": m.role, "content": m.content})
-            }
-        })
-        .collect();
+                json!({"type": "image_url", "image_url": {"url": u}})
+            };
+            parts.push(part);
+        }
+        if let Some(last) = messages.last_mut() {
+            *last = json!({"role": "user", "content": parts});
+        }
+    }
     if claude {
         let mut body = json!({"model": req.model, "messages": messages, "max_tokens": req.max_tokens, "stream": false});
+        if !req.tools.is_empty() {
+            body["tools"] = req
+                .tools
+                .iter()
+                .map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.parameters}))
+                .collect();
+            if req.tool_choice_none {
+                body["tool_choice"] = json!({"type": "none"});
+            }
+        }
         let system: Vec<_> = req.messages.iter()
             .filter(|message| message.role == "system" && !message.content.is_empty())
             .map(|message| json!({"type": "text", "text": message.content}))
@@ -86,6 +178,16 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
         "temperature": req.temperature,
         "stream": false,
     });
+    if !req.tools.is_empty() {
+        body["tools"] = req
+            .tools
+            .iter()
+            .map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}))
+            .collect();
+        if req.tool_choice_none {
+            body["tool_choice"] = json!("none");
+        }
+    }
     let limit_field = match (base_url, req.model) {
         ("https://api.openai.com/v1", "gpt-6-luna" | "gpt-6.1-terra" | "gpt-6-sol") => {
             body["reasoning_effort"] = json!("none");
@@ -168,26 +270,37 @@ fn is_dashscope_beijing(base: &str) -> bool {
             .is_some_and(|workspace| !workspace.is_empty() && workspace.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
 }
 
-fn parse_claude_response(v: &Value) -> Result<String> {
+fn parse_claude_response(v: &Value) -> Result<ChatReply> {
     let blocks = v.get("content").and_then(Value::as_array)
         .ok_or_else(|| anyhow!("Claude 响应缺少 content"))?;
     let text: String = blocks.iter()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .collect();
-    Ok(text.trim().to_owned())
+    let tool_calls: Vec<ToolCall> = blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .map(|b| ToolCall {
+            id: b.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
+            name: b.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
+            arguments: b.get("input").cloned().unwrap_or_else(|| json!({})),
+        })
+        .collect();
+    let raw = (!tool_calls.is_empty()).then(|| Value::Array(blocks.clone()));
+    Ok(ChatReply { text: text.trim().to_owned(), tool_calls, raw })
 }
 
-/// Extracts the assistant text from a chat completion response.
-pub fn parse_response(v: &Value) -> Result<String> {
+/// Fields of an OpenAI compatible assistant message that are sent back with tool results.
+const ASSISTANT_ECHO_FIELDS: [&str; 4] = ["content", "tool_calls", "reasoning_content", "reasoning_details"];
+
+/// Extracts the assistant text and tool calls from a chat completion response.
+pub fn parse_response(v: &Value) -> Result<ChatReply> {
     if let Some(err) = v.get("error") {
         let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
         return Err(anyhow!("LLM 接口错误: {msg}"));
     }
-    let content = v
-        .pointer("/choices/0/message/content")
-        .ok_or_else(|| anyhow!("LLM 响应缺少 choices"))?;
-    let text = match content {
+    let message = v.pointer("/choices/0/message").ok_or_else(|| anyhow!("LLM 响应缺少 choices"))?;
+    let text = match message.get("content").unwrap_or(&Value::Null) {
         Value::String(s) => s.clone(),
         Value::Array(parts) => parts
             .iter()
@@ -197,7 +310,39 @@ pub fn parse_response(v: &Value) -> Result<String> {
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    Ok(strip_think(&text).trim().to_string())
+    let tool_calls: Vec<ToolCall> = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .map(|calls| {
+            calls
+                .iter()
+                .map(|c| {
+                    let args = c.pointer("/function/arguments").cloned().unwrap_or(Value::Null);
+                    let arguments = match args {
+                        Value::String(s) if s.trim().is_empty() => json!({}),
+                        Value::String(s) => serde_json::from_str(&s).unwrap_or(Value::String(s)),
+                        Value::Null => json!({}),
+                        other => other,
+                    };
+                    ToolCall {
+                        id: c.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        name: c.pointer("/function/name").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        arguments,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let raw = (!tool_calls.is_empty()).then(|| {
+        let mut out = json!({"role": "assistant"});
+        for k in ASSISTANT_ECHO_FIELDS {
+            if let Some(x) = message.get(k) {
+                out[k] = x.clone();
+            }
+        }
+        out
+    });
+    Ok(ChatReply { text: strip_think(&text).trim().to_string(), tool_calls, raw })
 }
 
 /// Removes a leading `<think>...</think>` reasoning block that some models emit inline.
@@ -212,6 +357,11 @@ fn strip_think(s: &str) -> &str {
 }
 
 pub async fn chat(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<String> {
+    Ok(chat_reply(http, req).await?.text)
+}
+
+/// Sends one chat request and returns the text and any tool calls.
+pub async fn chat_reply(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<ChatReply> {
     if req.spec.api_key.is_empty() || req.spec.base_url.is_empty() {
         return Err(anyhow!("未配置 LLM 密钥"));
     }
@@ -271,6 +421,8 @@ mod tests {
             image_urls: vec!["https://i".into()],
             temperature: 0.5,
             max_tokens: 10,
+            tools: vec![],
+            tool_choice_none: false,
         };
         let b = build_body(&req);
         assert_eq!(b["model"], "deepseek-chat");
@@ -289,6 +441,8 @@ mod tests {
                 image_urls: vec![],
                 temperature: 1.25,
                 max_tokens: 1024,
+                tools: vec![],
+                tool_choice_none: false,
             })
         };
         let openai = body("https://api.openai.com/v1", "gpt-6-luna");
@@ -378,6 +532,8 @@ mod tests {
             image_urls: vec!["https://example.com/a.png".into(), "data:image/png;base64,AAAA".into()],
             temperature: 0.7,
             max_tokens: 1024,
+            tools: vec![],
+            tool_choice_none: false,
         });
         assert_eq!(body["system"], json!([{"type": "text", "text": "guide"}]));
         assert_eq!(body["messages"], json!([{"role": "user", "content": [
@@ -394,7 +550,7 @@ mod tests {
             {"type": "text", "text": " hello"},
             {"type": "text", "text": " world "},
         ]});
-        assert_eq!(parse_claude_response(&reply).unwrap(), "hello world");
+        assert_eq!(parse_claude_response(&reply).unwrap().text, "hello world");
     }
 
     #[test]
@@ -415,6 +571,8 @@ mod tests {
             image_urls: vec![],
             temperature: 1.0,
             max_tokens: 64,
+            tools: vec![],
+            tool_choice_none: false,
         });
         assert_eq!(body["max_completion_tokens"], 64);
         assert_eq!(body["reasoning_effort"], "none");
@@ -423,9 +581,91 @@ mod tests {
     #[test]
     fn parse_variants() {
         let v = json!({"choices": [{"message": {"content": "<think>hmm</think>\n你好"}}]});
-        assert_eq!(parse_response(&v).unwrap(), "你好");
+        assert_eq!(parse_response(&v).unwrap().text, "你好");
         let v = json!({"error": {"message": "bad key"}});
         assert!(parse_response(&v).unwrap_err().to_string().contains("bad key"));
         assert!(parse_response(&json!({})).is_err());
     }
+
+    fn tool_request<'a>(spec: &'a LlmSpec, messages: Vec<ChatMessage>, none: bool) -> Value {
+        build_body(&ChatRequest {
+            spec,
+            model: &spec.model,
+            messages,
+            image_urls: vec![],
+            temperature: 0.5,
+            max_tokens: 100,
+            tools: vec![ToolDef {
+                name: "lookup".into(),
+                description: "Looks up".into(),
+                parameters: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+            }],
+            tool_choice_none: none,
+        })
+    }
+
+    #[test]
+    fn openai_tool_round_trip() {
+        let spec = LlmSpec { base_url: "https://example.com/v1".into(), model: "m".into(), api_key: "k".into(), ..Default::default() };
+        let response = json!({"choices": [{"message": {
+            "role": "assistant",
+            "content": null,
+            "reasoning_content": "think",
+            "refusal": null,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{\"q\":\"梗\"}"}}],
+        }}]});
+        let reply = parse_response(&response).unwrap();
+        assert_eq!(reply.text, "");
+        assert_eq!(reply.tool_calls, vec![ToolCall { id: "c1".into(), name: "lookup".into(), arguments: json!({"q": "梗"}) }]);
+        let raw = reply.raw.clone().unwrap();
+        assert!(raw.get("refusal").is_none());
+        assert_eq!(raw["reasoning_content"], "think");
+
+        let messages = vec![
+            ChatMessage::new("system", "s"),
+            ChatMessage::new("user", "hi"),
+            ChatMessage::assistant_raw(raw.clone()),
+            ChatMessage::tool_result("c1", "result"),
+        ];
+        let body = tool_request(&spec, messages.clone(), false);
+        assert_eq!(body["tools"][0], json!({"type": "function", "function": {"name": "lookup", "description": "Looks up", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}}}));
+        assert!(body.get("tool_choice").is_none());
+        assert_eq!(body["messages"][2], raw);
+        assert_eq!(body["messages"][3], json!({"role": "tool", "tool_call_id": "c1", "content": "result"}));
+        assert_eq!(tool_request(&spec, messages, true)["tool_choice"], "none");
+        let plain = parse_response(&json!({"choices": [{"message": {"content": "done"}}]})).unwrap();
+        assert!(plain.tool_calls.is_empty() && plain.raw.is_none());
+    }
+
+    #[test]
+    fn claude_tool_round_trip() {
+        let spec = LlmSpec { base_url: CLAUDE_BASE_URL.into(), model: "claude-sonnet-5-5".into(), api_key: "k".into(), ..Default::default() };
+        let blocks = json!([
+            {"type": "thinking", "thinking": "x", "signature": "sig"},
+            {"type": "tool_use", "id": "t1", "name": "lookup", "input": {"q": "a"}},
+            {"type": "tool_use", "id": "t2", "name": "lookup", "input": {"q": "b"}},
+        ]);
+        let reply = parse_claude_response(&json!({"content": blocks})).unwrap();
+        assert_eq!(reply.tool_calls.len(), 2);
+        assert_eq!(reply.tool_calls[1].arguments, json!({"q": "b"}));
+        let messages = vec![
+            ChatMessage::new("system", "s"),
+            ChatMessage::new("user", "hi"),
+            ChatMessage::assistant_raw(reply.raw.unwrap()),
+            ChatMessage::tool_result("t1", "ra"),
+            ChatMessage::tool_result("t2", "rb"),
+        ];
+        let body = tool_request(&spec, messages, true);
+        assert_eq!(body["tools"][0]["input_schema"]["properties"]["q"]["type"], "string");
+        assert_eq!(body["tool_choice"], json!({"type": "none"}));
+        assert_eq!(body["messages"], json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": blocks},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ra"},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "rb"},
+            ]},
+        ]));
+    }
+
 }

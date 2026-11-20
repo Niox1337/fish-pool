@@ -19,6 +19,8 @@ pub struct Inspected {
     pub repo_url: String,
     pub schema: Option<Value>,
     pub has_requirements: bool,
+    /// Commit the metadata was read at. None when GitHub did not report the latest commit.
+    pub commit: Option<String>,
 }
 
 impl Inspected {
@@ -32,6 +34,7 @@ impl Inspected {
             "repo_url": self.repo_url,
             "schema": self.schema,
             "has_requirements": self.has_requirements,
+            "commit": self.commit,
         })
     }
 }
@@ -59,15 +62,45 @@ async fn gh_get(app: &App, url: &str, api: bool) -> ApiResult<http::HttpResponse
     })
 }
 
-/// GitHub endpoints. Dev mode may point them at a local fake through GITHUB_API_BASE and GITHUB_RAW_BASE.
-fn bases(app: &App) -> (String, String) {
+struct Bases {
+    api: String,
+    raw: String,
+    git: String,
+}
+
+/// GitHub endpoints. Dev mode may point them at a local fake through GITHUB_API_BASE, GITHUB_RAW_BASE
+/// and GITHUB_GIT_BASE.
+fn bases(app: &App) -> Bases {
     let pick = |k: &str, d: &str| if app.dev { app.var(k).filter(|s| !s.is_empty()) } else { None }.unwrap_or_else(|| d.to_string());
-    (pick("GITHUB_API_BASE", github::API_BASE), pick("GITHUB_RAW_BASE", github::RAW_BASE))
+    Bases {
+        api: pick("GITHUB_API_BASE", github::API_BASE),
+        raw: pick("GITHUB_RAW_BASE", github::RAW_BASE),
+        git: pick("GITHUB_GIT_BASE", github::GIT_BASE),
+    }
+}
+
+/// Latest commit of the repository's branch, or of its default branch. Reads the git ref advertisement
+/// first and the REST API second. None when neither answers.
+pub async fn latest_commit(app: &App, repo: &RepoRef) -> Option<String> {
+    let b = bases(app);
+    if let Ok(resp) = gh_get(app, &github::refs_url(&b.git, repo), false).await {
+        if resp.status == 200 {
+            if let Some(c) = github::advertised_commit(&resp.body, repo.branch.as_deref()) {
+                return Some(c);
+            }
+        }
+    }
+    let reference = repo.branch.as_deref().unwrap_or("HEAD");
+    let resp = gh_get(app, &github::api_commit_url(&b.api, repo, reference), true).await.ok()?;
+    if resp.status != 200 {
+        return None;
+    }
+    resp.json()?.get("sha")?.as_str().filter(|s| github::is_commit(s)).map(|s| s.to_ascii_lowercase())
 }
 
 /// Fetches a raw file. Ok(None) means the file does not exist.
 async fn raw_file(app: &App, repo: &RepoRef, branch: &str, file: &str) -> ApiResult<Option<String>> {
-    let resp = gh_get(app, &github::raw_url(&bases(app).1, repo, branch, file), false).await?;
+    let resp = gh_get(app, &github::raw_url(&bases(app).raw, repo, branch, file), false).await?;
     match resp.status {
         200 => Ok(Some(resp.text())),
         404 => Ok(None),
@@ -75,27 +108,39 @@ async fn raw_file(app: &App, repo: &RepoRef, branch: &str, file: &str) -> ApiRes
     }
 }
 
+/// Explains a missing metadata file. Uses the GitHub API only on this path, because unauthenticated
+/// API calls from Worker egress addresses are usually rate limited.
+async fn missing_metadata(app: &App, repo: &RepoRef) -> ApiError {
+    let not_plugin = |msg: &str| ApiError::new(400, "not_astrbot_plugin", msg);
+    let unclear = || not_plugin("没有找到 metadata.yaml。请确认仓库存在、是公开仓库，并且是 AstrBot 插件");
+    let Ok(api) = gh_get(app, &github::api_repo_url(&bases(app).api, repo), true).await else {
+        return unclear();
+    };
+    match api.status {
+        200 if api.json().and_then(|v| v.get("private").and_then(Value::as_bool)) == Some(true) => repo_invalid("仅支持公开仓库"),
+        200 => not_plugin("仓库中没有 metadata.yaml，不是 AstrBot 插件"),
+        404 | 451 => repo_invalid("仓库不存在或不是公开仓库"),
+        _ => unclear(),
+    }
+}
+
 pub async fn inspect(app: &App, repo_url: &str) -> ApiResult<Inspected> {
     let repo = github::parse_repo_url(repo_url).ok_or_else(|| repo_invalid("仓库地址无效，请粘贴 https://github.com/作者/仓库 形式的链接"))?;
-    let api = gh_get(app, &github::api_repo_url(&bases(app).0, &repo), true).await?;
-    match api.status {
-        200 => {}
-        404 | 451 => return Err(repo_invalid("仓库不存在或不是公开仓库")),
-        403 | 429 => return Err(ApiError::new(502, "github_unavailable", "GitHub 请求过于频繁，请稍后再试")),
-        _ => return Err(github_down()),
-    }
-    let info = api.json().unwrap_or(Value::Null);
-    if info.get("private").and_then(Value::as_bool) == Some(true) {
-        return Err(repo_invalid("仅支持公开仓库"));
-    }
-    let default_branch = info.get("default_branch").and_then(Value::as_str).unwrap_or("main").to_string();
-    let branch = repo.branch.clone().unwrap_or(default_branch);
+    let commit = latest_commit(app, &repo).await;
+    inspect_at(app, &repo, commit).await
+}
+
+/// Reads the plugin metadata at `commit`, or at the head of the branch when it is None.
+async fn inspect_at(app: &App, repo: &RepoRef, commit: Option<String>) -> ApiResult<Inspected> {
+    let repo = repo.clone();
+    let branch = commit.clone().or_else(|| repo.branch.clone()).unwrap_or_else(|| "HEAD".to_string());
 
     let meta_text = match raw_file(app, &repo, &branch, "metadata.yaml").await? {
         Some(t) => t,
-        None => raw_file(app, &repo, &branch, "metadata.yml")
-            .await?
-            .ok_or_else(|| ApiError::new(400, "not_astrbot_plugin", "仓库中没有 metadata.yaml，不是 AstrBot 插件"))?,
+        None => match raw_file(app, &repo, &branch, "metadata.yml").await? {
+            Some(t) => t,
+            None => return Err(missing_metadata(app, &repo).await),
+        },
     };
     let meta = github::parse_metadata(&meta_text, &repo)
         .ok_or_else(|| ApiError::new(400, "not_astrbot_plugin", "metadata.yaml 缺少插件名称或格式不正确"))?;
@@ -105,7 +150,7 @@ pub async fn inspect(app: &App, repo_url: &str) -> ApiResult<Inspected> {
         Some(b) => format!("{}/tree/{b}", repo.canonical_url()),
         None => repo.canonical_url(),
     };
-    Ok(Inspected { meta, repo_url, schema, has_requirements })
+    Ok(Inspected { meta, repo_url, schema, has_requirements, commit })
 }
 
 #[derive(Deserialize)]
@@ -155,10 +200,10 @@ pub async fn install(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<Re
     let inserted = app
         .db
         .run(
-            "INSERT INTO plugins (id, bot_id, repo_url, name, display_name, version, author, description, enabled, config_json, schema_json, status, status_detail, install_rev, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, 'installing', '', ?11, ?11, ?11)",
+            "INSERT INTO plugins (id, bot_id, repo_url, name, display_name, version, author, description, enabled, config_json, schema_json, status, status_detail, install_rev, commit_sha, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, 'installing', '', ?11, ?12, ?11, ?11)",
             args![id, bot.id, ins.repo_url, ins.meta.name, ins.meta.display_name, ins.meta.version, ins.meta.author, ins.meta.description,
-                  serde_json::to_string(&config)?, schema_json, now],
+                  serde_json::to_string(&config)?, schema_json, now, ins.commit.clone().unwrap_or_default()],
         )
         .await;
     if let Err(e) = inserted {
@@ -220,26 +265,99 @@ pub async fn update(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiRes
     let bot = app.owned_bot(&user, bot_id).await?;
     let p = plugin_by_id(app, &bot.id, pid).await?;
     let ins = inspect(app, &p.repo_url).await?;
-    let mut config = ins.schema.as_ref().map(schema::defaults).unwrap_or_else(|| json!({}));
-    schema::merge_missing(&mut config, &p.config(), true);
-    let schema_json = ins.schema.as_ref().map(serde_json::to_string).transpose()?;
-    let now = now_ms();
-    let changed = app.db
-        .run(
-            "UPDATE plugins SET display_name = ?2, version = ?3, author = ?4, description = ?5, config_json = ?6, schema_json = ?7, \
-             status = CASE WHEN enabled = 1 THEN 'installing' ELSE 'stopped' END, status_detail = '', install_rev = ?8, updated_at = ?8 \
-             WHERE id = ?1 AND config_json = ?9 AND install_rev = ?10",
-            args![p.id, ins.meta.display_name, ins.meta.version, ins.meta.author, ins.meta.description, serde_json::to_string(&config)?, schema_json, now,
-                  p.config_json, p.install_rev],
-        )
-        .await?;
-    if changed == 0 {
+    if !apply_update(app, &p, &ins, now_ms()).await? {
         plugin_by_id(app, &bot.id, pid).await?;
         return Err(config_changed());
     }
     touch_bot(app, &bot.id).await?;
     app.push_bot(&bot.id).await?;
     Ok(Reply::json(plugin_by_id(app, &bot.id, pid).await?.view()))
+}
+
+/// Stores the metadata of `ins` on the plugin, keeps its settings, pins it to `ins.commit` and bumps
+/// `install_rev` so the node reinstalls it. Returns false when the plugin changed since `p` was read.
+async fn apply_update(app: &App, p: &PluginRow, ins: &Inspected, now: i64) -> ApiResult<bool> {
+    let mut config = ins.schema.as_ref().map(schema::defaults).unwrap_or_else(|| json!({}));
+    schema::merge_missing(&mut config, &p.config(), true);
+    let schema_json = ins.schema.as_ref().map(serde_json::to_string).transpose()?;
+    let changed = app
+        .db
+        .run(
+            "UPDATE plugins SET display_name = ?2, version = ?3, author = ?4, description = ?5, config_json = ?6, schema_json = ?7, \
+             status = CASE WHEN enabled = 1 THEN 'installing' ELSE 'stopped' END, status_detail = '', install_rev = ?8, updated_at = ?8, \
+             commit_sha = ?11 \
+             WHERE id = ?1 AND config_json = ?9 AND install_rev = ?10",
+            args![p.id, ins.meta.display_name, ins.meta.version, ins.meta.author, ins.meta.description, serde_json::to_string(&config)?, schema_json, now,
+                  p.config_json, p.install_rev, ins.commit.clone().unwrap_or_default()],
+        )
+        .await?;
+    Ok(changed > 0)
+}
+
+/// Repositories checked per run of `check_updates`.
+const UPDATE_REPOS_PER_RUN: i64 = 5;
+/// Time between two checks of the same repository.
+const UPDATE_INTERVAL_MS: i64 = 3600 * 1000;
+
+/// Looks for new commits of installed plugin repositories that were not checked within
+/// `UPDATE_INTERVAL_MS` and moves every plugin of a repository with a new commit to it, the same way
+/// a manual update does. Returns the number of updated plugins.
+pub async fn check_updates(app: &App, now: i64) -> ApiResult<usize> {
+    app.db
+        .batch(vec![
+            app.db.stmt("INSERT OR IGNORE INTO plugin_repos (repo_url) SELECT DISTINCT repo_url FROM plugins", args![])?,
+            app.db.stmt("DELETE FROM plugin_repos WHERE repo_url NOT IN (SELECT repo_url FROM plugins)", args![])?,
+        ])
+        .await?;
+    #[derive(Deserialize)]
+    struct Due {
+        repo_url: String,
+    }
+    let due: Vec<Due> = app
+        .db
+        .all(
+            "SELECT repo_url FROM plugin_repos WHERE checked_at <= ?1 ORDER BY checked_at LIMIT ?2",
+            args![now - UPDATE_INTERVAL_MS, UPDATE_REPOS_PER_RUN],
+        )
+        .await?;
+    let mut updated = 0;
+    let mut bots: Vec<String> = Vec::new();
+    for d in due {
+        app.db.run("UPDATE plugin_repos SET checked_at = ?2 WHERE repo_url = ?1", args![d.repo_url, now]).await?;
+        let Some(repo) = github::parse_repo_url(&d.repo_url) else { continue };
+        let Some(commit) = latest_commit(app, &repo).await else { continue };
+        let stale: Vec<PluginRow> = app
+            .db
+            .all(&format!("SELECT {PLUGIN_COLS} FROM plugins WHERE repo_url = ?1 AND commit_sha != ?2"), args![d.repo_url, commit])
+            .await?;
+        if !stale.is_empty() {
+            let ins = match inspect_at(app, &repo, Some(commit.clone())).await {
+                Ok(ins) => ins,
+                Err(e) => {
+                    crate::util::log_error(&format!("plugin update {} at {commit}: {}", d.repo_url, e.message));
+                    continue;
+                }
+            };
+            for p in &stale {
+                if ins.meta.name != p.name {
+                    crate::util::log_error(&format!("plugin update {} at {commit}: name changed to {}", d.repo_url, ins.meta.name));
+                    continue;
+                }
+                if apply_update(app, p, &ins, now).await? {
+                    updated += 1;
+                    if !bots.contains(&p.bot_id) {
+                        bots.push(p.bot_id.clone());
+                    }
+                }
+            }
+        }
+        app.db.run("UPDATE plugin_repos SET commit_sha = ?2 WHERE repo_url = ?1", args![d.repo_url, commit]).await?;
+    }
+    for bot_id in bots {
+        touch_bot(app, &bot_id).await?;
+        app.push_bot(&bot_id).await?;
+    }
+    Ok(updated)
 }
 
 pub async fn reload(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {

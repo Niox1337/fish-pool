@@ -1,54 +1,114 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Plus, Puzzle } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
-import { keys, useBots, useMe, useUsage } from '@/api/hooks'
-import type { Bot } from '@/api/types'
-import { Button, ErrorNote, Input, PageHeader, Skeleton } from '@/components/ui'
+import { keys, useBots, useLlmKeys, useMe, useUsage } from '@/api/hooks'
+import { providerForEndpoint } from '@/api/modelProviders'
+import type { Bot, CreateBotInput } from '@/api/types'
+import { Button, ErrorNote, Field, Input, PageHeader, Skeleton, useFieldId } from '@/components/ui'
 import { Pupil, statusMood } from '@/components/Pupil'
 import { FoodBar } from '@/components/FoodBar'
 import { BotStatusPill, PlatformBadge } from './bot/status'
+import { Select } from './bot/shared'
+import ModelField from './ModelField'
 
-function CreateBot({ disabled, reason, first }: { disabled: boolean; reason?: string; first?: boolean }) {
-  const [name, setName] = useState('')
+function CreateBot({ reason, first }: { reason?: string; first?: boolean }) {
+  const location = useLocation()
+  const initial = (location.state as { newBot?: CreateBotInput } | null)?.newBot
+  const [name, setName] = useState(initial?.name ?? '')
+  const [keyId, setKeyId] = useState(initial?.key_id ?? '')
+  const [model, setModel] = useState<string | null>(initial?.model || null)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const keysQuery = useLlmKeys()
+  const saved = keysQuery.data ?? []
+  const selected = keyId ? saved.find((key) => key.id === keyId) : saved.length === 1 ? saved[0] : undefined
+  const chosenModel = model ?? selected?.model ?? ''
+  const nameTooLong = [...name.trim()].length > 32
+  const modelTooLong = [...chosenModel.trim()].length > 100
+  const disabled = !!reason || busy
+  const canCreate = !disabled && !keysQuery.error && !!selected && !!chosenModel.trim() && !nameTooLong && !modelTooLong
+  const nameId = useFieldId('new-fish-name')
+  const keyFieldId = useFieldId('new-fish-key')
+  const modelId = useFieldId('new-fish-model')
+  const draft = { name, key_id: selected?.id ?? '', model: chosenModel }
+  const provider = selected && providerForEndpoint(selected.base_url)
+  const addKey = (
+    <Link to="/app/keys" state={{ newBot: draft }} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-2 text-sm font-semibold text-sky underline-offset-2 hover:underline">
+      <Plus className="size-4" aria-hidden /> 添加 Key
+    </Link>
+  )
 
   async function submit(e: FormEvent) {
     e.preventDefault()
+    if (!canCreate || !selected) return
     setBusy(true)
+    setError('')
     try {
-      const bot = await api.createBot(name.trim() || '大肥鱼')
+      const bot = await api.createBot({ name: name.trim() || '大肥鱼', key_id: selected.id, model: chosenModel.trim() })
       qc.invalidateQueries({ queryKey: keys.bots })
       toast.success(`${bot.name} 已创建，接下来可以绑定聊天平台`)
-      navigate(`/app/bots/${bot.id}/connect`)
+      navigate(`/app/bots/${bot.id}/connect`, { replace: !!initial })
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : '没能创建，稍后再试')
+      setError(err instanceof ApiError ? err.message : '没能创建，稍后再试')
+      if (err instanceof ApiError && err.status === 404) void qc.invalidateQueries({ queryKey: keys.llmKeys })
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
-      <label className="grid min-w-[200px] flex-1 gap-1.5">
-        <span className="text-sm font-semibold text-ink">{first ? '给第一条小鱼起个名字' : '新小鱼的名字'}</span>
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="大肥鱼" maxLength={24} disabled={disabled} />
-      </label>
-      <Button type="submit" variant="primary" loading={busy} disabled={disabled} title={reason}>
-        <Plus aria-hidden />
-        {first ? '开始托管' : '添加小鱼'}
-      </Button>
-      {reason && <p className="basis-full text-[13px] text-ink-3">{reason}</p>}
+    <form onSubmit={submit} className="grid min-w-0 gap-4">
+      <Field label={first ? '给第一条小鱼起个名字' : '新小鱼的名字'} htmlFor={nameId} error={nameTooLong ? '名字最多 32 个字符' : undefined}>
+        <Input id={nameId} value={name} onChange={(e) => setName(e.target.value)} placeholder="大肥鱼" aria-invalid={nameTooLong || undefined} disabled={disabled} />
+      </Field>
+      {keysQuery.isPending ? <Skeleton className="h-16" /> : keysQuery.error ? (
+        <ErrorNote error={keysQuery.error} onRetry={() => keysQuery.refetch()} />
+      ) : saved.length === 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-paper-3 px-3.5 py-1.5">
+          <p className="text-sm text-ink-2">先添加一个模型 Key。</p>
+          {!disabled && addKey}
+        </div>
+      ) : (
+        <div className="grid min-w-0 items-end gap-4 md:grid-cols-2">
+          <Field label="模型 Key" htmlFor={keyFieldId} aside={!disabled && addKey}>
+            <Select id={keyFieldId} value={selected?.id ?? ''} disabled={disabled} onChange={(event) => {
+              setKeyId(event.target.value)
+              setModel(null)
+              setError('')
+            }} required>
+              <option value="" disabled>选择已保存的 Key</option>
+              {saved.map((key) => <option key={key.id} value={key.id}>{key.name}</option>)}
+            </Select>
+          </Field>
+          {selected ? (
+            <ModelField key={selected.id} id={modelId} value={chosenModel} onChange={setModel}
+              models={[selected.model, ...(provider?.models ?? [])]} disabled={disabled} error={modelTooLong ? '模型名最多 100 个字符' : undefined} />
+          ) : (
+            <Field label="模型名" htmlFor={modelId}>
+              <Select id={modelId} disabled><option>先选择模型 Key</option></Select>
+            </Field>
+          )}
+        </div>
+      )}
+      {error && <p role="alert" className="text-sm text-bad">{error}</p>}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {reason && <p className="mr-auto text-[13px] text-ink-3">{reason}</p>}
+        <Button type="submit" variant="primary" loading={busy} disabled={!canCreate}>
+          <Plus aria-hidden />
+          {first ? '开始托管' : '添加小鱼'}
+        </Button>
+      </div>
     </form>
   )
 }
 
 function BotRow({ bot }: { bot: Bot }) {
-  const running = bot.plugins.filter((p) => p.status === 'running').length
+  const running = bot.plugins.filter((p) => p.status === 'running' || p.status === 'sleeping').length
   const troubled = bot.plugins.filter((p) => p.status === 'error' || p.status === 'over_quota').length
   return (
     <li>
@@ -111,13 +171,13 @@ export default function BotsHome() {
       ) : bots.error ? (
         <ErrorNote error={bots.error} onRetry={() => bots.refetch()} />
       ) : list.length === 0 ? (
-        <section className="grid items-center gap-6 rounded-3xl border border-paper-3 bg-cream p-6 sm:grid-cols-[auto_1fr] sm:p-8">
-          <Pupil mood="happy" size={144} className="mx-auto" />
+        <section className="grid min-w-0 items-start gap-6 rounded-2xl border border-paper-3 bg-cream p-5 sm:grid-cols-[auto_minmax(0,1fr)] sm:p-7">
+          <Pupil mood="happy" size={112} className="mx-auto" />
           <div>
-            <h2 className="font-display text-xl font-black text-ink">还没有托管的小鱼</h2>
-            <p className="mt-2 text-[15px] leading-relaxed text-ink-2">创建后，接入 QQ 或微信，再选一个模型 Key。</p>
+            <h2 className="font-display text-xl font-black text-ink">创建第一条小鱼</h2>
+            <p className="mt-1 text-sm text-ink-2">创建后就可以接入 QQ 或微信。</p>
             <div className="mt-5">
-              <CreateBot disabled={!!reason} reason={reason} first />
+              <CreateBot reason={reason} first />
             </div>
           </div>
         </section>
@@ -129,7 +189,7 @@ export default function BotsHome() {
             ))}
           </ul>
           <div className="mt-6 rounded-2xl border border-dashed border-paper-3 p-5">
-            <CreateBot disabled={!!reason} reason={reason} />
+            <CreateBot reason={reason} />
           </div>
         </>
       )}

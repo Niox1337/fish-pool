@@ -1,10 +1,10 @@
 //! Bots: CRUD, lifecycle and logs.
 
 use super::{json_body, Reply};
-use crate::app::{ok_json, App, BOT_COLS, KEY_COLS, PLATFORM_COLS, PLUGIN_COLS};
+use crate::app::{ok_json, App, BOT_COLS, PLATFORM_COLS, PLUGIN_COLS};
 use crate::args;
 use crate::error::{ApiError, ApiResult};
-use crate::models::{bot_view, BotRow, LlmKeyRow, PlatformRow, PluginRow};
+use crate::models::{bot_view, BotRow, PlatformRow, PluginRow};
 use crate::node::NodeError;
 use crate::settings::BotSettings;
 use crate::util::{new_id, now_ms};
@@ -70,6 +70,8 @@ pub async fn bots_for_user(app: &App, user_id: &str) -> ApiResult<Vec<Value>> {
 #[derive(Deserialize)]
 struct CreateReq {
     name: String,
+    key_id: Option<String>,
+    model: Option<String>,
 }
 
 pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
@@ -81,21 +83,26 @@ pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
     if user.quota_bots >= 0 && count >= user.quota_bots {
         return Err(ApiError::quota(format!("最多可以创建 {} 只小鱼", user.quota_bots)));
     }
+    let key_id = body.key_id.as_deref().filter(|id| !id.is_empty())
+        .ok_or_else(|| ApiError::bad_request("请选择模型 Key"))?;
+    let model = body.model.as_deref().map(str::trim).filter(|model| !model.is_empty())
+        .ok_or_else(|| ApiError::bad_request("请选择模型"))?;
+    let settings = BotSettings::for_new_bot(&name, Some((key_id, model)));
+    settings.validate().map_err(ApiError::bad_request)?;
     let node_id = app.assign_node().await?;
-    let key: Option<LlmKeyRow> = app
-        .db
-        .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE user_id = ?1 ORDER BY created_at LIMIT 1"), args![user.id])
-        .await?;
-    let settings = BotSettings::for_new_bot(&name, key.as_ref().map(|k| (k.id.as_str(), k.model.as_str())));
     let id = new_id();
     let now = now_ms();
-    app.db
+    let inserted = app.db
         .run(
             "INSERT INTO bots (id, user_id, name, avatar, node_id, status, status_detail, desired_running, needs_push, created_at, updated_at, settings_json) \
-             VALUES (?1, ?2, ?3, NULL, ?4, 'starting', '', 1, 1, ?5, ?5, ?6)",
-            args![id, user.id, name, node_id, now, serde_json::to_string(&settings)?],
+             SELECT ?1, ?2, ?3, NULL, ?4, 'starting', '', 1, 1, ?5, ?5, ?6 \
+             WHERE EXISTS (SELECT 1 FROM llm_keys WHERE id = ?7 AND user_id = ?2)",
+            args![id, user.id, name, node_id, now, serde_json::to_string(&settings)?, key_id],
         )
         .await?;
+    if inserted == 0 {
+        return Err(ApiError::not_found("所选的模型 Key 不存在"));
+    }
     app.push_bot(&id).await?;
     Ok(Reply::json(app.bot_json(&id).await?))
 }

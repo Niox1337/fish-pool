@@ -15,7 +15,7 @@ import { errMsg, useErrorToast } from './errors'
 import { PluginSettings } from './PluginSettings'
 import { schemaFields } from './schema'
 
-const MARKET = 'https://cloud.astrbot.app/plugin'
+const MARKET = 'https://cloud.astrbot.app/market'
 const GENGWIKI_PLUGIN = 'https://github.com/Niox1337/astrbot_plugin_gengwiki'
 
 function AddPlugin({ bot, full, onInstalled }: { bot: Bot; full: boolean; onInstalled: () => void }) {
@@ -209,6 +209,8 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
                 </DropdownMenu.Item>
                 <DropdownMenu.Label className="px-2.5 py-1 text-xs leading-relaxed wrap-anywhere text-ink-3">
                   {plugin.author && <span className="block">作者 {plugin.author}</span>}
+                  {plugin.commit && <span className="block font-mono">提交 {plugin.commit.slice(0, 7)}</span>}
+                  <span className="block">每小时自动检查更新</span>
                   <span className="block tabular-nums">最近变化 {fmtDateTime(plugin.updated_at)}</span>
                 </DropdownMenu.Label>
                 <DropdownMenu.Separator className="my-1 h-px bg-paper-3" />

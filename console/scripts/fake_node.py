@@ -3,7 +3,7 @@
 
 Serves the signed node API under /v1 (HMAC verified per the console contract),
 a fake OpenAI compatible endpoint under /llm/v1, a fake GitHub API and raw file host
-under /gh-api and /gh-raw, and debug helpers under /_debug.
+under /gh-api and /gh-raw, a git ref advertisement under /gh-git, and debug helpers under /_debug.
 
 Environment:
   FISH_NODE_SECRET   base64 of 32 bytes, HMAC key
@@ -37,12 +37,14 @@ STATE = {
     "verified": 0,
     "rejected": 0,
     "qr": {},
+    "commit": "a" * 40,
 }
+COMMIT_VERSIONS = {"a" * 40: "v1.0.0", "b" * 40: "v1.1.0"}
 
 META = """name: astrbot_plugin_demo
 display_name: 演示插件
 desc: 一个用于冒烟测试的插件
-version: v1.0.0
+version: {version}
 author: fish
 """
 SCHEMA = {
@@ -67,6 +69,49 @@ def usage_sources(user_id):
         for pl in d["plugins"]:
             sources.append({"bot_id": d["bot_id"], "kind": "plugin", "plugin_id": pl["id"], "label": pl["name"], "memory_bytes": 30 << 20, "storage_bytes": 50 << 20, "cpu_percent": 1.0})
     return sources
+
+
+def fake_system():
+    with LOCK:
+        docs = list(STATE["desired"].values())
+    now = int(time.time() * 1000)
+    procs = [
+        {"pid": 1, "ppid": 0, "role": "node", "name": "fish-node", "rss_bytes": 30 << 20, "pss_bytes": 28 << 20, "uss_bytes": 26 << 20,
+         "swap_bytes": 0, "cpu_percent": 0.5, "threads": 6, "started_at": now - 3_600_000},
+        {"pid": 2, "ppid": 1, "role": "sidecar", "name": "python3", "rss_bytes": 40 << 20, "pss_bytes": 20 << 20, "uss_bytes": 12 << 20,
+         "swap_bytes": 0, "cpu_percent": 0.1, "threads": 1, "started_at": now - 3_500_000},
+    ]
+    pid = 10
+    users = sorted({d["user_id"] for d in docs})
+    for d in docs:
+        for pl in d["plugins"]:
+            procs.append({"pid": pid, "ppid": 2, "role": "plugin", "name": "python3", "rss_bytes": 50 << 20, "pss_bytes": 30 << 20,
+                          "uss_bytes": 25 << 20, "swap_bytes": 0, "cpu_percent": 1.0, "threads": 2, "started_at": now - 600_000,
+                          "plugin": {"user_id": d["user_id"], "bot_id": d["bot_id"], "bot_name": d["name"], "plugin_id": pl["id"], "label": pl["name"]}})
+            pid += 1
+    history = [{"ts": now - k * 15_000, "host_cpu": 12.5, "container_cpu": 3.0,
+                "host_memory_used_bytes": 1 << 30, "container_memory_bytes": 200 << 20} for k in range(4)][::-1]
+    return {
+        "node_id": NODE_ID, "version": "fake", "started_at": now - 3_600_000, "interval_s": 15, "sampled_at": now,
+        "host": {"cpu_count": 2, "cpu_percent": 12.5, "load": [0.1, 0.2, 0.3], "uptime_s": 86_400, "memory_total_bytes": 4 << 30,
+                 "memory_available_bytes": 3 << 30, "swap_total_bytes": 0, "swap_free_bytes": 0, "kernel": "6.8.0-fake"},
+        "container": {"memory_current_bytes": 200 << 20, "memory_max_bytes": 1600 << 20, "memory_peak_bytes": 300 << 20,
+                      "memory_anon_bytes": 150 << 20, "memory_file_bytes": 50 << 20, "oom_kills": 0, "cpu_percent": 3.0,
+                      "cpu_limit_cores": None, "pids_current": 9, "pids_max": 512},
+        "processes": procs,
+        "history": history,
+        "disk": {"path": "/data", "total_bytes": 69 << 30, "free_bytes": 59 << 30, "avail_bytes": 56 << 30, "inodes_total": 4_000_000, "inodes_free": 3_900_000},
+        "storage": {"node_db_bytes": 1 << 20, "conversations_db_bytes": 2 << 20, "tenants_bytes": 50 << 20, "uv_cache_bytes": 300 << 20},
+        "cgroups_enabled": True,
+        "tenants": [{"user_id": u, "memory_current_bytes": 30 << 20, "memory_max_bytes": 128 << 20, "memory_peak_bytes": 40 << 20,
+                     "oom_kills": 0, "procs": 1} for u in users],
+        "bots": {"total": len(docs), "running": sum(1 for d in docs if d["running"])},
+        "platforms": [{"kind": "qq_official", "total": 1, "connected": 1}],
+        "plugins": {"total": sum(len(d["plugins"]) for d in docs)},
+        "logs": {"window_s": 3600, "errors": 1, "warns": 0,
+                 "bots": [{"bot_id": d["bot_id"], "bot_name": d["name"], "user_id": d["user_id"], "errors": 1, "warns": 0,
+                           "last_error_at": now - 60_000, "last_error": "fake error"} for d in docs[:1]]},
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -138,6 +183,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.gh_api(parts[1:])
         if parts[:1] == ["gh-raw"]:
             return self.gh_raw(parts[1:])
+        if parts[:1] == ["gh-git"]:
+            return self.gh_git(parts[1:], query)
         if parts[:1] == ["_debug"]:
             return self.debug(parts[1:], query)
         self.send_json(404, {"error": {"code": "not_found", "message": "not found"}})
@@ -149,6 +196,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 n = len(STATE["desired"])
             return self.send_json(200, {"node_id": NODE_ID, "version": "fake", "memory_total_bytes": 2 << 30, "memory_used_bytes": 1 << 30, "bots": n})
+        if m == "GET" and p == ["system"]:
+            return self.send_json(200, fake_system())
         if len(p) >= 2 and p[0] == "bots":
             bot_id = p[1]
             if m == "PUT" and len(p) == 2:
@@ -252,10 +301,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"default_branch": "main", "private": False, "full_name": f"fish-test/{p[2]}"})
         self.send_json(404, {"message": "Not Found"})
 
+    def gh_git(self, p, query):
+        if p == ["fish-test", "astrbot_plugin_demo.git", "info", "refs"] and query.get("service") == ["git-upload-pack"]:
+            with LOCK:
+                sha = STATE["commit"]
+
+            def pkt(line):
+                return f"{len(line) + 4:04x}{line}"
+
+            body = pkt("# service=git-upload-pack\n") + "0000" + pkt(f"{sha} HEAD\0symref=HEAD:refs/heads/main\n") + pkt(f"{sha} refs/heads/main\n") + "0000"
+            return self.send_text(200, body)
+        self.send_text(401, "auth required")
+
     def gh_raw(self, p):
-        if len(p) == 4 and p[0] == "fish-test" and p[1] == "astrbot_plugin_demo" and p[2] == "main":
+        with LOCK:
+            sha = STATE["commit"]
+        if len(p) == 4 and p[0] == "fish-test" and p[1] == "astrbot_plugin_demo" and (p[2] in ("main", "HEAD") or p[2] in COMMIT_VERSIONS):
+            ref = sha if p[2] in ("main", "HEAD") else p[2]
             if p[3] == "metadata.yaml":
-                return self.send_text(200, META)
+                return self.send_text(200, META.format(version=COMMIT_VERSIONS[ref]))
             if p[3] == "_conf_schema.json":
                 return self.send_text(200, json.dumps(SCHEMA, ensure_ascii=False))
             if p[3] == "requirements.txt":
@@ -267,6 +331,10 @@ class Handler(BaseHTTPRequestHandler):
         if p == ["stats"]:
             with LOCK:
                 return self.send_json(200, {k: STATE[k] for k in ("verified", "rejected", "deleted", "restarts")} | {"bots": list(STATE["desired"].keys())})
+        if p == ["commit"]:
+            with LOCK:
+                STATE["commit"] = (query.get("sha") or [STATE["commit"]])[0]
+                return self.send_json(200, {"commit": STATE["commit"]})
         if len(p) == 2 and p[0] == "desired":
             with LOCK:
                 doc = STATE["desired"].get(p[1])

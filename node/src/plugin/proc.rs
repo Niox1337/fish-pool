@@ -22,6 +22,8 @@ pub struct Handler {
     pub kind: String,
     pub pattern: Option<String>,
     pub priority: i64,
+    /// `{"name", "description", "parameters"}` for `llm_tool` handlers.
+    pub tool: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default, PartialEq)]
@@ -105,6 +107,8 @@ pub struct LaunchSpec {
     pub venv_site_packages: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub config: Value,
+    /// Shared install name. Plugin processes with the same name may be forked from one template.
+    pub share_key: Option<String>,
 }
 
 fn parse_chain(v: Option<&Value>) -> Vec<Component> {
@@ -199,6 +203,66 @@ impl PluginProc {
         r
     }
 
+    /// Runs an `llm_tool` handler. Returns the reply `{"text", "sent"}` or `{"error"}`, or None on timeout.
+    pub async fn tool_call(
+        &self,
+        call_id: &str,
+        event_id: &str,
+        event: &MessageEvent,
+        name: &str,
+        arguments: &Value,
+        timeout: Duration,
+    ) -> Option<Value> {
+        let key = format!("tool:{call_id}");
+        let (tx, rx) = oneshot::channel();
+        self.waiters.lock().unwrap().insert(
+            key.clone(),
+            Waiter {
+                hook: Some(tx),
+                ..Default::default()
+            },
+        );
+        self.writer.send(&json!({
+            "op": "tool_call",
+            "call_id": call_id,
+            "event_id": event_id,
+            "event": event,
+            "name": name,
+            "arguments": arguments,
+        }));
+        let r = tokio::time::timeout(timeout, rx).await.ok().and_then(|r| r.ok());
+        self.waiters.lock().unwrap().remove(&key);
+        r
+    }
+
+    /// Asks the plugin whether it has background work. Returns the reasons it is busy,
+    /// empty when idle, or None when it does not answer in time.
+    pub async fn idle_check(&self, timeout: Duration) -> Option<Vec<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.waiters.lock().unwrap().insert(
+            IDLE_KEY.to_string(),
+            Waiter {
+                hook: Some(tx),
+                ..Default::default()
+            },
+        );
+        self.writer.send(&json!({"op": "idle_check"}));
+        let r = tokio::time::timeout(timeout, rx).await.ok().and_then(|r| r.ok());
+        self.waiters.lock().unwrap().remove(IDLE_KEY);
+        let busy = r?.get("busy")?.as_array()?.clone();
+        Some(busy.iter().filter_map(|b| b.as_str().map(str::to_string)).collect())
+    }
+
+    /// Function tools this plugin registered.
+    pub fn tools(&self) -> Vec<&Value> {
+        self.hello
+            .handlers
+            .iter()
+            .filter(|h| h.kind == "llm_tool")
+            .filter_map(|h| h.tool.as_ref())
+            .collect()
+    }
+
     pub fn has_handler(&self, kind: &str) -> bool {
         self.hello.handlers.iter().any(|h| h.kind == kind)
     }
@@ -221,6 +285,8 @@ impl PluginProc {
         self.writer.clone()
     }
 }
+
+const IDLE_KEY: &str = "idle";
 
 /// Exit code of a plugin process whose module failed to import or initialize.
 pub const EXIT_LOAD_FAILED: i32 = 2;
@@ -274,11 +340,12 @@ pub async fn launch(
         "plugin_dir": spec.plugin_dir,
         "venv_site_packages": spec.venv_site_packages,
         "data_dir": spec.data_dir,
-        "config": spec.config,
         "plugin_name": spec.plugin_name,
         "bot_id": spec.bot_id,
         "socket": sock,
         "wait_for_memory_limit": tenant.is_some(),
+        "share_key": spec.share_key,
+        "config_on_socket": true,
     });
     let cleanup = |e: anyhow::Error| {
         let _ = std::fs::remove_file(&sock);
@@ -308,11 +375,17 @@ pub async fn launch(
     };
     drop(listener);
     let _ = std::fs::remove_file(&sock);
+    // The config goes over this socket, so it never passes through the fork server or a template
+    // process that later forks plugin processes of other tenants.
+    let mut first = Vec::new();
     if tenant.is_some() {
-        if let Err(e) = stream.write_all(b"\x01").await {
-            sidecar.kill(&spec.proc_id).await;
-            return Err(cleanup(e.into()));
-        }
+        first.push(0x01);
+    }
+    first.extend_from_slice(json!({"op": "config", "config": spec.config}).to_string().as_bytes());
+    first.push(b'\n');
+    if let Err(e) = stream.write_all(&first).await {
+        sidecar.kill(&spec.proc_id).await;
+        return Err(cleanup(e.into()));
     }
 
     let (rd, mut wr) = stream.into_split();
@@ -461,6 +534,21 @@ pub async fn launch(
                     if let Some(mut w) = waiters.lock().unwrap().remove(&format!("hook:{event_id}")) {
                         if let Some(tx) = w.hook.take() {
                             let _ = tx.send(v.get("request").cloned().unwrap_or(Value::Null));
+                        }
+                    }
+                }
+                "tool_result" => {
+                    let call_id = str_opt(&v, "call_id").unwrap_or_default();
+                    if let Some(mut w) = waiters.lock().unwrap().remove(&format!("tool:{call_id}")) {
+                        if let Some(tx) = w.hook.take() {
+                            let _ = tx.send(v.clone());
+                        }
+                    }
+                }
+                "idle_result" => {
+                    if let Some(mut w) = waiters.lock().unwrap().remove(IDLE_KEY) {
+                        if let Some(tx) = w.hook.take() {
+                            let _ = tx.send(v.clone());
                         }
                     }
                 }

@@ -11,6 +11,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(150);
+
 /// Command used to start the fork server. `--socket <path>` is appended.
 #[derive(Clone, Debug)]
 pub struct SidecarCommand {
@@ -26,6 +28,8 @@ pub struct SidecarCommand {
 struct Shared {
     pending: Mutex<HashMap<String, oneshot::Sender<std::result::Result<u32, String>>>>,
     exits: Mutex<HashMap<String, oneshot::Sender<i32>>>,
+    /// Memory group for template processes. None when memory groups are unavailable.
+    template_cgroup: Mutex<Option<PathBuf>>,
 }
 
 impl Shared {
@@ -38,7 +42,25 @@ impl Shared {
         }
     }
 
-    fn handle(&self, line: &str) {
+    /// Places a template process in the template memory group and returns the reply for the fork server.
+    fn template_ready(&self, v: &Value) -> Value {
+        let key = v.get("key").cloned().unwrap_or(Value::Null);
+        let pid = v.get("pid").and_then(|p| p.as_u64()).unwrap_or(0);
+        let result = match (&*self.template_cgroup.lock().unwrap(), pid) {
+            (_, 0) => Err("missing pid".to_string()),
+            (None, _) => Ok(()),
+            (Some(dir), pid) => std::fs::write(dir.join("cgroup.procs"), pid.to_string()).map_err(|e| e.to_string()),
+        };
+        match result {
+            Ok(()) => json!({"op": "template_ready", "key": key, "pid": pid, "ok": true}),
+            Err(e) => {
+                tracing::warn!("template {key} pid {pid}: {e}");
+                json!({"op": "template_ready", "key": key, "pid": pid, "ok": false, "message": e})
+            }
+        }
+    }
+
+    fn handle(&self, line: &str, tx: &mpsc::UnboundedSender<String>) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             tracing::warn!("sidecar sent invalid json: {line}");
             return;
@@ -62,6 +84,9 @@ impl Shared {
                 } else {
                     tracing::warn!("sidecar error for {proc_id}: {msg}");
                 }
+            }
+            "template" => {
+                let _ = tx.send(self.template_ready(&v).to_string());
             }
             "exited" => {
                 let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) as i32;
@@ -102,6 +127,11 @@ impl Sidecar {
 
     pub fn socket_path(&self) -> PathBuf {
         self.run_dir.join("sidecar.sock")
+    }
+
+    /// Sets the memory group that template processes are placed in.
+    pub fn set_template_cgroup(&self, dir: Option<PathBuf>) {
+        *self.shared.template_cgroup.lock().unwrap() = dir;
     }
 
     /// Pid of the fork server process, zero when not running.
@@ -199,11 +229,12 @@ impl Sidecar {
         });
         let shared = self.shared.clone();
         let alive_r = alive.clone();
+        let reply_tx = tx.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(rd).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 if !line.trim().is_empty() {
-                    shared.handle(&line);
+                    shared.handle(&line, &reply_tx);
                 }
             }
             alive_r.store(false, Ordering::SeqCst);
@@ -231,14 +262,15 @@ impl Sidecar {
         self.shared.pending.lock().unwrap().remove(proc_id);
     }
 
-    /// Sends a spawn request and returns the child pid.
+    /// Sends a spawn request and returns the child pid. A spawn that goes through a template waits
+    /// for the template to import the plugin, so the timeout covers the fork server's import deadline.
     pub async fn spawn(&self, req: Value) -> Result<u32> {
         let proc_id = req.get("proc_id").and_then(|p| p.as_str()).unwrap_or("").to_string();
         let tx = self.ensure().await?;
         let (rtx, rrx) = oneshot::channel();
         self.shared.pending.lock().unwrap().insert(proc_id.clone(), rtx);
         tx.send(req.to_string()).map_err(|_| anyhow!("插件宿主连接已断开"))?;
-        match tokio::time::timeout(Duration::from_secs(30), rrx).await {
+        match tokio::time::timeout(SPAWN_TIMEOUT, rrx).await {
             Ok(Ok(Ok(pid))) => Ok(pid),
             Ok(Ok(Err(msg))) => Err(anyhow!("插件启动失败: {msg}")),
             Ok(Err(_)) => Err(anyhow!("插件宿主连接已断开")),
@@ -262,5 +294,36 @@ impl Sidecar {
             let _ = c._child.start_kill();
         }
         self.root_pid.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reply(shared: &Shared, line: Value) -> Value {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        shared.handle(&line.to_string(), &tx);
+        serde_json::from_str(&rx.try_recv().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn template_is_placed_in_its_memory_group_before_import() {
+        let shared = Shared::default();
+        let ask = json!({"op": "template", "key": "demo-1/demo", "pid": 42});
+        assert_eq!(
+            reply(&shared, ask.clone()),
+            json!({"op": "template_ready", "key": "demo-1/demo", "pid": 42, "ok": true})
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        *shared.template_cgroup.lock().unwrap() = Some(dir.path().to_path_buf());
+        assert_eq!(reply(&shared, ask)["ok"], true);
+        assert_eq!(std::fs::read_to_string(dir.path().join("cgroup.procs")).unwrap(), "42");
+
+        *shared.template_cgroup.lock().unwrap() = Some(dir.path().join("missing"));
+        let failed = reply(&shared, json!({"op": "template", "key": "k", "pid": 7}));
+        assert_eq!(failed["ok"], false);
+        assert!(failed["message"].as_str().is_some());
     }
 }

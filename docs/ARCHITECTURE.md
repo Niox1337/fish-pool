@@ -4,7 +4,7 @@ This file is the single source of truth shared by every component. Change it bef
 
 ## 1. Product summary
 
-Users register with email + password + email code (with a self generated image captcha). Each user gets a resource quota. A user creates a bot ("小鱼"), connects QQ Official Bot and/or WeChat iLink by scanning a QR code (credentials are filled in automatically), supplies their own OpenAI compatible LLM API key, edits persona and parameters visually, and installs AstrBot plugins by pasting a GitHub repository URL (found on https://cloud.astrbot.app/plugin). Users see resource usage broken down by source (bot core, conversation storage, each plugin's memory and storage).
+Users register with email + password + email code (with a self generated image captcha). Each user gets a resource quota. A user creates a bot ("小鱼"), connects QQ Official Bot and/or WeChat iLink by scanning a QR code (credentials are filled in automatically), supplies their own OpenAI compatible LLM API key, edits persona and parameters visually, and installs AstrBot plugins by pasting a GitHub repository URL (found on https://cloud.astrbot.app/market). Users see resource usage broken down by source (bot core, conversation storage, each plugin's memory and storage).
 
 ## 2. Components and directories
 
@@ -71,7 +71,8 @@ platforms(id PK, bot_id, kind 'qq_official'|'weixin_ilink', display_name, app_id
           secret_enc, extra_json, enabled INT, status, status_detail, created_at)
 plugins(id PK, bot_id, repo_url, name, display_name, version, author, description,
         enabled INT, config_json, schema_json, status, status_detail, install_rev INT,
-        created_at, updated_at)            -- UNIQUE(bot_id, name)
+        commit_sha, created_at, updated_at)            -- UNIQUE(bot_id, name)
+plugin_repos(repo_url PK, commit_sha, checked_at)  -- last upstream check per installed repository
 nodes(id PK, base_url, region, capacity_memory_mb, capacity_storage_mb, created_at,
       last_seen_at INT NULL)
 rate_events(bucket, created_at)            -- sliding window counters for throttling
@@ -81,7 +82,9 @@ node_tombstones(bot_id PK, node_id, created_at)  -- bot deletes the node has not
 
 - Registration defaults to 128 MiB of memory, 128 MiB of storage and unlimited bots and plugins. The API represents unlimited counts as `null`, stored as `-1` in `users`. A count of `0` allows no slots. An invite can override the defaults at registration. Redeeming any invite on an existing account extends the service period and preserves its quotas.
 - `desired_running` is the state the user asked for, `status` is the last known live state. `needs_push = 1` marks a desired state the node has not accepted yet (node unreachable). The console retries on `GET /api/bots/:id`, on node events and from the 5 minute cron, and shows status `error` with a `status_detail` meanwhile.
-- `install_rev` is bumped by `POST /api/bots/:id/plugins/:pid/update` and tells the node to reinstall.
+- `install_rev` is bumped by `POST /api/bots/:id/plugins/:pid/update` and by the automatic update, and tells the node to reinstall.
+- `commit_sha` is the commit the plugin is pinned to, resolved at install and update. Empty when GitHub did not report a commit, then the node installs the head of the branch.
+- Automatic updates: the 5 minute cron checks up to 5 repositories from `plugin_repos` that were not checked in the last hour. It reads the latest commit of the repository's branch (or default branch) from `https://github.com/{o}/{r}.git/info/refs?service=git-upload-pack`, which is not subject to the REST API rate limit, and falls back to `GET https://api.github.com/repos/{o}/{r}/commits/{branch or HEAD}`. Every plugin of that repository whose `commit_sha` differs is updated like a manual update: metadata and schema are read at the new commit, settings are kept and missing defaults added, `commit_sha` and `install_rev` change and the bot's desired state is pushed. A plugin whose name changed upstream is not updated. Plugins installed before commits were recorded have an empty `commit_sha` and are pinned on the first check, which reinstalls them once.
 - `qr_tasks` makes QR polling idempotent: the platform created for a task is returned again on later polls.
 - `node_tombstones` keeps failed node deletes so the cron can retry them.
 
@@ -135,7 +138,7 @@ LLM keys
 
 Bots
 - `GET /api/bots` → `{"items": [Bot]}`
-- `POST /api/bots` `{name}` → Bot (one click deploy: assigns a node, pushes desired state, status `starting`). Fails with `quota_exceeded` when over `quota_bots`.
+- `POST /api/bots` `{name, key_id, model}` → Bot. The Key must belong to the caller. Creation saves the selected model, assigns a node and pushes the desired state with status `starting`. Fails with `quota_exceeded` when over `quota_bots`.
 - `GET /api/bots/:id` → Bot
 - `PATCH /api/bots/:id` `{name?, avatar?, settings?}` → Bot (pushes to node)
 - `POST /api/bots/:id/start|stop|restart` → Bot
@@ -156,13 +159,13 @@ Platform binding (QR flows run on the node, the Worker proxies and stores the re
 - `DELETE /api/bots/:id/platforms/:pid`
 
 Plugins
-- `POST /api/plugins/inspect` `{repo_url}` → `{"name","display_name","version","author","description","repo_url","schema": {...}|null, "has_requirements": bool}`. Accepts `https://github.com/owner/repo` (optional `.git`, trailing slash, `/tree/<branch>`). Worker reads `metadata.yaml` and `_conf_schema.json` from the default branch via `https://api.github.com/repos/{o}/{r}` and `https://raw.githubusercontent.com/...`. Errors: `repo_invalid`, `not_astrbot_plugin`.
+- `POST /api/plugins/inspect` `{repo_url}` → `{"name","display_name","version","author","description","repo_url","schema": {...}|null, "has_requirements": bool, "commit": string|null}`. Accepts `https://github.com/owner/repo` (optional `.git`, trailing slash, `/tree/<branch>`). Worker resolves the latest commit as described for automatic updates and reads `metadata.yaml` and `_conf_schema.json` from `https://raw.githubusercontent.com/{o}/{r}/{commit, or branch or HEAD when no commit}/...`. Only when no metadata file is found does it ask `https://api.github.com/repos/{o}/{r}` whether the repository exists, because unauthenticated API calls from Workers are usually rate limited. Errors: `repo_invalid`, `not_astrbot_plugin`.
 - `POST /api/bots/:id/plugins` `{repo_url}` → Plugin (status `installing`, node installs asynchronously). Fails with `quota_exceeded` over `quota_plugins` (counted across all bots of the user).
 - `PATCH /api/bots/:id/plugins/:pid` `{enabled?, config?}` → Plugin
 - `POST /api/bots/:id/plugins/:pid/update` → Plugin (reinstall latest)
 - `DELETE /api/bots/:id/plugins/:pid`
 
-`Plugin = {id, repo_url, name, display_name, version, author, description, enabled, config, schema, status: "installing"|"running"|"stopped"|"error"|"over_quota", status_detail, updated_at}`
+`Plugin = {id, repo_url, name, display_name, version, author, description, enabled, config, schema, status: "installing"|"running"|"sleeping"|"stopped"|"error"|"over_quota", status_detail, updated_at}`
 
 Usage
 - `GET /api/usage` → aggregated over the user's bots, proxied from the node:
@@ -187,7 +190,7 @@ Admin (role `admin` only, otherwise 403 `forbidden`; read routes never return se
   "users": {"total": 0, "new_7d": 0, "active": 0, "expiring_7d": 0, "expired": 0},
   "invites": {"unused": 0, "used_7d": 0},
   "bots": {"total": 0, "running": 0, "starting": 0, "stopped": 0, "error": 0},
-  "plugins": {"total": 0, "running": 0, "installing": 0, "error": 0, "over_quota": 0},
+  "plugins": {"total": 0, "running": 0, "sleeping": 0, "installing": 0, "error": 0, "over_quota": 0},
   "platforms": {"qq_official": 0, "weixin_ilink": 0, "error": 0},
   "usage": {"memory_bytes": 0, "storage_bytes": 0, "quota_memory_mb": 0, "quota_storage_mb": 0},
   "plugin_cpu": {"percent": null, "reporting_nodes": 0, "items": []},
@@ -197,6 +200,16 @@ Admin (role `admin` only, otherwise 403 `forbidden`; read routes never return se
 ```
   `usage` sums the node usage summaries, `quota_*` sums every user's quota. `problems` lists at most 50 entries in status `error` or `over_quota`, newest first.
   `plugin_cpu` sums reported CPU usage of plugin processes, where 100% is one logical CPU. `items` contains up to 20 plugins sorted by usage and includes `node_id` and `sampled_at` for each. Nodes without a CPU sample are excluded from `reporting_nodes`.
+- `GET /api/admin/system` →
+```json
+{
+  "generated_at": 0,
+  "console": {"colo": "HKG"|null, "d1": {"size_bytes": 0|null, "query_ms": 0.0|null, "round_trip_ms": 0, "tables": [{"name", "rows"}], "users_admin": 0, "users_login_24h": 0, "sessions_active": 0, "bots_desired_running": 0, "bots_needs_push": 0, "qr_tasks_active": 0}},
+  "nodes": [{"id", "base_url", "online": true, "latency_ms": 0, "last_seen": 0, "error"?: "...", "system": <GET /v1/system>|null}],
+  "users": {"<user_id>": "<email>"}
+}
+```
+  The Worker probes every node's `/v1/system` with an 8 second timeout and records `latency_ms`. A failed probe yields `online: false` and `system: null` while the D1 part is still returned. `tables` lists row counts of every D1 table. `users` maps every user id that appears in node processes, tenants and logs to its email.
 - `GET /api/admin/users?q=<email substring>&cursor=` → `{"items": [AdminUser], "cursor": "..."|null}` (50 per page, newest first)
   `AdminUser = User + {bots: n, plugins: n, running: n, errors: n, memory_bytes: n|null, storage_bytes: n|null, last_login_at: n|null}` (usage is null when the node is unreachable)
 - `GET /api/admin/users/:id` → `{"user": AdminUser, "bots": [Bot]}`
@@ -221,7 +234,7 @@ Error codes (field `error.code`)
 Development mode (Worker var `FISH_DEV = "1"`, never in production)
 - Captcha answers and email codes are written to the Worker log as `[dev] captcha <id> answer <answer>` and `[dev] email code for <email>: <code>`. `EMAIL_PROVIDER = "log"` is only accepted in this mode.
 - LLM base URLs may use `http://`.
-- `GITHUB_API_BASE` and `GITHUB_RAW_BASE` override `https://api.github.com` and `https://raw.githubusercontent.com` for plugin inspection.
+- `GITHUB_API_BASE`, `GITHUB_RAW_BASE` and `GITHUB_GIT_BASE` override `https://api.github.com`, `https://raw.githubusercontent.com` and `https://github.com` for plugin inspection and update checks.
 
 Plugin config schema (`_conf_schema.json`) supported field types for the UI form: `string`, `text`, `int`, `float`, `bool`, `list` (of strings), `object` (nested `items`), `dict`, `template_list` (render as JSON editor). Field keys used: `description`, `hint`, `obvious_hint`, `default`, `options` (select), `labels` (option labels), `slider` `{min,max,step}`, `invisible`, `condition` `{other_key: value}` (show field only when matched), `editor_mode`.
 
@@ -235,6 +248,7 @@ Plugin config schema (`_conf_schema.json`) supported field types for the UI form
 - `GET  /v1/bots/:bot_id/logs?after=` → same shape as console logs
 - `GET  /v1/usage?user_id=` → usage object of section 5 (node aggregates the bots belonging to that user_id)
 - `GET /v1/usage/summary` reports node memory, storage, per-user totals, history and `plugin_cpu`. The CPU sample contains `percent`, `sampled_at` and the highest-usage `plugins`, each with `user_id`, `bot_id`, `bot_name`, `plugin_id`, `label` and `cpu_percent`. The sample is `null` before the first sampling round.
+- `GET /v1/system` → host and container metrics sampled every 15 seconds by a background task. Keys: `node_id`, `version`, `started_at`, `interval_s`, `sampled_at` (`null` before the first round), `host` (`cpu_count`, `cpu_percent`, `load`, `uptime_s`, `memory_total_bytes`, `memory_available_bytes`, swap, `kernel`), `container` (cgroup v2 `memory_current_bytes`, `memory_max_bytes`, `memory_peak_bytes`, anon and file bytes, `oom_kills`, `cpu_percent`, `cpu_limit_cores`, `pids_current`, `pids_max`, or `null` without cgroup), `processes` (`pid`, `ppid`, `role` node|sidecar|plugin|task|other, `name`, `rss_bytes`, `pss_bytes`, `uss_bytes`, `swap_bytes`, `cpu_percent`, `threads`, `started_at`, and `plugin` with `user_id`, `bot_id`, `bot_name`, `plugin_id`, `label` for plugin processes), `history` (up to 240 points of `ts`, `host_cpu`, `container_cpu`, `host_memory_used_bytes`, `container_memory_bytes`), `disk` (statvfs of the data dir), `storage` (`node_db_bytes`, `conversations_db_bytes`, `tenants_bytes`, `uv_cache_bytes`), `cgroups_enabled`, `tenants` (per user cgroup memory current, max, peak, `oom_kills`, `procs`), `bots` and `plugins` status counts, `platforms` status counts per `kind`, and `logs` (error and warn counts of the last hour with the top 10 bots). CPU percent is 100 per logical core everywhere. Without `/proc` the node falls back to `ps` and reports RSS only.
 - `POST /v1/qr/qq` → `{"task_id","qr_url","interval_s","expires_at"}`
 - `GET  /v1/qr/qq/:task_id` → `{"status", "app_id"?, "secret"?}` (plaintext over the signed TLS tunnel, the Worker encrypts it before storing)
 - `POST /v1/bots/:bot_id/platforms/:platform_id/qq-webhook` `{timestamp, signature, app_id, body}` → op 13 answer `{plain_token, signature}` or `{"op": 12}`. 401 for a bad signature or AppID, 400 when the platform is not running in webhook mode.
@@ -248,15 +262,17 @@ DesiredBot = {
   settings: BotSettings,
   llm: {base_url, model, api_key, endpoint?, gateway_token?} | null,  // plaintext resolved from settings.llm.key_id
   platforms: [{id, kind, enabled, app_id, secret, extra}],
-  plugins:   [{id, name, repo_url, version, enabled, config, install_rev}]
+  plugins:   [{id, name, repo_url, version, enabled, config, install_rev, commit}]
 }
 ```
 
 `endpoint` and `gateway_token` are set only for OpenAI, Anthropic, Google Gemini and xAI when the Worker has `AI_GATEWAY` and the `AI_GATEWAY_TOKEN` secret. The node then calls `{endpoint}/chat/completions` (Anthropic `{endpoint}/messages`) with `cf-aig-authorization: Bearer <gateway_token>` and `cf-aig-collect-log: false`, and keeps provider specific parameters keyed on `base_url`. Mapping: `api.openai.com/v1` to `<gateway>/openai`, `api.anthropic.com/v1` to `<gateway>/anthropic/v1`, `generativelanguage.googleapis.com/v1beta/openai` to `<gateway>/google-ai-studio/v1beta/openai`, `api.x.ai/v1` to `<gateway>/grok/v1`. Key validation runs in the Worker and stays direct. Anthropic keys go in `x-api-key`.
 
-`install_rev` (ms) changes when the user asks for a plugin update, a node that sees a new value reinstalls the plugin and keeps its config and data.
+`install_rev` (ms) changes when the user asks for a plugin update or an automatic update runs. `commit` is a 40 hex commit id or empty. A node that sees a new `install_rev`, `commit`, `version`, `name` or `repo_url` reinstalls the plugin and keeps its config and data. With a commit the node downloads `zip/<commit>`, otherwise the head of the branch.
 
 Node to console callbacks (optional, best effort, HMAC signed): `POST https://fish.niox.lol/api/internal/node/events` with `{"node_id", "events": [{"bot_id","kind":"bot_status"|"platform_status"|"plugin_status","id","status","status_detail","ts"}]}`. The console updates D1 status columns.
+
+Plugin archive proxy: `GET https://fish.niox.lol/api/internal/plugin-archive/{owner}/{repo}/zip/{ref...}`, signed by the node like the events callback (method `GET`, empty body). The Worker streams `https://codeload.github.com/{owner}/{repo}/zip/{ref...}` back. Only `[A-Za-z0-9._-]` path segments are accepted. GitHub 404 passes through as 404, other upstream failures return 502 or 504, archives over 64 MB return 413. The node tries each candidate archive URL through this proxy first and then directly against codeload. Each request has a 60 s total timeout, network errors, 429 and 5xx are retried once per source, and a 404 moves on to the next candidate ref.
 
 ## 7. Node internals
 
@@ -268,34 +284,38 @@ Node to console callbacks (optional, best effort, HMAC signed): `POST https://fi
   - `webhook`: QQ posts events to `https://fish.niox.lol/api/qq/webhook/<platform id>`. The Ed25519 key comes from the secret repeated to at least 32 bytes and cut to 32. Pushes are verified over `timestamp || body`. The op 13 validation is answered with a signature over `event_ts || plain_token`, and it is signed only for alphanumeric tokens and numeric timestamps, so the answer can never cover a JSON event. A signed op 13 request must carry a valid signature. Retried pushes are dropped by event id. The platform reports `connecting` until the first validation or event, then `connected`.
 - QQ QR bind: random 32 byte key (base64) → `POST https://q.qq.com/lite/create_bind_task {"key"}` → `task_id`, QR content `https://q.qq.com/qqbot/openclaw/connect.html?task_id=...`, poll `POST https://q.qq.com/lite/poll_bind_result` every 2s, status 1 pending, 2 completed, 3 expired. On completion decrypt `bot_encrypt_secret` (base64 of nonce12 || ciphertext || tag16, AES-256-GCM with the key) and return `bot_appid` + secret.
 - WeChat iLink: base `https://ilinkai.weixin.qq.com`, QR via `ilink/bot/get_bot_qrcode` and `ilink/bot/get_qrcode_status`, then long poll for updates and send messages. Private chat only, passive reply only, 24 hour window. Study the protocol and implement independently.
-- Usage: memory of plugin processes measured as PSS from `/proc/<pid>/smaps_rollup` (Linux), fallback RSS on macOS. Core memory per bot is an estimate maintained by counters (buffers, caches, session state). Storage measured by walking `data/tenants/<user_id>/<bot_id>/plugins/<plugin>/` (code + venv + data) every 5 min, conversations by SQLite row bytes. Samples kept 24h in SQLite.
+- Usage: memory of plugin processes measured as PSS from `/proc/<pid>/smaps_rollup` (Linux), fallback RSS on macOS. Core memory per bot is an estimate maintained by counters (buffers, caches, session state). Storage measured by walking `data/tenants/<user_id>/<bot_id>/plugins/<plugin>/` (data) plus the shared install it uses (code + venv) every 5 min, so every bot is charged the full shared install, conversations by SQLite row bytes. Samples kept 24h in SQLite.
 - On Linux with writable cgroup v2, the node applies the tenant's `memory.max` before the plugin loads. The periodic memory check stops the largest plugin with status `over_quota` when a tenant exceeds quota for three consecutive five-minute samples. A tenant over its storage quota cannot install new plugins. Storage accounting for plugin writes is best effort.
+- Idle sleep: when a bot has received no message for `FISH_PLUGIN_IDLE_SECS` (default 1800, 0 disables), the node sends each plugin `idle_check`. A plugin with no background work is shut down and reported as `sleeping`. The next inbound message for the bot starts every sleeping plugin and waits up to 30 s for them before dispatching. Plugins that report background work keep running and are checked again after another idle period.
 - Isolation: plugin processes run as an unprivileged uid, inside `bwrap` when available (read only root, write access only to the plugin's data dir, network allowed). Shortcut: no bwrap on macOS dev, upgrade to bwrap/nsjail on the Linux node.
-- Data layout: `data/node.db`, `data/conversations.db`, `data/tenants/<user_id>/<bot_id>/plugins/<plugin_name>/{src,venv,data}`.
-- Config via env: `FISH_NODE_ID`, `FISH_NODE_SECRET`, `FISH_CONSOLE_URL`, `FISH_LISTEN` (default `0.0.0.0:8700`), `FISH_DATA_DIR`, `FISH_SIDECAR_PYTHON`, `FISH_SIDECAR_DIR`.
+- Data layout: `data/node.db`, `data/conversations.db`, `data/tenants/<user_id>/<bot_id>/plugins/<plugin_name>/{data,.fish_install.json}`, `data/shared/plugins/<share key>/{src,venv,.fish_shared.json}`. The sandbox mounts `data/shared` read only.
+- Config via env: `FISH_NODE_ID`, `FISH_NODE_SECRET`, `FISH_CONSOLE_URL`, `FISH_LISTEN` (default `0.0.0.0:8700`), `FISH_DATA_DIR`, `FISH_SIDECAR_PYTHON`, `FISH_SIDECAR_DIR`, `FISH_PLUGIN_IDLE_SECS`.
 
 ## 8. Node to sidecar protocol
 
 Transport: the node starts the fork server `python -m fish_sidecar.server --socket <path>` once. Messages are JSON objects, one per line (UTF-8, `\n` terminated) on unix sockets.
 
 Control socket (node ↔ fork server):
-- `{"op":"spawn","proc_id","plugin_dir","venv_site_packages","data_dir","config","plugin_name","bot_id","socket"}` → fork server forks a child that loads the plugin and connects to `socket` (a per process socket the node listens on). Reply `{"op":"spawned","proc_id","pid"}` or `{"op":"error","proc_id","message"}`.
+- `{"op":"spawn","proc_id","plugin_dir","venv_site_packages","data_dir","plugin_name","bot_id","socket","wait_for_memory_limit","share_key","config_on_socket":true}` → fork server forks a child that loads the plugin and connects to `socket` (a per process socket the node listens on). Reply `{"op":"spawned","proc_id","pid"}` or `{"op":"error","proc_id","message"}`. The node writes the byte `0x01` after it moved the child into the tenant memory group (only when `wait_for_memory_limit`), then `{"op":"config","config"}` as the first line on `socket`. The config never passes through the fork server, whose memory every forked process inherits.
+- Templates (Linux): for a spawn with `share_key` the fork server keeps one template process per share key and plugin name. It sends `{"op":"template","key","pid"}`, the node moves the pid into the `templates` memory group (512 MB, no swap) and answers `{"op":"template_ready","key","pid","ok","message"?}`. The template then imports the plugin once in an empty working directory and forks every plugin process of that install twice, so the plugin process is adopted by the fork server (a child subreaper) and reported with `spawned` like a direct child. Each plugin process enters its own data dir and runs the constructor itself. The import is not shared, and the plugin is forked directly from the fork server, when the import fails, takes over 90 s, or does something that would differ per process: file system access through a relative path or inside the working directory or `HOME`, randomness (`os.urandom`, the `random` functions, a new `random.Random`, except `numpy.random`, which each plugin process seeds again), signal handlers, threads, subprocesses, open files, files written to the working directory, or values that contain the working directory path, a reading of `time.time`, `time.monotonic`, `time.perf_counter` (seconds, ms or ns) or a `datetime` taken during the import, or the template's pid after the import called `os.getpid` (calls from `logging` excluded). Values are searched in the namespaces of the newly imported modules and their classes and in the attributes of module level objects whose class comes from those modules, one container level deep. The plugin log then says why. A template is not dumpable, so plugin processes of the same uid cannot trace it, and it stops after 300 s without plugin processes. `FISH_SIDECAR_TEMPLATES=0` disables templates.
 - `{"op":"kill","proc_id"}`
 - Child exit notification `{"op":"exited","proc_id","pid","code"}`. A child that exits with code 2 before sending `hello` failed to load the plugin (import error or unsupported feature), and the node marks the plugin `error` with the last logged message instead of restarting it.
 
-Install: the node runs `uv venv --system-site-packages` + `uv pip install -r requirements.txt` (shared uv cache) inside the plugin dir before spawning. Install output goes to the bot logs with source `plugin:<name>`.
+Install: the node downloads the archive and extracts it to `data/shared/plugins/.staging-<random>/src`. When the plugin has `requirements.txt` the node creates a throwaway venv there and runs `uv pip install --dry-run -r requirements.txt`, which reports the packages a fresh install would add or replace now. The shared install is named `<plugin name>-<first 16 hex of sha256(source + resolved package list)>-py<major.minor>`, where the source is the pinned commit or, without one, the archive sha256. When that install is complete (it has `.fish_shared.json`), the bot reuses it. Otherwise the node moves the extracted source into it and runs `uv venv --system-site-packages` + `uv pip install --compile-bytecode -r requirements.txt` (shared uv cache) and `compileall` inside `data/shared/plugins/<share key>/`, writing `.fish_shared.json` last. The staging directory is removed afterwards. Installs run one at a time. Install output goes to the bot logs with source `plugin:<name>`. The bot's install marker `.fish_install.json` records repo, version, name, commit, `install_rev`, the `major.minor` of `FISH_SIDECAR_PYTHON` and the share key, so a node running another interpreter reinstalls the plugin (`data/` is kept). Markers written before shared installs have no share key, so those plugins are downloaded again once and their per bot `src` and `venv` are removed. Shared installs that no marker names are removed at node start, after an install and after a plugin or bot is removed. Because the key includes the resolved package list, a bot reuses a shared install only when a fresh install would pick the same dependency versions, and a manual update of a plugin resolves its dependencies again.
 
 Plugin process socket (node ↔ one plugin process):
-- child → node `{"op":"hello","proc_id","plugin":{"name","version","handlers":[{"id","kind":"command"|"command_group"|"regex"|"event_message_type"|"llm_request"|"decorating_result"|"on_loaded"|"platform_loaded","pattern"?,"priority"}]}}`
+- child → node `{"op":"hello","proc_id","plugin":{"name","version","handlers":[{"id","kind":"command"|"command_group"|"regex"|"event_message_type"|"llm_request"|"decorating_result"|"on_loaded"|"platform_loaded"|"llm_tool","pattern"?,"priority","tool"?}]}}`. `llm_tool` handlers carry `tool: {"name","description","parameters"}`, where `parameters` is a JSON schema built from the Google style docstring and the signature.
 - node → child `{"op":"event","event_id","event": MessageEvent}`
 - child → node `{"op":"matched","event_id","matched": bool}` (sent quickly after filter matching, before running handlers)
 - child → node `{"op":"send","event_id"?,"session","chain":[Component]}` (replies, may be several)
 - child → node `{"op":"done","event_id","stop": bool, "call_llm": bool}`
 - node → child `{"op":"llm_hook","event_id","request":{"prompt","system_prompt","contexts"}}` → child `{"op":"llm_hook_result","event_id","request":{...}}`
+- node → child `{"op":"tool_call","call_id","event_id","event","name","arguments"}` → child `{"op":"tool_result","call_id","text","sent"}` or `{"op":"tool_result","call_id","error"}`. Returned and yielded strings form `text`. Message results the tool yields are sent to the user with `send` ops for `event_id` before the result, and `sent` is true. The node's default LLM reply offers the tools of all running plugins of the bot (OpenAI `tools` or Claude `tools`), runs each call with a 60 s limit, feeds results back (truncated to 8000 characters) and allows up to 5 tool rounds, after which the model must answer without tools. If the first request with tools gets a 4xx other than 401 or 429, it is retried once without tools. Duplicate tool names keep the plugin that sorts first by name.
 - child → node `{"op":"llm","req_id","prompt","system_prompt"?,"contexts"?,"image_urls"?}` → node `{"op":"llm_result","req_id","text"?,"error"?}` (uses the bot's LLM key)
 - child → node `{"op":"send_to","session","chain"}` (proactive send by unified_msg_origin)
 - child → node `{"op":"log","level","message"}`
 - node → child `{"op":"config","config"}` (config update) and `{"op":"shutdown"}`
+- node → child `{"op":"idle_check"}` → child `{"op":"idle_result","busy":[...]}`. `busy` describes work that stopping the process would lose: asyncio tasks other than the child's own, pending loop timers, file descriptors registered with the loop besides the node socket, threads not named `asyncio*`, and pending LLM requests. An empty list means the plugin may sleep.
 
 ```
 MessageEvent = {platform: "qq_official"|"weixin_ilink", bot_id, self_id,

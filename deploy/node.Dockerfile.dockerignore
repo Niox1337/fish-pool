@@ -7,5 +7,6 @@
 !sidecar/fish_sidecar/**
 !sidecar/astrbot/**
 !deploy/node-entrypoint.sh
+!deploy/dist/fish-node
 **/__pycache__
 **/*.pyc

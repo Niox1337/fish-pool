@@ -45,6 +45,9 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             return json_response(err.status, &err.body(), &[]);
         }
     };
+    if path.starts_with(api::archive::PREFIX) {
+        return api::archive::proxy(req, &app).await;
+    }
     match api::handle(req, &app).await {
         Ok(reply) => json_response(reply.status, &reply.body, &reply.cookies),
         Err(e) => json_response(e.status, &e.body(), &[]),

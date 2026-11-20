@@ -92,6 +92,8 @@ class ChildRuntime:
         self.stopping = asyncio.Event()
         self.dispatcher: Dispatcher | None = None
         self.plugin: loader.LoadedPlugin | None = None
+        self.main_task: asyncio.Task | None = None
+        self.reader_task: asyncio.Task | None = None
 
     def write(self, message: dict[str, Any]) -> None:
         if self.writer is None or self.writer.is_closing():
@@ -189,6 +191,13 @@ class ChildRuntime:
         sys.stderr = _LineWriter(self, "warning")
 
     async def load(self) -> None:
+        preimported = None
+        if self.spec.get("preimported"):
+            from fish_sidecar import template
+
+            preimported = template.preimported
+            if preimported is None:
+                raise RuntimeError("template did not import the plugin")
         self.plugin = await asyncio.to_thread(
             loader.load,
             self.plugin_dir,
@@ -196,6 +205,7 @@ class ChildRuntime:
             self.data_dir,
             self.plugin_name,
             self.spec.get("config") or {},
+            preimported,
         )
         self.dispatcher = Dispatcher(self, self.plugin.instance, self.plugin.name)
         await self.plugin.instance.initialize()
@@ -245,10 +255,41 @@ class ChildRuntime:
             self.spawn(self.dispatcher.handle_event(str(message.get("event_id")), message.get("event") or {}))
         elif op == "llm_hook" and self.dispatcher is not None:
             self.spawn(self._llm_hook(str(message.get("event_id")), message.get("request") or {}))
+        elif op == "tool_call" and self.dispatcher is not None:
+            self.spawn(self._tool_call(message))
         elif op == "config" and self.plugin is not None:
             self.plugin.config.replace_values(message.get("config") or {})
+        elif op == "idle_check":
+            self.write({"op": "idle_result", "busy": self.busy_reasons()})
         elif op == "shutdown":
             self.stopping.set()
+
+    def busy_reasons(self) -> list[str]:
+        """Describes work that would be lost if the process stopped now. Empty when the plugin is idle."""
+        reasons: list[str] = []
+        own = {self.main_task, self.reader_task, asyncio.current_task()}
+        tasks = [t for t in asyncio.all_tasks(self.loop) if t not in own and not t.done()]
+        if tasks:
+            reasons.append(f"{len(tasks)} 个后台任务")
+        if self.pending:
+            reasons.append(f"{len(self.pending)} 个进行中的模型请求")
+        try:
+            timers = [h for h in self.loop._scheduled if not h.cancelled()]  # type: ignore[attr-defined]
+            if timers:
+                reasons.append(f"{len(timers)} 个定时器")
+            own_fds = {self.loop._ssock.fileno()}  # type: ignore[attr-defined]
+            sock = self.writer.get_extra_info("socket") if self.writer is not None else None
+            if sock is not None:
+                own_fds.add(sock.fileno())
+            fds = [k.fd for k in self.loop._selector.get_map().values() if k.fd not in own_fds]  # type: ignore[attr-defined]
+            if fds:
+                reasons.append(f"{len(fds)} 个打开的网络连接")
+        except Exception as e:
+            reasons.append(f"无法检查事件循环: {e}")
+        threads = [t.name for t in threading.enumerate() if t is not threading.main_thread() and t.is_alive() and not t.name.startswith("asyncio")]
+        if threads:
+            reasons.append("线程 " + ", ".join(sorted(threads)[:3]))
+        return reasons
 
     async def _llm_hook(self, event_id: str, request: dict[str, Any]) -> None:
         assert self.dispatcher is not None
@@ -259,21 +300,49 @@ class ChildRuntime:
             result = request
         self.write({"op": "llm_hook_result", "event_id": event_id, "request": result})
 
+    async def _tool_call(self, message: dict[str, Any]) -> None:
+        assert self.dispatcher is not None
+        call_id = str(message.get("call_id"))
+        try:
+            result = await self.dispatcher.handle_tool_call(
+                str(message.get("event_id")), message.get("event") or {}, str(message.get("name")), message.get("arguments")
+            )
+        except Exception as e:
+            log.error("tool call failed: %s", describe_error(e))
+            result = {"error": describe_error(e)}
+        self.write({"op": "tool_result", "call_id": call_id, **result})
+
     async def run(self) -> int:
         try:
             await self.connect()
+            assert self.reader is not None
             if self.spec.get("wait_for_memory_limit"):
-                assert self.reader is not None
                 # The node attaches this process to the tenant cgroup before allowing plugin imports.
                 if await asyncio.wait_for(self.reader.readexactly(1), timeout=60) != b"\x01":
                     raise ConnectionError("memory limit was not confirmed")
-        except (ConnectionError, TimeoutError, asyncio.IncompleteReadError) as e:
+            if self.spec.get("config_on_socket"):
+                # The plugin config arrives on this socket instead of through the fork server.
+                line = await asyncio.wait_for(self.reader.readline(), timeout=60)
+                message = protocol.decode(line) if line else None
+                if not message or message.get("op") != "config":
+                    raise ConnectionError("plugin config was not received")
+                self.spec["config"] = message.get("config") or {}
+        except (ConnectionError, TimeoutError, ValueError, asyncio.IncompleteReadError) as e:
             print(f"fish child {self.proc_id}: {e}", file=sys.__stderr__)
             return EXIT_CONNECT_FAILED
         _fish.set_runtime(self)
         self.install_logging()
+        if self.spec.get("preimported"):
+            from fish_sidecar import template
+
+            for level, line in template.import_logs:
+                self.write({"op": "log", "level": level, "message": line})
+        note = self.spec.get("template_note")
+        if note:
+            self.write({"op": "log", "level": "info", "message": f"插件单独加载，未与其他机器人共享导入: {note}"})
         self.loop.add_signal_handler(signal.SIGTERM, self.stopping.set)
-        reader_task = self.loop.create_task(self.read_loop())
+        self.main_task = asyncio.current_task()
+        reader_task = self.reader_task = self.loop.create_task(self.read_loop())
         try:
             await self.load()
         except BaseException as e:
