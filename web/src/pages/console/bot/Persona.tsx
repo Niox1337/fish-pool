@@ -1,15 +1,18 @@
-import { useEffect, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router'
-import { KeyRound, Undo2 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { ChevronDown, KeyRound, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/api/client'
-import { useBotMutation, useLlmKeys } from '@/api/hooks'
+import { keys, useBotMutation, useLlmKeys } from '@/api/hooks'
+import { providerForEndpoint } from '@/api/modelProviders'
 import type { Bot, BotSettings } from '@/api/types'
 import { Button, Field, Input, Skeleton, Textarea, useFieldId } from '@/components/ui'
 import { ChipsInput, RangeField, Select, SwitchRow } from './shared'
 import { useErrorToast } from './errors'
+import ModelField from '../ModelField'
 
-const PROMPT_SOFT_LIMIT = 4000
+const PROMPT_LIMIT = 8000
 
 function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -34,6 +37,7 @@ export default function Persona({
   const s = draft ?? bot.settings
   const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(bot.settings)
   const llmKeys = useLlmKeys()
+  const queryClient = useQueryClient()
   const showError = useErrorToast()
   const save = useBotMutation(bot.id, (settings: BotSettings) => api.updateBot(bot.id, { settings }))
   const ids = {
@@ -51,30 +55,34 @@ export default function Persona({
     rate: useFieldId('p-rate'),
   }
 
-  useEffect(() => {
-    if (!dirty) return
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
-
   function set<K extends keyof BotSettings>(k: K, patch: Partial<BotSettings[K]>) {
     setDraft({ ...s, [k]: { ...s[k], ...patch } })
   }
 
   const keyList = llmKeys.data ?? []
   const key = keyList.find((k) => k.id === s.llm.key_id)
+  const provider = key && providerForEndpoint(key.base_url)
+  const presetProvider = provider?.models.includes(s.llm.model || key?.model || '') ? provider.id : undefined
+  const fixedTemperature = provider?.id === 'anthropic' || presetProvider === 'moonshot'
+    || presetProvider === 'minimax' || presetProvider === 'longcat'
+  const maxTemperature = presetProvider === 'zhipu' || presetProvider === 'grok' ? 1
+    : presetProvider === 'mimo' ? 1.5
+    : presetProvider === 'qwen' ? 1.9
+    : 2
   const missingKey = !!s.llm.key_id && llmKeys.isSuccess && !key
-  const tokensErr = intOk(s.llm.max_tokens, 64, 32768) ? '' : '填 64 到 32768 之间的整数'
-  const rateErr = intOk(s.behavior.rate_limit_per_minute, 0, 600) ? '' : '填 0 到 600 之间的整数'
-  const nameErr = s.persona.name.trim() ? '' : '给人设起个名字'
-  const invalid = !!(tokensErr || rateErr || nameErr)
+  const tokensErr = intOk(s.llm.max_tokens, 1, 32768) ? '' : '请输入 1 到 32768 之间的整数'
+  const rateErr = intOk(s.behavior.rate_limit_per_minute, 1, 600) ? '' : '请输入 1 到 600 之间的整数'
+  const nameErr = !s.persona.name.trim() || [...s.persona.name].length > 32 ? '人设名称须为 1 到 32 个字符' : ''
   const promptLen = [...s.persona.system_prompt].length
+  const promptErr = promptLen > PROMPT_LIMIT ? '系统提示词最多 8000 个字符' : ''
+  const greetingErr = [...s.persona.greeting].length > 500 ? '开场白最多 500 个字符' : ''
+  const invalid = !!(tokensErr || rateErr || nameErr || promptErr || greetingErr)
 
   function submit() {
     if (invalid) return
     save.mutate(s, {
-      onSuccess: () => {
+      onSuccess: (updated) => {
+        queryClient.setQueryData(keys.bot(bot.id), updated)
         setDraft(null)
         toast.success('保存好了，小鱼马上换上新设置')
       },
@@ -89,14 +97,13 @@ export default function Persona({
         submit()
       }}
       noValidate
-      className="grid gap-4"
+      className="grid gap-4 lg:grid-cols-[minmax(0,1.12fr)_minmax(0,1fr)]"
     >
       <Block title="人设">
         <Field label="名字" htmlFor={ids.name} error={nameErr || undefined}>
           <Input
             id={ids.name}
             value={s.persona.name}
-            maxLength={24}
             aria-invalid={!!nameErr || undefined}
             onChange={(e) => set('persona', { name: e.target.value })}
           />
@@ -104,15 +111,14 @@ export default function Persona({
         <Field
           label="系统提示词"
           htmlFor={ids.prompt}
+          error={promptErr || undefined}
           aside={
-            <span className={promptLen > PROMPT_SOFT_LIMIT ? 'text-[13px] font-semibold text-warn tabular-nums' : 'text-[13px] text-ink-3 tabular-nums'}>
-              {promptLen} 字{promptLen > PROMPT_SOFT_LIMIT ? '，有点长了，会多花 token' : ''}
-            </span>
+            <span className="text-[13px] text-ink-3 tabular-nums">{promptLen} / {PROMPT_LIMIT}</span>
           }
         >
-          <Textarea id={ids.prompt} rows={8} value={s.persona.system_prompt} onChange={(e) => set('persona', { system_prompt: e.target.value })} />
+          <Textarea id={ids.prompt} rows={10} value={s.persona.system_prompt} onChange={(e) => set('persona', { system_prompt: e.target.value })} aria-invalid={!!promptErr || undefined} />
         </Field>
-        <Field label="开场白" htmlFor={ids.greeting} hint="新会话的首条问候，留空则跳过。">
+        <Field label="开场白" htmlFor={ids.greeting} error={greetingErr || undefined}>
           <Input
             id={ids.greeting}
             value={s.persona.greeting}
@@ -165,36 +171,26 @@ export default function Persona({
             </Select>
           )}
         </Field>
-        <Field label="模型名" htmlFor={ids.model} hint="可改为同一服务商的其他模型。">
-          <Input
-            id={ids.model}
-            value={s.llm.model}
-            placeholder={key?.model ?? 'deepseek-chat'}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(e) => set('llm', { model: e.target.value })}
-            className="font-mono"
-          />
-        </Field>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <RangeField
+        <ModelField key={key?.id} id={ids.model} value={s.llm.model} onChange={(model) => set('llm', { model })} models={provider?.models} fallback={key?.model} />
+        <div className="grid gap-5">
+          {fixedTemperature ? <p className="text-sm text-ink-3">此模型使用固定温度。</p> : <RangeField
             id={ids.temp}
-            label="温度"
+            label="温度（Temperature）"
             hint="越低越稳定，越高越多样。"
-            value={s.llm.temperature}
+            value={Math.min(s.llm.temperature, maxTemperature)}
             min={0}
-            max={2}
+            max={maxTemperature}
             step={0.1}
             format={(v) => v.toFixed(1)}
             onChange={(temperature) => set('llm', { temperature })}
-          />
+          />}
           <RangeField
             id={ids.turns}
             label="记住几轮对话"
             hint="保留更多对话会消耗更多 token。"
             value={s.llm.context_turns}
             min={0}
-            max={50}
+            max={100}
             format={(v) => `${v} 轮`}
             onChange={(context_turns) => set('llm', { context_turns })}
           />
@@ -204,9 +200,8 @@ export default function Persona({
             id={ids.tokens}
             type="number"
             inputMode="numeric"
-            min={64}
+            min={1}
             max={32768}
-            step={64}
             value={Number.isFinite(s.llm.max_tokens) ? s.llm.max_tokens : ''}
             aria-invalid={!!tokensErr || undefined}
             onChange={(e) => set('llm', { max_tokens: e.target.value === '' ? NaN : Number(e.target.value) })}
@@ -215,7 +210,12 @@ export default function Persona({
         </Field>
       </Block>
 
-      <Block title="回复规则">
+      <details className="group rounded-2xl border border-paper-3 bg-cream lg:col-span-2">
+        <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 font-display text-base font-black text-ink sm:px-6 [&::-webkit-details-marker]:hidden">
+          回复规则
+          <ChevronDown className="size-4 text-ink-3 group-open:rotate-180" aria-hidden />
+        </summary>
+        <div className="grid gap-5 px-5 pb-5 sm:px-6">
         <Field label="唤醒前缀" htmlFor={ids.prefixes} hint="例如 /help 中的 /。按回车或逗号添加。">
           <ChipsInput id={ids.prefixes} label="唤醒前缀" value={s.behavior.wake_prefixes} onChange={(wake_prefixes) => set('behavior', { wake_prefixes })} placeholder="/" />
         </Field>
@@ -235,12 +235,12 @@ export default function Persona({
         <Field label="黑名单" htmlFor={ids.block} hint="格式为「平台:账号」。">
           <ChipsInput id={ids.block} label="黑名单" value={s.behavior.blocklist} onChange={(blocklist) => set('behavior', { blocklist })} placeholder="qq:67890" />
         </Field>
-        <Field label="每分钟回复上限" htmlFor={ids.rate} error={rateErr || undefined} hint="0 表示不限。">
+        <Field label="每分钟回复上限" htmlFor={ids.rate} error={rateErr || undefined}>
           <Input
             id={ids.rate}
             type="number"
             inputMode="numeric"
-            min={0}
+            min={1}
             max={600}
             value={Number.isFinite(s.behavior.rate_limit_per_minute) ? s.behavior.rate_limit_per_minute : ''}
             aria-invalid={!!rateErr || undefined}
@@ -248,10 +248,11 @@ export default function Persona({
             className="tabular-nums sm:max-w-48"
           />
         </Field>
-      </Block>
+        </div>
+      </details>
 
       {dirty && (
-        <div className="sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-20 flex animate-[fade-in_150ms_ease-out] flex-wrap items-center gap-3 rounded-2xl border border-cobalt-900 bg-cobalt px-4 py-3 text-white shadow-[var(--shadow-lift)] lg:bottom-4">
+        <div className="sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-20 flex animate-[fade-in_150ms_ease-out] flex-wrap items-center gap-3 rounded-2xl border border-cobalt-900 bg-cobalt px-4 py-3 text-white shadow-[var(--shadow-lift)] lg:bottom-4 lg:col-span-2">
           <p className="min-w-0 flex-1 text-sm font-semibold">{invalid ? '有几项没填对，改好才能保存' : '改动还没保存'}</p>
           <Button variant="ghost" size="sm" onClick={() => setDraft(null)} className="text-white/85 hover:bg-white/10 hover:text-white">
             <Undo2 aria-hidden />

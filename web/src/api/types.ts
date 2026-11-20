@@ -17,6 +17,8 @@ export type LlmKey = {
   model: string
   key_masked: string
   created_at: number
+  /** The node reaches this provider through the Cloudflare AI Gateway. */
+  via_gateway?: boolean
 }
 
 export type BotSettings = {
@@ -51,6 +53,29 @@ export type Platform = {
   enabled: boolean
   status: 'connected' | 'connecting' | 'error' | 'disabled'
   status_detail?: string
+  /** QQ only: how events reach the bot. */
+  mode?: QqMode
+}
+
+export type QqMode = 'websocket' | 'webhook'
+
+export type QqPanelScope = 'c2c' | 'group'
+
+export type QqPanelItem = {
+  type: 'command' | 'link'
+  name: string
+  desc?: string
+  only_admin?: boolean
+  link?: string
+}
+
+export type QqPanel = { items: QqPanelItem[]; remark?: string; version?: number }
+export type QqPanelRecord = {
+  panel_id: string
+  scope: QqPanelScope
+  target_type: 'all' | 'specific'
+  panel: QqPanel
+  version?: number
 }
 
 export type SchemaField = {
@@ -61,11 +86,13 @@ export type SchemaField = {
   default?: unknown
   options?: (string | number)[]
   labels?: string[]
+  secret?: boolean
   slider?: { min: number; max: number; step?: number }
   invisible?: boolean
   condition?: Record<string, unknown>
   editor_mode?: boolean
   items?: Record<string, SchemaField>
+  templates?: Record<string, { name?: string; hint?: string; display_item?: string; hide_hint_in_list?: boolean; items?: PluginSchema }>
 }
 
 export type PluginSchema = Record<string, SchemaField>
@@ -82,6 +109,7 @@ export type Plugin = {
   description: string
   enabled: boolean
   config: Record<string, unknown>
+  config_revision?: string
   schema: PluginSchema | null
   status: PluginStatus
   status_detail?: string

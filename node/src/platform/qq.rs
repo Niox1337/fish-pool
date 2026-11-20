@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -38,6 +38,8 @@ pub mod op {
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayPayload {
+    #[serde(default)]
+    pub id: Option<String>,
     pub op: u8,
     #[serde(default)]
     pub d: Value,
@@ -226,6 +228,10 @@ pub struct QqConn {
     /// Last inbound message id per session for passive replies without an explicit target.
     last_msg: Mutex<HashMap<String, (String, Instant)>>,
     self_id: Mutex<String>,
+    /// Events arrive through HTTP callbacks instead of the gateway.
+    pub webhook: bool,
+    /// Recent callback event ids, used to drop retried deliveries.
+    seen_events: Mutex<VecDeque<String>>,
 }
 
 impl QqConn {
@@ -242,6 +248,8 @@ impl QqConn {
             seqs: Mutex::new(HashMap::new()),
             last_msg: Mutex::new(HashMap::new()),
             self_id: Mutex::new(app_id.to_string()),
+            webhook: false,
+            seen_events: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -280,11 +288,19 @@ impl QqConn {
         *self.token.lock().await = None;
     }
 
+    pub(crate) fn has_credentials(&self, app_id: &str, secret: &str) -> bool {
+        self.app_id == app_id && self.secret == secret
+    }
+
     async fn api(&self, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
+        self.api_at(&self.api_base, method, path, body).await
+    }
+
+    pub(crate) async fn api_at(&self, base: &str, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
         let token = self.access_token().await?;
         let mut req = self
             .http
-            .request(method, format!("{}{}", self.api_base, path))
+            .request(method, format!("{base}{path}"))
             .header("Authorization", format!("QQBot {token}"))
             .header("X-Union-Appid", &self.app_id)
             .timeout(Duration::from_secs(20));
@@ -608,6 +624,156 @@ async fn handle_dispatch(
     }
 }
 
+/// HTTP callback (Webhook) delivery: Ed25519 keys derived from the bot secret,
+/// callback URL validation (op 13) and signed event pushes (op 0).
+pub mod webhook {
+    use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
+    use serde_json::{json, Value};
+
+    pub const OP_DISPATCH: u8 = 0;
+    pub const OP_ACK: u8 = 12;
+    pub const OP_VALIDATE: u8 = 13;
+
+    /// Signing key whose seed is the secret repeated until it has at least 32 bytes, cut to 32.
+    pub fn signing_key(secret: &str) -> Option<SigningKey> {
+        if secret.is_empty() {
+            return None;
+        }
+        let mut seed = secret.as_bytes().to_vec();
+        while seed.len() < 32 {
+            seed = seed.repeat(2);
+        }
+        let bytes: [u8; 32] = seed[..32].try_into().ok()?;
+        Some(SigningKey::from_bytes(&bytes))
+    }
+
+    /// Verifies `X-Signature-Ed25519` over `timestamp || body`.
+    pub fn verify(secret: &str, timestamp: &str, sig_hex: &str, body: &[u8]) -> bool {
+        let Some(key) = signing_key(secret) else { return false };
+        let Ok(raw) = hex::decode(sig_hex.trim()) else { return false };
+        let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else { return false };
+        if arr[63] & 224 != 0 {
+            return false;
+        }
+        let sig = Signature::from_bytes(&arr);
+        let mut msg = Vec::with_capacity(timestamp.len() + body.len());
+        msg.extend_from_slice(timestamp.as_bytes());
+        msg.extend_from_slice(body);
+        key.verifying_key().verify(&msg, &sig).is_ok()
+    }
+
+    /// Answer to a validation request: `{plain_token, signature}` where the signature covers
+    /// `event_ts || plain_token`. Only short alphanumeric tokens and numeric timestamps are signed,
+    /// so the answer never covers bytes that could form a signed JSON event.
+    pub fn validation_answer(secret: &str, d: &Value) -> Result<Value, String> {
+        let token = d.get("plain_token").and_then(Value::as_str).unwrap_or("");
+        let ts = match d.get("event_ts") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => String::new(),
+        };
+        if token.is_empty() || token.len() > 128 || !token.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return Err("plain_token 格式不正确".into());
+        }
+        if ts.is_empty() || ts.len() > 20 || !ts.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("event_ts 格式不正确".into());
+        }
+        let key = signing_key(secret).ok_or("缺少 AppSecret")?;
+        let sig = key.sign(format!("{ts}{token}").as_bytes());
+        Ok(json!({"plain_token": token, "signature": hex::encode(sig.to_bytes())}))
+    }
+}
+
+/// Outcome of one callback delivery.
+#[derive(Debug, PartialEq)]
+pub enum WebhookReply {
+    Ok(Value),
+    Unauthorized(String),
+    BadRequest(String),
+}
+
+/// Callback request fields forwarded by the console.
+#[derive(Debug, Deserialize)]
+pub struct WebhookDelivery {
+    #[serde(default)]
+    pub timestamp: String,
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default)]
+    pub app_id: String,
+    pub body: String,
+}
+
+impl QqConn {
+    /// Records a callback event id and returns false when it was already seen.
+    fn first_delivery(&self, id: &str) -> bool {
+        if id.is_empty() {
+            return true;
+        }
+        let mut g = self.seen_events.lock().unwrap();
+        if g.iter().any(|e| e == id) {
+            return false;
+        }
+        if g.len() >= 256 {
+            g.pop_front();
+        }
+        g.push_back(id.to_string());
+        true
+    }
+
+    /// Handles one callback: validates the signature, answers op 13 and queues op 0 messages.
+    pub fn handle_webhook(&self, w: &WebhookDelivery, tx: &mpsc::Sender<Inbound>, status: &StatusSink) -> WebhookReply {
+        if !self.webhook {
+            return WebhookReply::BadRequest("该 QQ 平台使用 WebSocket 连接，未开启 Webhook".into());
+        }
+        if !w.app_id.is_empty() && w.app_id.trim() != self.app_id {
+            return WebhookReply::Unauthorized("X-Bot-Appid 与平台不匹配".into());
+        }
+        let signed = !w.signature.is_empty();
+        if signed && !webhook::verify(&self.secret, &w.timestamp, &w.signature, w.body.as_bytes()) {
+            self.logs.warn(SRC, "收到签名无效的 Webhook 请求，已拒绝");
+            return WebhookReply::Unauthorized("签名校验失败".into());
+        }
+        let p: GatewayPayload = match serde_json::from_str(&w.body) {
+            Ok(p) => p,
+            Err(e) => return WebhookReply::BadRequest(format!("无法解析回调内容: {e}")),
+        };
+        match p.op {
+            webhook::OP_VALIDATE => match webhook::validation_answer(&self.secret, &p.d) {
+                Ok(v) => {
+                    self.logs.info(SRC, "已通过 QQ 开放平台的回调地址验证");
+                    status("connected", "");
+                    WebhookReply::Ok(v)
+                }
+                Err(e) => WebhookReply::BadRequest(e),
+            },
+            webhook::OP_DISPATCH => {
+                if !signed {
+                    return WebhookReply::Unauthorized("事件推送缺少签名".into());
+                }
+                status("connected", "");
+                if !self.first_delivery(p.id.as_deref().unwrap_or("")) {
+                    return WebhookReply::Ok(json!({"op": webhook::OP_ACK}));
+                }
+                let t = p.t.as_deref().unwrap_or("");
+                let self_id = self.self_id.lock().unwrap().clone();
+                if let Some(ev) = parse_dispatch(t, &p.d, &self.platform_id, &self_id) {
+                    self.remember_inbound(ev.message_type, &ev.session_id, &ev.msg_id);
+                    if tx.try_send(ev).is_err() {
+                        self.logs.warn(SRC, "消息队列已满，丢弃一条消息");
+                    }
+                }
+                WebhookReply::Ok(json!({"op": webhook::OP_ACK}))
+            }
+            other => {
+                tracing::debug!("qq webhook op {other}");
+                WebhookReply::Ok(json!({"op": webhook::OP_ACK}))
+            }
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,5 +856,100 @@ mod tests {
         c.remember_inbound(MessageType::Group, "g", "m9");
         assert_eq!(c.passive_target(MessageType::Group, "g").as_deref(), Some("m9"));
         assert_eq!(c.passive_target(MessageType::Private, "g"), None);
+    }
+
+    fn webhook_conn() -> QqConn {
+        let logs = Arc::new(LogBuffer::new("b", 10));
+        let mut c = QqConn::new("p1", "1024", "naOC0ocQE3shWLAfffVLB1rhYPG7", reqwest::Client::new(), logs);
+        c.webhook = true;
+        c
+    }
+
+    fn signed(secret: &str, ts: &str, body: &str) -> WebhookDelivery {
+        use ed25519_dalek::Signer;
+        let key = webhook::signing_key(secret).unwrap();
+        let sig = key.sign(format!("{ts}{body}").as_bytes());
+        WebhookDelivery { timestamp: ts.into(), signature: hex::encode(sig.to_bytes()), app_id: "1024".into(), body: body.into() }
+    }
+
+    #[test]
+    fn webhook_seed_repeats_secret() {
+        let a = webhook::signing_key("naOC0ocQE3shWLAfffVLB1rhYPG7").unwrap();
+        let b = webhook::signing_key("naOC0ocQE3shWLAfffVLB1rhYPG7naOC").unwrap();
+        assert_eq!(a.to_bytes(), b.to_bytes());
+        assert!(webhook::signing_key("").is_none());
+        let long = "x".repeat(40);
+        assert_eq!(webhook::signing_key(&long).unwrap().to_bytes(), [b'x'; 32]);
+    }
+
+    #[test]
+    fn webhook_signature_round_trip() {
+        let secret = "naOC0ocQE3shWLAfffVLB1rhYPG7";
+        let w = signed(secret, "1725442341", r#"{"op":0}"#);
+        assert!(webhook::verify(secret, "1725442341", &w.signature, b"{\"op\":0}"));
+        assert!(!webhook::verify(secret, "1725442342", &w.signature, b"{\"op\":0}"));
+        assert!(!webhook::verify(secret, "1725442341", &w.signature, b"{\"op\":1}"));
+        assert!(!webhook::verify("other-secret", "1725442341", &w.signature, b"{\"op\":0}"));
+        assert!(!webhook::verify(secret, "1725442341", "zz", b"{\"op\":0}"));
+    }
+
+    #[test]
+    fn webhook_validation_answer() {
+        let secret = "naOC0ocQE3shWLAfffVLB1rhYPG7";
+        let v = webhook::validation_answer(secret, &json!({"plain_token": "Arq0D5A61EgUu4OxUvOp", "event_ts": "1725442341"})).unwrap();
+        assert_eq!(v["plain_token"], "Arq0D5A61EgUu4OxUvOp");
+        assert_eq!(
+            v["signature"],
+            "3be3ed93973d9d382e3c4f0a65b57cabc9e48e3f7fcbca6c238e349f51bb5263cb24e3723053f44af5540143a04450bdbdd4824453d483c58ad82e4fb039350a"
+        );
+        let sig = v["signature"].as_str().unwrap();
+        assert!(webhook::verify(secret, "1725442341", sig, b"Arq0D5A61EgUu4OxUvOp"));
+        assert!(webhook::validation_answer(secret, &json!({"plain_token": "{\"op\":0}", "event_ts": "1"})).is_err());
+        assert!(webhook::validation_answer(secret, &json!({"plain_token": "abc", "event_ts": "1a"})).is_err());
+        assert!(webhook::validation_answer(secret, &json!({"plain_token": "abc", "event_ts": 1725442341})).is_ok());
+    }
+
+    #[test]
+    fn webhook_delivery_flow() {
+        let c = webhook_conn();
+        let (tx, mut rx) = mpsc::channel(4);
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let s2 = seen.clone();
+        let status: StatusSink = Arc::new(move |st: &str, _: &str| s2.lock().unwrap().push(st.to_string()));
+
+        let validate = WebhookDelivery {
+            timestamp: String::new(),
+            signature: String::new(),
+            app_id: "1024".into(),
+            body: r#"{"op":13,"d":{"plain_token":"abc123","event_ts":"1725442341"}}"#.into(),
+        };
+        match c.handle_webhook(&validate, &tx, &status) {
+            WebhookReply::Ok(v) => assert_eq!(v["plain_token"], "abc123"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(seen.lock().unwrap().as_slice(), ["connected"]);
+
+        let body = r#"{"id":"ev1","op":0,"t":"C2C_MESSAGE_CREATE","d":{"id":"m1","content":"hi","author":{"user_openid":"u1"}}}"#;
+        let unsigned = WebhookDelivery { timestamp: String::new(), signature: String::new(), app_id: "1024".into(), body: body.into() };
+        assert!(matches!(c.handle_webhook(&unsigned, &tx, &status), WebhookReply::Unauthorized(_)));
+
+        let mut forged = signed("naOC0ocQE3shWLAfffVLB1rhYPG7", "1725442341", body);
+        forged.body = body.replace("hi", "bye");
+        assert!(matches!(c.handle_webhook(&forged, &tx, &status), WebhookReply::Unauthorized(_)));
+
+        let ok = signed("naOC0ocQE3shWLAfffVLB1rhYPG7", "1725442341", body);
+        assert_eq!(c.handle_webhook(&ok, &tx, &status), WebhookReply::Ok(json!({"op": 12})));
+        let ev = rx.try_recv().expect("queued message");
+        assert_eq!(ev.text, "hi");
+        assert_eq!(c.handle_webhook(&ok, &tx, &status), WebhookReply::Ok(json!({"op": 12})));
+        assert!(rx.try_recv().is_err(), "retried delivery is dropped");
+
+        let mut wrong_app = signed("naOC0ocQE3shWLAfffVLB1rhYPG7", "1725442341", body);
+        wrong_app.app_id = "999".into();
+        assert!(matches!(c.handle_webhook(&wrong_app, &tx, &status), WebhookReply::Unauthorized(_)));
+
+        let mut ws = webhook_conn();
+        ws.webhook = false;
+        assert!(matches!(ws.handle_webhook(&ok, &tx, &status), WebhookReply::BadRequest(_)));
     }
 }

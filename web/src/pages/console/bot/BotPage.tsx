@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import * as SettingsTabs from '@radix-ui/react-tabs'
 import { Link, Navigate, NavLink, useParams } from 'react-router'
-import { ChevronLeft, LayoutGrid, Link2, Play, Puzzle, RotateCw, ScrollText, Square, UserRoundPen } from 'lucide-react'
+import { ChevronLeft, LayoutGrid, Link2, Play, Puzzle, RotateCw, ScrollText, Settings2, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
 import { useBot, useBotMutation } from '@/api/hooks'
@@ -13,13 +14,14 @@ import { ActionError, InlineName } from './shared'
 import Overview from './Overview'
 import Connect from './Connect'
 import Persona from './Persona'
+import QqPanels from './QqPanels'
 import Plugins from './Plugins'
 import Logs from './Logs'
 
 const TABS = [
   { key: 'overview', label: '概览', icon: LayoutGrid },
   { key: 'connect', label: '接入', icon: Link2 },
-  { key: 'persona', label: '人设与模型', icon: UserRoundPen },
+  { key: 'persona', label: '机器人设置', icon: Settings2 },
   { key: 'plugins', label: '插件', icon: Puzzle },
   { key: 'logs', label: '日志', icon: ScrollText },
 ] as const
@@ -133,6 +135,14 @@ function BotView() {
   const { botId = '', tab } = useParams()
   const bot = useBot(botId)
   const [draft, setDraft] = useState<BotSettings | null>(null)
+  const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(bot.data?.settings)
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   if (tab && !TABS.some((t) => t.key === tab && t.key !== 'overview')) {
     return <Navigate to={`/app/bots/${botId}`} replace />
@@ -187,7 +197,7 @@ function BotView() {
   }
 
   const b = bot.data
-  const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(b.settings)
+  const settingsTab = 'min-h-10 cursor-pointer rounded-lg px-3 text-sm font-semibold text-ink-2 hover:bg-paper-2 data-[state=active]:bg-sky-soft data-[state=active]:text-cobalt'
 
   return (
     <>
@@ -196,7 +206,16 @@ function BotView() {
       <Tabs botId={b.id} dirty={dirty} />
       {active === 'overview' && <Overview bot={b} />}
       {active === 'connect' && <Connect bot={b} />}
-      {active === 'persona' && <Persona bot={b} draft={draft} setDraft={setDraft} />}
+      {active === 'persona' && (
+        <SettingsTabs.Root defaultValue="ai" activationMode="manual">
+          <SettingsTabs.List aria-label="机器人设置分类" className="mb-4 flex flex-wrap gap-2">
+            <SettingsTabs.Trigger value="ai" className={settingsTab}>AI 与回复{dirty && <span className="sr-only">，有未保存的修改</span>}</SettingsTabs.Trigger>
+            <SettingsTabs.Trigger value="qq" className={settingsTab}>QQ 指令面板</SettingsTabs.Trigger>
+          </SettingsTabs.List>
+          <SettingsTabs.Content value="ai"><Persona bot={b} draft={draft} setDraft={setDraft} /></SettingsTabs.Content>
+          <SettingsTabs.Content value="qq"><QqPanels bot={b} /></SettingsTabs.Content>
+        </SettingsTabs.Root>
+      )}
       {active === 'plugins' && <Plugins bot={b} />}
       {active === 'logs' && <Logs bot={b} />}
     </>

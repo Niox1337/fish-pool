@@ -136,7 +136,7 @@ export function RangeField({
       }
     >
       <div className="flex items-center gap-3">
-        <span className="text-[13px] text-ink-3 tabular-nums">{format(min)}</span>
+        <span className="text-[13px] whitespace-nowrap text-ink-3 tabular-nums">{format(min)}</span>
         <input
           id={id}
           type="range"
@@ -148,7 +148,7 @@ export function RangeField({
           onChange={(e) => onChange(Number(e.target.value))}
           className="h-2 w-full min-w-0 cursor-pointer accent-cobalt"
         />
-        <span className="text-[13px] text-ink-3 tabular-nums">{format(max)}</span>
+        <span className="text-[13px] whitespace-nowrap text-ink-3 tabular-nums">{format(max)}</span>
       </div>
     </Field>
   )

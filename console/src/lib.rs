@@ -8,6 +8,7 @@ pub mod crypto;
 pub mod db;
 pub mod email;
 pub mod error;
+pub mod gateway;
 pub mod github;
 pub mod http;
 pub mod invite;

@@ -371,7 +371,7 @@ export default function AdminUserDetail() {
             <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2">
               <span className={cn('font-semibold', q.data.user.role === 'admin' ? 'text-sky' : 'text-ink')}>{q.data.user.role === 'admin' ? '管理员' : '普通用户'}</span>
               <span className="tabular-nums">{fmtDate(q.data.user.created_at)} 注册</span>
-              <span className="tabular-nums">最近登录 {fmtAgo(q.data.user.last_login_at)}</span>
+              <span className="tabular-nums">{q.data.user.last_login_at ? `最近登录 ${fmtAgo(q.data.user.last_login_at)}` : '从未登录'}</span>
             </p>
           </header>
           <nav aria-label="用户详情" className="mb-6 flex gap-1 border-b border-paper-3">

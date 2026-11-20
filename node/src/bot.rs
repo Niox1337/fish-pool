@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -69,9 +69,15 @@ struct Core {
 
 struct PluginSlot {
     spec: PluginSpec,
-    live: Arc<Mutex<PluginSpec>>,
+    config: watch::Sender<Value>,
     cancel: CancellationToken,
     task: JoinHandle<()>,
+}
+
+enum PluginExit {
+    Stop,
+    Reload,
+    Failed(i32),
 }
 
 #[derive(Default)]
@@ -405,6 +411,27 @@ impl Bot {
         }
     }
 
+    pub(crate) fn qq_panel_connection(&self, id: &str) -> Option<Arc<qq::QqConn>> {
+        let desired = self.desired.read().unwrap();
+        let spec = desired.platforms.iter().find(|p| p.id == id && p.kind == PLATFORM_QQ)?;
+        if spec.app_id.is_empty() || spec.secret.is_empty() {
+            return None;
+        }
+        let fixture_token = self.shared.cfg.dev_services.then(|| std::env::var("FISH_QQ_PANEL_TOKEN_URL").ok()).flatten();
+        if fixture_token.is_none() {
+            if let Some(PlatformConn::Qq(conn)) = self.platforms.read().unwrap().get(id) {
+                if conn.has_credentials(&spec.app_id, &spec.secret) {
+                    return Some(conn.clone());
+                }
+            }
+        }
+        let mut conn = qq::QqConn::new(id, &spec.app_id, &spec.secret, self.shared.http.clone(), self.logs.clone());
+        if let Some(url) = fixture_token {
+            conn.token_url = url;
+        }
+        Some(Arc::new(conn))
+    }
+
     fn start_platform(self: &Arc<Self>, rt: &mut Runtime, spec: &PlatformSpec) -> Result<(), String> {
         let core = rt.core.as_ref().ok_or("机器人未运行")?;
         let tok = core.cancel.child_token();
@@ -415,18 +442,19 @@ impl Bot {
                 if spec.app_id.is_empty() || spec.secret.is_empty() {
                     return Err("缺少 QQ 机器人 AppID 或 AppSecret".into());
                 }
-                let conn = Arc::new(qq::QqConn::new(
-                    &spec.id,
-                    &spec.app_id,
-                    &spec.secret,
-                    http,
-                    self.logs.clone(),
-                ));
+                let mut conn = qq::QqConn::new(&spec.id, &spec.app_id, &spec.secret, http, self.logs.clone());
+                conn.webhook = spec.extra.get("mode").and_then(|v| v.as_str()) == Some("webhook");
+                let conn = Arc::new(conn);
                 self.platforms
                     .write()
                     .unwrap()
                     .insert(spec.id.clone(), PlatformConn::Qq(conn.clone()));
-                tokio::spawn(qq::run(conn, core.inbound_tx.clone(), sink, tok.clone()));
+                if conn.webhook {
+                    self.logs.info(platform_source(&spec.kind), "QQ 平台使用 Webhook 接收消息，等待开放平台回调");
+                    sink("connecting", "等待 QQ 开放平台回调验证");
+                } else {
+                    tokio::spawn(qq::run(conn, core.inbound_tx.clone(), sink, tok.clone()));
+                }
             }
             PLATFORM_WEIXIN => {
                 if spec.secret.is_empty() {
@@ -508,44 +536,46 @@ impl Bot {
                 }
                 continue;
             }
-            match rt.plugins.get_mut(&spec.id) {
-                Some(slot) if !slot.spec.needs_reinstall(spec) => {
+            if let Some(slot) = rt.plugins.get_mut(&spec.id) {
+                if !slot.spec.needs_reinstall(spec) {
                     if slot.spec.config != spec.config {
-                        *slot.live.lock().unwrap() = spec.clone();
-                        if let Some(p) = self.procs.read().unwrap().get(&spec.id) {
-                            p.send_config(&spec.config);
-                        }
-                        self.logs.info(&format!("plugin:{}", spec.name), "配置已更新");
+                        slot.config.send_replace(spec.config.clone());
+                        slot.spec = spec.clone();
+                        self.logs.info(&format!("plugin:{}", spec.name), "插件配置已更新");
                     }
-                    slot.spec = spec.clone();
                     continue;
                 }
-                Some(_) => {
-                    if let Some(slot) = rt.plugins.remove(&spec.id) {
-                        self.logs
-                            .info(&format!("plugin:{}", spec.name), "插件版本变化，重新安装");
-                        Self::stop_slot(slot).await;
-                    }
-                }
-                None => {}
+            }
+            if let Some(slot) = rt.plugins.remove(&spec.id) {
+                self.logs.info(&format!("plugin:{}", spec.name), "插件版本变化，重新安装");
+                Self::stop_slot(slot).await;
             }
             let Some(core) = rt.core.as_ref() else { return };
             let cancel = core.cancel.child_token();
-            let live = Arc::new(Mutex::new(spec.clone()));
-            let task = tokio::spawn(
-                self.clone()
-                    .supervise_plugin(live.clone(), cancel.clone(), core.out_tx.clone()),
-            );
+            let (config, updates) = watch::channel(spec.config.clone());
+            let task = tokio::spawn(self.clone().supervise_plugin(
+                spec.clone(), updates, cancel.clone(), core.out_tx.clone(),
+            ));
             rt.plugins.insert(
                 spec.id.clone(),
                 PluginSlot {
                     spec: spec.clone(),
-                    live,
+                    config,
                     cancel,
                     task,
                 },
             );
         }
+    }
+
+    pub async fn reload_plugin(&self, id: &str) -> Result<(), &'static str> {
+        let rt = self.rt.lock().await;
+        let slot = rt.plugins.get(id).ok_or("插件当前未启用或小鱼尚未启动")?;
+        let dir = self.shared.cfg.plugin_dir(&self.user_id(), &self.id, &slot.spec.name);
+        if !install::is_installed(&slot.spec, &dir) {
+            return Err("插件尚未安装完成，请检查安装状态");
+        }
+        slot.config.send(slot.spec.config.clone()).map_err(|_| "插件进程不可用，请稍后重试")
     }
 
     fn storage_over_quota(&self) -> bool {
@@ -573,7 +603,8 @@ impl Bot {
 
     async fn supervise_plugin(
         self: Arc<Self>,
-        live: Arc<Mutex<PluginSpec>>,
+        spec: PluginSpec,
+        mut config: watch::Receiver<Value>,
         cancel: CancellationToken,
         out_tx: mpsc::Sender<OutMsg>,
     ) {
@@ -583,7 +614,6 @@ impl Bot {
             if cancel.is_cancelled() {
                 return;
             }
-            let spec = live.lock().unwrap().clone();
             let src = format!("plugin:{}", spec.name);
             let user = self.user_id();
             let plugin_dir = shared.cfg.plugin_dir(&user, &self.id, &spec.name);
@@ -628,7 +658,7 @@ impl Bot {
                 plugin_dir: inst.src.clone(),
                 venv_site_packages: inst.site_packages.clone(),
                 data_dir: inst.data.clone(),
-                config: spec.config.clone(),
+                config: config.borrow_and_update().clone(),
             };
             let tenant = shared.cgroups.as_ref().map(|cg| (cg, user.as_str()));
             let launched = tokio::select! {
@@ -642,14 +672,9 @@ impl Bot {
                     self.logs
                         .error(&src, "插件加载失败，修改插件配置、更新插件或重启机器人后会重新加载");
                     self.set_plugin_status(&spec.id, "error", &detail, None);
-                    let failed_config = spec.config.clone();
-                    loop {
-                        if !Self::sleep_or_cancel(&cancel, Duration::from_secs(5)).await {
-                            return;
-                        }
-                        if live.lock().unwrap().config != failed_config {
-                            break;
-                        }
+                    tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        updated = config.changed() => if updated.is_err() { return },
                     }
                     attempt = 0;
                     continue;
@@ -674,9 +699,10 @@ impl Bot {
             self.set_plugin_status(&spec.id, "running", "", Some(version));
             let started = Instant::now();
             let outcome = tokio::select! {
-                _ = cancel.cancelled() => None,
-                code = &mut exit_rx => Some(code.unwrap_or(-1)),
-                _ = proc.closed.cancelled() => Some(-1),
+                _ = cancel.cancelled() => PluginExit::Stop,
+                updated = config.changed() => if updated.is_ok() { PluginExit::Reload } else { PluginExit::Stop },
+                code = &mut exit_rx => PluginExit::Failed(code.unwrap_or(-1)),
+                _ = proc.closed.cancelled() => PluginExit::Failed(-1),
             };
             {
                 let mut procs = self.procs.write().unwrap();
@@ -685,7 +711,7 @@ impl Bot {
                 }
             }
             match outcome {
-                None => {
+                PluginExit::Stop | PluginExit::Reload => {
                     proc.shutdown();
                     if tokio::time::timeout(Duration::from_secs(3), &mut exit_rx)
                         .await
@@ -694,9 +720,12 @@ impl Bot {
                         shared.sidecar.kill(&proc_id).await;
                     }
                     shared.sidecar.forget(&proc_id);
-                    return;
+                    if matches!(outcome, PluginExit::Stop) {
+                        return;
+                    }
+                    attempt = 0;
                 }
-                Some(code) => {
+                PluginExit::Failed(code) => {
                     shared.sidecar.kill(&proc_id).await;
                     shared.sidecar.forget(&proc_id);
                     let detail = proc
@@ -739,6 +768,21 @@ impl Bot {
             .entry(loopback::ID.into())
             .or_insert_with(|| PlatformConn::Loopback(Arc::default()));
         core.inbound_tx.try_send(input.inbound()).map_err(|e| e.to_string())
+    }
+
+    /// Passes one QQ callback delivery to the platform connection with the given id.
+    pub async fn qq_webhook(self: &Arc<Self>, platform_id: &str, w: &qq::WebhookDelivery) -> qq::WebhookReply {
+        let conn = match self.platforms.read().unwrap().get(platform_id) {
+            Some(PlatformConn::Qq(c)) => c.clone(),
+            _ => return qq::WebhookReply::BadRequest("平台未运行".into()),
+        };
+        let rt = self.rt.lock().await;
+        let Some(core) = rt.core.as_ref() else {
+            return qq::WebhookReply::BadRequest("机器人未运行".into());
+        };
+        let tx = core.inbound_tx.clone();
+        drop(rt);
+        conn.handle_webhook(w, &tx, &self.status_sink(platform_id))
     }
 
     pub fn loopback_outbox(&self) -> Vec<Value> {

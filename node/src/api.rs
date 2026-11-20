@@ -15,6 +15,8 @@ use crate::node::Node;
 use crate::qr::Kind;
 use crate::sign::{self, now_ms, VerifyError, VerifyInput};
 
+mod qq_panels;
+
 pub const MAX_BODY: usize = 4 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -57,6 +59,10 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/v1/bots/{bot_id}/restart", post(restart_bot))
         .route("/v1/bots/{bot_id}/status", get(bot_status))
         .route("/v1/bots/{bot_id}/logs", get(bot_logs))
+        .route("/v1/bots/{bot_id}/plugins/{plugin_id}/reload", post(reload_plugin))
+        .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-webhook", post(qq_webhook))
+        .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels", get(qq_panels::list).post(qq_panels::create))
+        .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels/{panel_id}", put(qq_panels::update).delete(qq_panels::delete))
         .route("/v1/usage", get(usage))
         .route("/v1/usage/summary", get(usage_summary))
         .route("/v1/qr/qq", post(qr_qq_create))
@@ -152,6 +158,13 @@ async fn restart_bot(State(node): State<Arc<Node>>, Path(bot_id): Path<String>) 
     Ok(Json(json!({"ok": true})))
 }
 
+async fn reload_plugin(State(node): State<Arc<Node>>, Path((bot_id, plugin_id)): Path<(String, String)>) -> ApiResult {
+    let bot = node.get(&bot_id).ok_or_else(ApiError::not_found)?;
+    bot.reload_plugin(&plugin_id).await
+        .map_err(|error| ApiError::new(StatusCode::CONFLICT, "plugin_reload_unavailable", error))?;
+    Ok(Json(json!({"ok": true})))
+}
+
 async fn bot_status(State(node): State<Arc<Node>>, Path(bot_id): Path<String>) -> ApiResult {
     let bot = node.get(&bot_id).ok_or_else(ApiError::not_found)?;
     Ok(Json(bot.status_json()))
@@ -208,6 +221,20 @@ async fn qr_wx_create(State(node): State<Arc<Node>>) -> ApiResult {
 
 async fn qr_wx_get(State(node): State<Arc<Node>>, Path(task_id): Path<String>) -> ApiResult {
     node.qr.get(Kind::Weixin, &task_id).map(Json).ok_or_else(task_not_found)
+}
+
+async fn qq_webhook(
+    State(node): State<Arc<Node>>,
+    Path((bot_id, platform_id)): Path<(String, String)>,
+    Json(input): Json<crate::platform::qq::WebhookDelivery>,
+) -> ApiResult {
+    use crate::platform::qq::WebhookReply;
+    let bot = node.get(&bot_id).ok_or_else(ApiError::not_found)?;
+    match bot.qq_webhook(&platform_id, &input).await {
+        WebhookReply::Ok(v) => Ok(Json(v)),
+        WebhookReply::Unauthorized(m) => Err(ApiError::new(StatusCode::UNAUTHORIZED, "webhook_unauthorized", m)),
+        WebhookReply::BadRequest(m) => Err(ApiError::new(StatusCode::BAD_REQUEST, "webhook_rejected", m)),
+    }
 }
 
 async fn loopback_inject(

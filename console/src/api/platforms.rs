@@ -1,6 +1,6 @@
 //! Platform binding: QR flows proxied to the node, manual QQ credentials, enable and delete.
 
-use super::{json_body, Reply};
+use super::{json_body, read_body, Reply};
 use crate::app::{ok_json, App, PLATFORM_COLS};
 use crate::args;
 use crate::error::{ApiError, ApiResult};
@@ -17,6 +17,24 @@ fn node_err(e: NodeError) -> ApiError {
     match e {
         NodeError::Unreachable(_) => ApiError::node_unreachable(),
         other => ApiError::new(502, "node_error", other.detail()),
+    }
+}
+
+/// Keeps the stored `mode` when a refresh of the credentials does not set one.
+fn merge_extra(stored: &str, mut fresh: Value) -> Value {
+    let old: Value = serde_json::from_str(stored).unwrap_or(Value::Null);
+    if let (Some(mode), Some(obj)) = (old.get("mode"), fresh.as_object_mut()) {
+        obj.entry("mode").or_insert_with(|| mode.clone());
+    }
+    fresh
+}
+
+fn parse_mode(mode: Option<&str>) -> ApiResult<Option<&'static str>> {
+    match mode {
+        None => Ok(None),
+        Some("websocket") => Ok(Some("websocket")),
+        Some("webhook") => Ok(Some("webhook")),
+        Some(_) => Err(ApiError::bad_request("连接方式只能是 websocket 或 webhook")),
     }
 }
 
@@ -47,6 +65,45 @@ async fn platform_by_id(app: &App, bot_id: &str, pid: &str) -> ApiResult<Platfor
         .ok_or_else(|| ApiError::not_found("平台不存在"))
 }
 
+pub async fn qq_panels(
+    req: &mut Request, app: &App, bot_id: &str, pid: &str, method: Method, panel_id: Option<&str>,
+) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let bot = app.owned_bot(&user, bot_id).await?;
+    let platform = platform_by_id(app, &bot.id, pid).await?;
+    if platform.kind != "qq_official" {
+        return Err(ApiError::not_found("QQ 接入不存在"));
+    }
+    if method != Method::Get {
+        App::require_service(&user)?;
+    }
+
+    let mut path = format!("/v1/bots/{}/platforms/{}/qq-panels", bot.id, platform.id);
+    if let Some(id) = panel_id {
+        if id.is_empty() || id.len() > 256 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
+            return Err(ApiError::bad_request("指令面板 ID 格式错误"));
+        }
+        path.push('/');
+        path.push_str(id);
+    }
+    if method == Method::Get {
+        let scope = req.url()?.query_pairs().find(|(name, _)| name == "scope").map(|(_, value)| value.into_owned());
+        match scope.as_deref() {
+            Some(scope @ ("c2c" | "group")) => path.push_str(&format!("?scope={scope}")),
+            _ => return Err(ApiError::bad_request("请选择单聊或群聊场景")),
+        }
+    }
+    let body = if matches!(method, Method::Post | Method::Put) { Some(json_body::<Value>(req).await?) } else { None };
+    let client = app.node_client(&bot.node_id).await?;
+    match client.call(method, &path, body.as_ref(), 60_000).await {
+        Ok(value) => Ok(Reply::json(value)),
+        Err(NodeError::Status(400, message)) => Err(ApiError::new(400, "qq_panel_invalid", message)),
+        Err(NodeError::Status(409, message)) => Err(ApiError::conflict("qq_panel_changed", message)),
+        Err(NodeError::Status(502, message)) => Err(ApiError::new(502, "qq_panel_upstream", message)),
+        Err(e) => Err(node_err(e)),
+    }
+}
+
 /// Inserts a platform or refreshes the credentials of the existing one with the same kind and app_id.
 async fn upsert_platform(
     app: &App,
@@ -62,13 +119,15 @@ async fn upsert_platform(
     #[derive(Deserialize)]
     struct Id {
         id: String,
+        extra_json: String,
     }
     let existing: Option<Id> = app
         .db
-        .first("SELECT id FROM platforms WHERE bot_id = ?1 AND kind = ?2 AND app_id = ?3", args![bot.id, kind, app_id])
+        .first("SELECT id, extra_json FROM platforms WHERE bot_id = ?1 AND kind = ?2 AND app_id = ?3", args![bot.id, kind, app_id])
         .await?;
     let id = match existing {
         Some(e) => {
+            let extra_s = serde_json::to_string(&merge_extra(&e.extra_json, extra.clone()))?;
             app.db
                 .run(
                     "UPDATE platforms SET secret_enc = ?2, extra_json = ?3, enabled = 1, status = 'connecting', status_detail = '' WHERE id = ?1",
@@ -174,6 +233,7 @@ pub async fn qr_poll(req: &Request, app: &App, bot_id: &str, kind: &str, task_id
 struct ManualReq {
     app_id: String,
     secret: String,
+    mode: Option<String>,
 }
 
 pub async fn qq_manual(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<Reply> {
@@ -188,7 +248,11 @@ pub async fn qq_manual(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<
     if secret.is_empty() || secret.len() > 256 || secret.chars().any(char::is_whitespace) {
         return Err(ApiError::bad_request("AppSecret 格式不正确"));
     }
-    let p = upsert_platform(app, &bot, "qq_official", app_id, secret, json!({}), &format!("QQ 机器人 {app_id}")).await?;
+    let extra = match parse_mode(body.mode.as_deref())? {
+        Some(m) => json!({"mode": m}),
+        None => json!({}),
+    };
+    let p = upsert_platform(app, &bot, "qq_official", app_id, secret, extra, &format!("QQ 机器人 {app_id}")).await?;
     app.push_bot(&bot.id).await?;
     let fresh = platform_by_id(app, &bot.id, &p.id).await?;
     Ok(Reply::json(app.platform_view(&fresh)?))
@@ -198,6 +262,7 @@ pub async fn qq_manual(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<
 struct PatchReq {
     enabled: Option<bool>,
     display_name: Option<String>,
+    mode: Option<String>,
 }
 
 pub async fn patch(req: &mut Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
@@ -216,17 +281,66 @@ pub async fn patch(req: &mut Request, app: &App, bot_id: &str, pid: &str) -> Api
         None => p.display_name.clone(),
     };
     let enabled = body.enabled.map(i64::from).unwrap_or(p.enabled);
-    let status = if enabled != 0 && p.enabled == 0 { "connecting" } else { p.status.as_str() };
+    let mode = parse_mode(body.mode.as_deref())?;
+    if mode.is_some() && p.kind != "qq_official" {
+        return Err(ApiError::bad_request("只有 QQ 机器人可以切换连接方式"));
+    }
+    let mode_changed = mode.is_some_and(|m| Some(m) != p.qq_mode());
+    let mut extra: Value = serde_json::from_str(&p.extra_json).unwrap_or_else(|_| json!({}));
+    if let (Some(m), Some(obj)) = (mode, extra.as_object_mut()) {
+        obj.insert("mode".into(), json!(m));
+    }
+    let (status, detail) = if (enabled != 0 && p.enabled == 0) || (enabled != 0 && mode_changed) {
+        ("connecting", "")
+    } else {
+        (p.status.as_str(), p.status_detail.as_str())
+    };
     app.db
         .run(
-            "UPDATE platforms SET display_name = ?2, enabled = ?3, status = ?4 WHERE id = ?1",
-            args![p.id, display_name, enabled, status],
+            "UPDATE platforms SET display_name = ?2, enabled = ?3, status = ?4, status_detail = ?5, extra_json = ?6 WHERE id = ?1",
+            args![p.id, display_name, enabled, status, detail, serde_json::to_string(&extra)?],
         )
         .await?;
     app.db.run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot.id, now_ms()]).await?;
     app.push_bot(&bot.id).await?;
     let fresh = platform_by_id(app, &bot.id, pid).await?;
     Ok(Reply::json(app.platform_view(&fresh)?))
+}
+
+const MAX_CALLBACK_BYTES: usize = 64 * 1024;
+
+/// Public QQ callback endpoint of one platform. The node holding the bot checks the
+/// Ed25519 signature and answers, this handler only routes the request there.
+pub async fn qq_webhook(req: &mut Request, app: &App, pid: &str) -> ApiResult<Reply> {
+    let header = |name: &str| req.headers().get(name).ok().flatten().unwrap_or_default();
+    let (timestamp, signature, app_id) = (header("x-signature-timestamp"), header("x-signature-ed25519"), header("x-bot-appid"));
+    let raw = read_body(req).await?;
+    if raw.len() > MAX_CALLBACK_BYTES {
+        return Err(ApiError::new(413, "payload_too_large", "回调内容过大"));
+    }
+    let body = String::from_utf8(raw).map_err(|_| ApiError::bad_request("回调内容不是 UTF-8"))?;
+    let op = serde_json::from_str::<Value>(&body).ok().and_then(|v| v.get("op").and_then(Value::as_u64));
+    if op.is_none() || (op != Some(13) && signature.is_empty()) {
+        return Err(ApiError::new(401, "webhook_unauthorized", "回调缺少签名"));
+    }
+    let not_found = || ApiError::not_found("回调地址不存在");
+    let p: PlatformRow = app
+        .db
+        .first(&format!("SELECT {PLATFORM_COLS} FROM platforms WHERE id = ?1"), args![pid])
+        .await?
+        .ok_or_else(not_found)?;
+    if p.qq_mode() != Some("webhook") || p.enabled == 0 {
+        return Err(not_found());
+    }
+    let bot = app.bot_by_id(&p.bot_id).await?.ok_or_else(not_found)?;
+    let client = app.node_client(&bot.node_id).await?;
+    let payload = json!({"timestamp": timestamp, "signature": signature, "app_id": app_id, "body": body});
+    match client.call(Method::Post, &format!("/v1/bots/{}/platforms/{}/qq-webhook", bot.id, p.id), Some(&payload), 8_000).await {
+        Ok(v) => Ok(Reply::json(v)),
+        Err(NodeError::Status(401, d)) => Err(ApiError::new(401, "webhook_unauthorized", d)),
+        Err(NodeError::Status(_, d)) => Err(ApiError::new(400, "webhook_rejected", d)),
+        Err(NodeError::Unreachable(_)) => Err(ApiError::new(503, "node_unreachable", "节点暂时不可用")),
+    }
 }
 
 pub async fn delete(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
@@ -244,6 +358,43 @@ pub async fn delete(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiRes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_survives_credential_refresh() {
+        assert_eq!(merge_extra(r#"{"mode":"webhook"}"#, json!({})), json!({"mode": "webhook"}));
+        assert_eq!(merge_extra(r#"{"mode":"webhook"}"#, json!({"mode": "websocket"})), json!({"mode": "websocket"}));
+        assert_eq!(merge_extra("{}", json!({"bot_id": "b"})), json!({"bot_id": "b"}));
+        assert_eq!(merge_extra("not json", json!({})), json!({}));
+    }
+
+    #[test]
+    fn mode_values() {
+        assert_eq!(parse_mode(None).unwrap(), None);
+        assert_eq!(parse_mode(Some("webhook")).unwrap(), Some("webhook"));
+        assert_eq!(parse_mode(Some("websocket")).unwrap(), Some("websocket"));
+        assert!(parse_mode(Some("http")).is_err());
+    }
+
+    #[test]
+    fn qq_mode_defaults_to_websocket() {
+        let row = |kind: &str, extra: &str| PlatformRow {
+            id: "p".into(),
+            bot_id: "b".into(),
+            kind: kind.into(),
+            display_name: String::new(),
+            app_id: "1".into(),
+            secret_enc: String::new(),
+            extra_json: extra.into(),
+            enabled: 1,
+            status: "connecting".into(),
+            status_detail: String::new(),
+            created_at: 0,
+        };
+        assert_eq!(row("qq_official", "{}").qq_mode(), Some("websocket"));
+        assert_eq!(row("qq_official", r#"{"mode":"webhook"}"#).qq_mode(), Some("webhook"));
+        assert_eq!(row("weixin_ilink", r#"{"mode":"webhook"}"#).qq_mode(), None);
+        assert_eq!(row("qq_official", r#"{"mode":"webhook"}"#).view(None)["mode"], "webhook");
+    }
 
     #[test]
     fn qr_status_mapping() {

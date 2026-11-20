@@ -1,4 +1,4 @@
-import type { AdminOverview, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, Quota, Usage, User } from './types'
+import type { AdminOverview, AdminUser, Bot, Invite, LlmKey, LogLine, Plugin, QqPanelRecord, Quota, Usage, User } from './types'
 
 const MB = 1024 * 1024
 const defaultQuota: Quota = { memory_mb: 128, storage_mb: 128, bots: null, plugins: null }
@@ -7,7 +7,7 @@ const id = () => Math.random().toString(36).slice(2, 12)
 
 const defaultSettings = (): Bot['settings'] => ({
   persona: { name: '大肥鱼', system_prompt: '你是一条爱吃白饭的蓝色大肥鱼，说话软乎乎的，喜欢帮群友解答问题。', greeting: '' },
-  llm: { key_id: null, model: 'deepseek-chat', temperature: 0.7, max_tokens: 1024, context_turns: 12 },
+  llm: { key_id: null, model: '', temperature: 0.7, max_tokens: 1024, context_turns: 12 },
   behavior: {
     wake_prefixes: ['/'],
     reply_when_at: true,
@@ -29,6 +29,7 @@ const state: State = {
 }
 
 const botLogs: Record<string, LogLine[]> = {}
+const qqPanelRecords = new Map<string, QqPanelRecord[]>()
 const logPool: Omit<LogLine, 'ts'>[] = [
   { level: 'info', source: 'qq_official', message: '收到群消息 [群 7342] 小明：/一言' },
   { level: 'info', source: 'llm', message: '调用模型完成，用时 1.4 秒，消耗 312 token' },
@@ -55,6 +56,13 @@ function setRunning(b: Bot, delay: number) {
   }, delay)
 }
 
+const gatewayBaseUrls = [
+  'https://api.openai.com/v1',
+  'https://api.anthropic.com/v1',
+  'https://generativelanguage.googleapis.com/v1beta/openai',
+  'https://api.x.ai/v1',
+]
+
 export const mockDev = {
   state,
   botLogs,
@@ -71,6 +79,7 @@ const samplePlugin = (name: string, display: string, mem: number): Plugin => ({
   description: `${display}的示例插件`,
   enabled: true,
   config: { daily_limit: 5 },
+  config_revision: id(),
   schema: {
     daily_limit: { type: 'int', description: '每人每天最多触发次数', default: 5 },
     nickname: { type: 'string', description: '插件里怎么称呼群友', hint: '留空就用群名片', default: '' },
@@ -85,10 +94,23 @@ const samplePlugin = (name: string, display: string, mem: number): Plugin => ({
       description: '图源接口',
       items: {
         endpoint: { type: 'string', description: '接口地址', default: 'https://api.example.com' },
+        token: { type: 'string', description: '访问令牌', secret: true, default: '' },
         timeout: { type: 'int', description: '超时秒数', default: 10 },
       },
     },
-    templates: { type: 'template_list', description: '回复模板', default: [{ name: '默认', text: '今天也要好好吃饭' }] },
+    templates: {
+      type: 'template_list',
+      description: '回复模板',
+      templates: {
+        fixed: {
+          name: '固定回复', display_item: 'name', items: {
+            name: { type: 'string', description: '模板名称' },
+            text: { type: 'text', description: '回复内容' },
+          },
+        },
+      },
+      default: [{ __template_key: 'fixed', name: '默认', text: '今天也要好好吃饭' }],
+    },
     secret_token: { type: 'string', description: '内部令牌', invisible: true, default: 'x' },
   },
   status: 'running',
@@ -225,6 +247,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
       model: body.model,
       key_masked: `${String(body.api_key).slice(0, 3)}…${String(body.api_key).slice(-4)}`,
       created_at: now(),
+      via_gateway: gatewayBaseUrls.includes(String(body.base_url).replace(/\/+$/, '')),
     }
     state.keys.push(k)
     return ok(k)
@@ -301,6 +324,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
       secret_masked: `${String(body.secret).slice(0, 3)}…${String(body.secret).slice(-4)}`,
       enabled: true,
       status: 'connected' as const,
+      mode: 'websocket' as const,
     }
     b.platforms.push(p)
     return ok(p)
@@ -333,6 +357,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
         secret_masked: kind === 'qq_official' ? 'Xk3…9fQa' : '已保存',
         enabled: true,
         status: 'connected',
+        mode: kind === 'qq_official' ? 'websocket' : undefined,
       }
       b.platforms.push(p)
     }
@@ -348,7 +373,35 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     const p = b.platforms.find((x) => x.id === r![2])!
     Object.assign(p, body)
     if ('enabled' in body) p.status = body.enabled ? 'connected' : 'disabled'
+    if ('mode' in body && p.enabled) {
+      p.status = body.mode === 'webhook' ? 'connecting' : 'connected'
+      p.status_detail = body.mode === 'webhook' ? '等待 QQ 开放平台回调验证' : undefined
+    }
     return ok(p)
+  }
+  r = m(/^\/bots\/(\w+)\/platforms\/(\w+)\/qq-panels(?:\/([\w-]+))?(?:\?scope=(group|c2c))?$/)
+  if (r) {
+    const platform = findBot(r[1])?.platforms.find((entry) => entry.id === r![2] && entry.kind === 'qq_official')
+    if (!platform) return err(404, 'not_found', 'QQ 接入不存在')
+    const records = qqPanelRecords.get(platform.id) ?? []
+    if (method === 'GET') return ok({ records: records.filter((record) => record.scope === r![4]) })
+    if (method === 'POST') {
+      const panel_id = 'p_' + id()
+      qqPanelRecords.set(platform.id, [{ panel_id, scope: body.scope, target_type: 'all', panel: body.panel, version: 1 }, ...records])
+      return ok({ panel_id })
+    }
+    const record = records.find((item) => item.panel_id === r![3])
+    if (!record) return err(404, 'not_found', '指令面板不存在')
+    if (method === 'DELETE') {
+      qqPanelRecords.set(platform.id, records.filter((item) => item !== record))
+      return ok({ ok: true })
+    }
+    if (body.expected_version !== undefined && record.version !== body.expected_version) {
+      return err(409, 'qq_panel_changed', 'QQ 上的面板已有更新，请重新载入后再编辑')
+    }
+    record.panel = body.panel
+    record.version = (record.version ?? 0) + 1
+    return ok({ version: record.version })
   }
   if (path === '/plugins/inspect') {
     const u = String(body.repo_url)
@@ -357,7 +410,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     if (!/plugin/i.test(name)) return err(400, 'not_astrbot_plugin', '这个仓库里没找到 metadata.yaml，看起来不是 AstrBot 插件')
     return ok({
       name,
-      display_name: name.replace(/^astrbot_plugin_/, '').replace(/_/g, ' '),
+      display_name: name === 'astrbot_plugin_gengwiki' ? '梗Wiki' : name.replace(/^astrbot_plugin_/, '').replace(/_/g, ' '),
       version: 'v1.0.3',
       author: u.split('/')[3],
       description: '从仓库 metadata.yaml 读到的插件简介',
@@ -374,6 +427,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     const total = state.bots.reduce((n, x) => n + x.plugins.length, 0)
     if (state.user.quota.plugins != null && total >= state.user.quota.plugins) return err(403, 'quota_exceeded', `插件额度是 ${state.user.quota.plugins} 个，已经用完了`)
     const p = samplePlugin(name, name.replace(/^astrbot_plugin_/, ''), 18 + Math.round(Math.random() * 30))
+    if (name === 'astrbot_plugin_gengwiki') p.display_name = '梗Wiki'
     p.repo_url = body.repo_url
     p.status = 'installing'
     b.plugins.push(p)
@@ -385,7 +439,7 @@ export async function mockFetch(method: string, path: string, body: any): Promis
     }, 5000)
     return ok(p)
   }
-  r = m(/^\/bots\/(\w+)\/plugins\/(\w+)(\/update)?$/)
+  r = m(/^\/bots\/(\w+)\/plugins\/(\w+)(?:\/(update|reload))?$/)
   if (r) {
     const b = findBot(r[1])!
     if (method === 'DELETE') {
@@ -393,10 +447,29 @@ export async function mockFetch(method: string, path: string, body: any): Promis
       return ok({ ok: true })
     }
     const p = b.plugins.find((x) => x.id === r![2])!
+    if (r[3] === 'reload') {
+      if (!p.enabled || b.status === 'stopped' || p.status === 'installing' || p.status === 'over_quota') {
+        return err(409, 'plugin_reload_unavailable', '插件当前无法重载')
+      }
+      pushLog(b.id, { level: 'info', source: `plugin:${p.name}`, message: '插件已重载' })
+      return ok({ ok: true })
+    }
     if (r[3]) p.status = 'installing'
-    else Object.assign(p, body, { updated_at: now() })
+    else {
+      if (body.config_revision && body.config_revision !== p.config_revision) {
+        return err(409, 'plugin_config_changed', '插件设置有更新，请重新载入后再编辑')
+      }
+      if ('config' in body) {
+        p.config = body.config
+        p.config_revision = id()
+      }
+      p.updated_at = now()
+    }
     if (r[3]) setTimeout(() => (p.status = 'running'), 3000)
-    if ('enabled' in (body ?? {})) p.status = body.enabled ? 'running' : 'stopped'
+    if ('enabled' in (body ?? {})) {
+      p.enabled = body.enabled
+      p.status = body.enabled ? 'running' : 'stopped'
+    }
     return ok(p)
   }
   if (path === '/usage') return ok(usage())
@@ -473,7 +546,7 @@ function adminRoute(method: string, path: string, body: any): Response {
         { node_id: 'node-1', sampled_at: now() - 20_000, user_id: 'u1', bot_id: 'b1', bot_name: '群聊小鱼', plugin_id: 'pl1', label: 'daily_quote', cpu_percent: 11.1 },
       ] },
       nodes: [
-        { id: 'node-1', base_url: 'https://node-1.fish.niox.lol', online: true, version: '0.1.0', memory_total_bytes: 4096 * MB, memory_used_bytes: 812 * MB, bots: 4, last_seen: now() - 20000 },
+        { id: 'node-1', base_url: 'https://fish-node-1.niox.lol', online: true, version: '0.1.0', memory_total_bytes: 4096 * MB, memory_used_bytes: 812 * MB, bots: 4, last_seen: now() - 20000 },
       ],
       problems: [
         { user_id: 'u1', user_email: 'qunzhu@example.com', bot_id: 'b1', bot_name: '群聊小鱼', kind: 'platform', id: 'p1', label: 'QQ 官方机器人', status: 'error', status_detail: 'AppSecret 已失效，请重新扫码', updated_at: now() - 40 * 60000 },

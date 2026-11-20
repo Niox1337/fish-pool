@@ -24,7 +24,7 @@ Runtime topology:
 Browser ──HTTPS──> fish.niox.lol  (Worker "fish-console": /api/* handled by Rust, everything else = static SPA assets, SPA fallback to index.html)
                         │  HMAC signed HTTPS
                         ▼
-                  node-1.fish.niox.lol (Cloudflare Tunnel) ──> node agent :8700 on the Linux node host
+                  fish-node-1.niox.lol (Cloudflare Tunnel) ──> node agent :8700 on the Linux node host
                         │  unix socket JSON lines
                         ▼
                   sidecar fork server ──fork──> one Python process per (bot, plugin)
@@ -128,7 +128,7 @@ Subscription and invite codes
 - A 5 minute cron stops the bots of users whose service ran out (DesiredBot `running: false`, bot `status_detail` = `服务已到期，兑换新的邀请码后可以重新启动`). Data is kept. Redeeming a code does not auto start bots.
 
 LLM keys
-- `GET /api/llm-keys` → `{"items": [{id, name, base_url, model, key_masked, created_at}]}`
+- `GET /api/llm-keys` → `{"items": [{id, name, base_url, model, key_masked, created_at, via_gateway}]}`. `via_gateway` is true when the node reaches this provider through the Cloudflare AI Gateway.
 - `POST /api/llm-keys` `{name, base_url, model, api_key}` → item. Worker validates by calling `{base_url}/models` with 8s timeout, failure returns `llm_key_invalid` with the upstream message.
 - `DELETE /api/llm-keys/:id`
 - Presets offered by the UI (base_url): DeepSeek `https://api.deepseek.com/v1`, OpenAI `https://api.openai.com/v1`, SiliconFlow `https://api.siliconflow.cn/v1`, Moonshot `https://api.moonshot.cn/v1`, 智谱 `https://open.bigmodel.cn/api/paas/v4`, custom.
@@ -148,10 +148,11 @@ Bots
 Platform binding (QR flows run on the node, the Worker proxies and stores the result)
 - `POST /api/bots/:id/platforms/qq/qr` → `{"task_id", "qr_url", "interval_s", "expires_at"}`
 - `GET  /api/bots/:id/platforms/qq/qr/:task_id` → `{"status": "pending"|"expired"|"created"|"error", "message"?, "platform"?: Platform}`. On `created` the Worker stores app_id + encrypted secret, creates the platform row, pushes desired state.
-- `POST /api/bots/:id/platforms/qq/manual` `{app_id, secret}` → Platform (fallback)
+- `POST /api/bots/:id/platforms/qq/manual` `{app_id, secret, mode?}` → Platform (fallback)
 - `POST /api/bots/:id/platforms/weixin/qr` → `{"task_id", "qr_url", "interval_s", "expires_at"}`
 - `GET  /api/bots/:id/platforms/weixin/qr/:task_id` → `{"status": "pending"|"scanned"|"expired"|"created"|"error", "platform"?}`
-- `PATCH /api/bots/:id/platforms/:pid` `{enabled?, display_name?}`
+- `PATCH /api/bots/:id/platforms/:pid` `{enabled?, display_name?, mode?}`. `mode` is `websocket` or `webhook`, QQ only, stored in `extra_json.mode`. Platform views of QQ carry `mode` (default `websocket`).
+- `POST /api/qq/webhook/:pid` public QQ callback address, no session or CSRF header. The Worker accepts it only for an enabled QQ platform in `webhook` mode and forwards `{timestamp, signature, app_id, body}` (from `X-Signature-Timestamp`, `X-Signature-Ed25519`, `X-Bot-Appid` and the raw body) to the node, then returns the node's JSON. Unsigned requests other than op 13 are rejected with 401.
 - `DELETE /api/bots/:id/platforms/:pid`
 
 Plugins
@@ -236,6 +237,7 @@ Plugin config schema (`_conf_schema.json`) supported field types for the UI form
 - `GET /v1/usage/summary` reports node memory, storage, per-user totals, history and `plugin_cpu`. The CPU sample contains `percent`, `sampled_at` and the highest-usage `plugins`, each with `user_id`, `bot_id`, `bot_name`, `plugin_id`, `label` and `cpu_percent`. The sample is `null` before the first sampling round.
 - `POST /v1/qr/qq` → `{"task_id","qr_url","interval_s","expires_at"}`
 - `GET  /v1/qr/qq/:task_id` → `{"status", "app_id"?, "secret"?}` (plaintext over the signed TLS tunnel, the Worker encrypts it before storing)
+- `POST /v1/bots/:bot_id/platforms/:platform_id/qq-webhook` `{timestamp, signature, app_id, body}` → op 13 answer `{plain_token, signature}` or `{"op": 12}`. 401 for a bad signature or AppID, 400 when the platform is not running in webhook mode.
 - `POST /v1/qr/weixin` → same shape
 - `GET  /v1/qr/weixin/:task_id` → `{"status", "bot_id"?, "token"?, "base_url"?, "user_id"?}`
 
@@ -244,11 +246,13 @@ DesiredBot = {
   bot_id, user_id, name, running: bool,
   quota: {memory_mb, storage_mb},
   settings: BotSettings,
-  llm: {base_url, model, api_key} | null,          // plaintext resolved from settings.llm.key_id
+  llm: {base_url, model, api_key, endpoint?, gateway_token?} | null,  // plaintext resolved from settings.llm.key_id
   platforms: [{id, kind, enabled, app_id, secret, extra}],
   plugins:   [{id, name, repo_url, version, enabled, config, install_rev}]
 }
 ```
+
+`endpoint` and `gateway_token` are set only for OpenAI, Anthropic, Google Gemini and xAI when the Worker has `AI_GATEWAY` and the `AI_GATEWAY_TOKEN` secret. The node then calls `{endpoint}/chat/completions` (Anthropic `{endpoint}/messages`) with `cf-aig-authorization: Bearer <gateway_token>` and `cf-aig-collect-log: false`, and keeps provider specific parameters keyed on `base_url`. Mapping: `api.openai.com/v1` to `<gateway>/openai`, `api.anthropic.com/v1` to `<gateway>/anthropic/v1`, `generativelanguage.googleapis.com/v1beta/openai` to `<gateway>/google-ai-studio/v1beta/openai`, `api.x.ai/v1` to `<gateway>/grok/v1`. Key validation runs in the Worker and stays direct. Anthropic keys go in `x-api-key`.
 
 `install_rev` (ms) changes when the user asks for a plugin update, a node that sees a new value reinstalls the plugin and keeps its config and data.
 
@@ -259,7 +263,9 @@ Node to console callbacks (optional, best effort, HMAC signed): `POST https://fi
 - One process, tokio. Each bot is a task group: platform adapters, message pipeline, LLM client, plugin bridge.
 - Message pipeline: platform event → normalize to `MessageEvent` → behavior filters (blocklist, rate limit, wake rules) → plugin dispatch (section 8) → if no plugin handled it and the message woke the bot → default LLM chat with persona and the last `context_turns` turns → send reply.
 - Conversation history in SQLite `data/conversations.db`, table per bot rows, attributed as storage source `conversations`.
-- QQ Official: credentials (app_id, secret) → access token via `https://bots.qq.com/app/getAppAccessToken`, WebSocket gateway, intents for group @ messages and C2C messages, passive reply with msg_id/msg_seq. Rebuild from public QQ bot docs.
+- QQ Official: credentials (app_id, secret) → access token via `https://bots.qq.com/app/getAppAccessToken`, passive reply with msg_id/msg_seq. Rebuild from public QQ bot docs. Two ways to receive events, chosen by `extra.mode`:
+  - `websocket` (default): the node opens the gateway with intents for group @ messages and C2C messages.
+  - `webhook`: QQ posts events to `https://fish.niox.lol/api/qq/webhook/<platform id>`. The Ed25519 key comes from the secret repeated to at least 32 bytes and cut to 32. Pushes are verified over `timestamp || body`. The op 13 validation is answered with a signature over `event_ts || plain_token`, and it is signed only for alphanumeric tokens and numeric timestamps, so the answer can never cover a JSON event. A signed op 13 request must carry a valid signature. Retried pushes are dropped by event id. The platform reports `connecting` until the first validation or event, then `connected`.
 - QQ QR bind: random 32 byte key (base64) → `POST https://q.qq.com/lite/create_bind_task {"key"}` → `task_id`, QR content `https://q.qq.com/qqbot/openclaw/connect.html?task_id=...`, poll `POST https://q.qq.com/lite/poll_bind_result` every 2s, status 1 pending, 2 completed, 3 expired. On completion decrypt `bot_encrypt_secret` (base64 of nonce12 || ciphertext || tag16, AES-256-GCM with the key) and return `bot_appid` + secret.
 - WeChat iLink: base `https://ilinkai.weixin.qq.com`, QR via `ilink/bot/get_bot_qrcode` and `ilink/bot/get_qrcode_status`, then long poll for updates and send messages. Private chat only, passive reply only, 24 hour window. Study the protocol and implement independently.
 - Usage: memory of plugin processes measured as PSS from `/proc/<pid>/smaps_rollup` (Linux), fallback RSS on macOS. Core memory per bot is an estimate maintained by counters (buffers, caches, session state). Storage measured by walking `data/tenants/<user_id>/<bot_id>/plugins/<plugin>/` (code + venv + data) every 5 min, conversations by SQLite row bytes. Samples kept 24h in SQLite.

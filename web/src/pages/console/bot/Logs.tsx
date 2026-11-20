@@ -25,7 +25,7 @@ export function LogRow({ line, stacked }: { line: LogLine; stacked?: boolean }) 
     <li className={cn('flex flex-wrap items-baseline gap-x-2.5 px-3 py-0.5 text-white/85', !stacked && 'sm:flex-nowrap', line.level === 'error' && 'bg-[#ff6b78]/10')}>
       <time className="shrink-0 text-white/45 tabular-nums">{fmtTime(line.ts)}</time>
       <span className={cn('w-[5ch] shrink-0 font-semibold', lv.cls)}>{lv.label}</span>
-      <span className="max-w-[16ch] shrink-0 truncate rounded bg-white/10 px-1.5 text-[12px] text-white/70" title={line.source}>
+      <span className={cn('max-w-[16ch] shrink-0 truncate rounded bg-white/10 px-1.5 text-[12px] text-white/70', !stacked && 'sm:w-28 sm:max-w-28')} title={line.source}>
         {sourceLabel(line.source)}
       </span>
       <span className={cn('min-w-0 basis-full break-words whitespace-pre-wrap', !stacked && 'sm:basis-auto')}>{line.message}</span>

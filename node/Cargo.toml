@@ -18,6 +18,7 @@ anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
 hex = "0.4"
 hmac = "0.12"
 rand = "0.8"

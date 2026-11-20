@@ -1,12 +1,13 @@
 //! Plugin inspection from GitHub and per bot plugin management.
 
 use super::{json_body, Reply};
-use crate::app::{ok_json, App, PLUGIN_COLS};
+use crate::app::{ok_json, App, PLUGIN_COLS, PUSH_TIMEOUT_MS};
 use crate::args;
 use crate::error::{ApiError, ApiResult};
 use crate::github::{self, PluginMeta, RepoRef};
 use crate::http;
 use crate::models::PluginRow;
+use crate::node::NodeError;
 use crate::schema;
 use crate::util::{new_id, now_ms};
 use serde::Deserialize;
@@ -175,6 +176,11 @@ pub async fn install(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<Re
 struct PatchReq {
     enabled: Option<bool>,
     config: Option<Value>,
+    config_revision: Option<String>,
+}
+
+fn config_changed() -> ApiError {
+    ApiError::conflict("plugin_config_changed", "插件设置有更新，请重新载入后再编辑")
 }
 
 pub async fn patch(req: &mut Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
@@ -182,21 +188,28 @@ pub async fn patch(req: &mut Request, app: &App, bot_id: &str, pid: &str) -> Api
     let bot = app.owned_bot(&user, bot_id).await?;
     let p = plugin_by_id(app, &bot.id, pid).await?;
     let body: PatchReq = json_body(req).await?;
-    let config = match &body.config {
+    let config = match body.config {
         Some(c) => {
-            schema::validate(p.schema().as_ref(), c).map_err(|m| ApiError::new(400, "config_invalid", m))?;
-            c.clone()
+            if body.config_revision.is_some_and(|revision| revision != p.config_revision()) {
+                return Err(config_changed());
+            }
+            schema::validate(p.schema().as_ref(), &c).map_err(|m| ApiError::new(400, "config_invalid", m))?;
+            Some(serde_json::to_string(&c)?)
         }
-        None => p.config(),
+        None => None,
     };
-    let enabled = body.enabled.map(i64::from).unwrap_or(p.enabled);
-    let status = if enabled == 0 { "stopped" } else if p.enabled == 0 && p.status == "stopped" { "installing" } else { p.status.as_str() };
-    app.db
+    let changed = app.db
         .run(
-            "UPDATE plugins SET enabled = ?2, config_json = ?3, status = ?4, updated_at = ?5 WHERE id = ?1",
-            args![p.id, enabled, serde_json::to_string(&config)?, status, now_ms()],
+            "UPDATE plugins SET enabled = COALESCE(?2, enabled), config_json = COALESCE(?3, config_json), \
+             status = CASE WHEN ?2 = 0 THEN 'stopped' WHEN ?2 = 1 AND enabled = 0 AND status = 'stopped' THEN 'installing' ELSE status END, \
+             updated_at = ?4 WHERE id = ?1 AND (?3 IS NULL OR (config_json = ?5 AND schema_json IS ?6))",
+            args![p.id, body.enabled.map(i64::from), config, now_ms(), p.config_json, p.schema_json],
         )
         .await?;
+    if changed == 0 {
+        plugin_by_id(app, &bot.id, pid).await?;
+        return Err(config_changed());
+    }
     touch_bot(app, &bot.id).await?;
     app.push_bot(&bot.id).await?;
     Ok(Reply::json(plugin_by_id(app, &bot.id, pid).await?.view()))
@@ -211,16 +224,40 @@ pub async fn update(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiRes
     schema::merge_missing(&mut config, &p.config(), true);
     let schema_json = ins.schema.as_ref().map(serde_json::to_string).transpose()?;
     let now = now_ms();
-    app.db
+    let changed = app.db
         .run(
             "UPDATE plugins SET display_name = ?2, version = ?3, author = ?4, description = ?5, config_json = ?6, schema_json = ?7, \
-             status = 'installing', status_detail = '', install_rev = ?8, updated_at = ?8 WHERE id = ?1",
-            args![p.id, ins.meta.display_name, ins.meta.version, ins.meta.author, ins.meta.description, serde_json::to_string(&config)?, schema_json, now],
+             status = CASE WHEN enabled = 1 THEN 'installing' ELSE 'stopped' END, status_detail = '', install_rev = ?8, updated_at = ?8 \
+             WHERE id = ?1 AND config_json = ?9 AND install_rev = ?10",
+            args![p.id, ins.meta.display_name, ins.meta.version, ins.meta.author, ins.meta.description, serde_json::to_string(&config)?, schema_json, now,
+                  p.config_json, p.install_rev],
         )
         .await?;
+    if changed == 0 {
+        plugin_by_id(app, &bot.id, pid).await?;
+        return Err(config_changed());
+    }
     touch_bot(app, &bot.id).await?;
     app.push_bot(&bot.id).await?;
     Ok(Reply::json(plugin_by_id(app, &bot.id, pid).await?.view()))
+}
+
+pub async fn reload(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let bot = app.owned_bot(&user, bot_id).await?;
+    App::require_service(&user)?;
+    let plugin = plugin_by_id(app, &bot.id, pid).await?;
+    if bot.desired_running == 0 || plugin.enabled == 0 {
+        return Err(ApiError::conflict("plugin_reload_unavailable", "启动小鱼并启用插件后才能重载"));
+    }
+    let client = app.node_client(&bot.node_id).await?;
+    let path = format!("/v1/bots/{}/plugins/{}/reload", bot.id, plugin.id);
+    match client.call(Method::Post, &path, None, PUSH_TIMEOUT_MS).await {
+        Ok(_) => Ok(Reply::json(ok_json())),
+        Err(NodeError::Status(409, message)) => Err(ApiError::conflict("plugin_reload_unavailable", message)),
+        Err(NodeError::Unreachable(_)) => Err(ApiError::node_unreachable()),
+        Err(error) => Err(ApiError::new(502, "node_error", error.detail())),
+    }
 }
 
 pub async fn delete(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {

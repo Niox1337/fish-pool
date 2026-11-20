@@ -27,7 +27,7 @@
 
    这个值必须和控制台 Worker 的 `NODE_SECRET` 完全一致。双方用它的 base64 解码结果作为 HMAC 密钥签名请求。
 4. 在 Cloudflare Zero Trust 面板创建一个命名隧道，复制隧道 token 填入 `CLOUDFLARE_TUNNEL_TOKEN`。在隧道的 Public Hostname 中添加:
-   - 主机名 `node-1.fish.niox.lol`
+   - 主机名 `fish-node-1.niox.lol`。Cloudflare 免费证书只覆盖 `*.niox.lol` 一层子域，`node-1.fish.niox.lol` 这样的二级子域无法建立 HTTPS 连接。
    - 服务 `http://node:8700`
 5. `FISH_NODE_ID` 填写控制台里登记的节点 id (默认 `node-1`)。`FISH_CONSOLE_URL` 默认是 `https://fish.niox.lol`，节点会向它回报事件。
 6. 在仓库根目录启动:
@@ -55,6 +55,21 @@ release 构建开启了 LTO，2G 内存可能不够用。可以选择以下任�
   ```
 
   之后在主机上执行 `docker compose -f deploy/compose.yml up -d` (不加 `--build`)。
+
+## 国内主机
+
+国内主机访问 Docker Hub、ghcr.io、crates.io 和 PyPI 都很慢，从境外上传镜像通常也很慢。做法是只上传源码，在主机上用国内镜像源构建。在 `deploy/.env` 里加上：
+
+```sh
+UV_IMAGE=astral/uv:0.8.0
+CARGO_REGISTRY=sparse+https://rsproxy.cn/index/
+APT_MIRROR=http://mirrors.tencent.com
+PIP_INDEX=https://mirrors.cloud.tencent.com/pypi/simple
+```
+
+`PIP_INDEX` 同时用于构建镜像和运行时安装插件依赖。Docker 本身的镜像加速在 `/etc/docker/daemon.json` 的 `registry-mirrors` 配置，腾讯云镜像默认已经配置好。2 核 4G 的主机编译前先加 swap，见上一节。
+
+`fish-node-1` 当前部署在腾讯云上海的轻量应用服务器上，代码位于 `/opt/fish`，执行 `docker compose -f deploy/compose.yml build node` 和 `docker compose -f deploy/compose.yml up -d --no-build` 更新。
 
 ## 日常运维
 

@@ -213,10 +213,6 @@ impl PluginProc {
             .unwrap_or(0)
     }
 
-    pub fn send_config(&self, config: &Value) {
-        self.writer.send(&json!({"op": "config", "config": config}));
-    }
-
     pub fn shutdown(&self) {
         self.writer.send(&json!({"op": "shutdown"}));
     }

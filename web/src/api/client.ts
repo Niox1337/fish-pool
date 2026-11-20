@@ -1,4 +1,8 @@
 import type {
+  QqMode,
+  QqPanel,
+  QqPanelRecord,
+  QqPanelScope,
   AdminOverview,
   AdminUser,
   Invite,
@@ -67,6 +71,7 @@ const get = <T>(p: string) => request<T>('GET', p)
 const post = <T>(p: string, b?: unknown) => request<T>('POST', p, b ?? {})
 const patch = <T>(p: string, b: unknown) => request<T>('PATCH', p, b)
 const del = <T>(p: string) => request<T>('DELETE', p)
+const qqPanelsPath = (id: string, pid: string) => `/bots/${id}/platforms/${pid}/qq-panels`
 
 export const api = {
   captcha: () => get<{ id: string; svg: string }>('/captcha'),
@@ -96,15 +101,23 @@ export const api = {
   qrStart: (id: string, kind: 'qq' | 'weixin') => post<QrTask>(`/bots/${id}/platforms/${kind}/qr`),
   qrPoll: (id: string, kind: 'qq' | 'weixin', task: string) => get<QrStatus>(`/bots/${id}/platforms/${kind}/qr/${task}`),
   qqManual: (id: string, b: { app_id: string; secret: string }) => post<Platform>(`/bots/${id}/platforms/qq/manual`, b),
-  updatePlatform: (id: string, pid: string, b: { enabled?: boolean; display_name?: string }) =>
+  updatePlatform: (id: string, pid: string, b: { enabled?: boolean; display_name?: string; mode?: QqMode }) =>
     patch<Platform>(`/bots/${id}/platforms/${pid}`, b),
   deletePlatform: (id: string, pid: string) => del<{ ok: true }>(`/bots/${id}/platforms/${pid}`),
+  qqPanels: (id: string, pid: string, scope: QqPanelScope) => get<{ records: QqPanelRecord[] }>(`${qqPanelsPath(id, pid)}?scope=${scope}`),
+  createQqPanel: (id: string, pid: string, scope: QqPanelScope, panel: QqPanel) =>
+    post<{ panel_id: string }>(qqPanelsPath(id, pid), { scope, panel }),
+  updateQqPanel: (id: string, pid: string, panelId: string, panel: QqPanel, expectedVersion?: number) =>
+    request<{ version: number }>('PUT', `${qqPanelsPath(id, pid)}/${encodeURIComponent(panelId)}`, { panel, expected_version: expectedVersion }),
+  deleteQqPanel: (id: string, pid: string, panelId: string) =>
+    del<{ ok: true }>(`${qqPanelsPath(id, pid)}/${encodeURIComponent(panelId)}`),
 
   inspectPlugin: (repo_url: string) => post<PluginInspect>('/plugins/inspect', { repo_url }),
   addPlugin: (id: string, repo_url: string) => post<Plugin>(`/bots/${id}/plugins`, { repo_url }),
-  updatePlugin: (id: string, pid: string, b: { enabled?: boolean; config?: Record<string, unknown> }) =>
+  updatePlugin: (id: string, pid: string, b: { enabled?: boolean; config?: Record<string, unknown>; config_revision?: string }) =>
     patch<Plugin>(`/bots/${id}/plugins/${pid}`, b),
   upgradePlugin: (id: string, pid: string) => post<Plugin>(`/bots/${id}/plugins/${pid}/update`),
+  reloadPlugin: (id: string, pid: string) => post<{ ok: true }>(`/bots/${id}/plugins/${pid}/reload`),
   deletePlugin: (id: string, pid: string) => del<{ ok: true }>(`/bots/${id}/plugins/${pid}`),
 
   usage: () => get<Usage>('/usage'),

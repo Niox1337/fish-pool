@@ -1,20 +1,21 @@
-from astrbot.api import logger
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 
 @register("cmd_plugin", "fish", "command sample", "1.2.3")
 class CmdPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.initialized = False
+        self.echo_prefix = config.get("echo_prefix", "echo")
 
     async def initialize(self):
         self.initialized = True
 
     @filter.command("echo", alias={"复读"})
     async def echo(self, event: AstrMessageEvent, text: str):
-        yield event.plain_result(f"echo:{text}")
+        yield event.plain_result(f"{self.echo_prefix}:{text}")
 
     @filter.command("add")
     async def add(self, event: AstrMessageEvent, a: int, b: int = 10):

@@ -2,6 +2,14 @@ import type { PluginSchema, SchemaField } from '@/api/types'
 
 export type Obj = Record<string, unknown>
 
+export function isObject(value: unknown): value is Obj {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+export function schemaFields(schema: PluginSchema) {
+  return Object.entries(schema).filter(([, field]) => isObject(field))
+}
+
 function typeDefault(f: SchemaField): unknown {
   if (f.default !== undefined) return f.default
   switch (f.type) {
@@ -9,7 +17,7 @@ function typeDefault(f: SchemaField): unknown {
       return false
     case 'int':
     case 'float':
-      return f.slider?.min ?? 0
+      return 0
     case 'list':
     case 'template_list':
       return []
@@ -23,10 +31,11 @@ function typeDefault(f: SchemaField): unknown {
 }
 
 export function withDefaults(schema: PluginSchema, value: Obj): Obj {
-  const out: Obj = { ...value }
-  for (const [k, f] of Object.entries(schema)) {
-    if (out[k] === undefined) out[k] = typeDefault(f)
-    else if (f.type === 'object' && f.items && out[k] && typeof out[k] === 'object') out[k] = withDefaults(f.items, out[k] as Obj)
+  return {
+    ...value,
+    ...Object.fromEntries(schemaFields(schema).map(([name, field]) => {
+      const stored = Object.hasOwn(value, name) ? value[name] : typeDefault(field)
+      return [name, field.type === 'object' && isObject(stored) ? withDefaults(field.items ?? {}, stored) : stored]
+    })),
   }
-  return out
 }

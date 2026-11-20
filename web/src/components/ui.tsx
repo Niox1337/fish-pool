@@ -230,6 +230,7 @@ export function ConfirmDialog({
   onConfirm,
   loading,
   tone = 'danger',
+  returnFocus,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -239,13 +240,17 @@ export function ConfirmDialog({
   onConfirm: () => void
   loading?: boolean
   tone?: 'danger' | 'primary'
+  returnFocus?: () => void
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-cobalt-950/45 data-[state=open]:animate-[fade-in_150ms_ease-out]" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-paper-3 bg-cream p-6 shadow-[var(--shadow-lift)] focus:outline-none data-[state=open]:animate-[pop-in_200ms_var(--ease-out-expo)]">
-          <Dialog.Title className="font-display text-lg font-black text-ink">{title}</Dialog.Title>
+        <Dialog.Content
+          className="fixed top-1/2 left-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-paper-3 bg-cream p-6 shadow-[var(--shadow-lift)] focus:outline-none motion-safe:data-[state=open]:animate-[pop-in_200ms_var(--ease-out-expo)]"
+          onCloseAutoFocus={returnFocus ? (event) => { event.preventDefault(); returnFocus() } : undefined}
+        >
+          <Dialog.Title className="font-display text-lg font-black wrap-anywhere text-ink">{title}</Dialog.Title>
           <Dialog.Description asChild>
             <div className="mt-2 text-[15px] leading-relaxed text-ink-2">{body}</div>
           </Dialog.Description>
@@ -269,25 +274,38 @@ export function Sheet({
   title,
   description,
   children,
+  side = 'bottom',
+  returnFocus,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   title: ReactNode
   description?: ReactNode
   children: ReactNode
+  side?: 'bottom' | 'right'
+  returnFocus?: () => void
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-cobalt-950/45 data-[state=open]:animate-[fade-in_150ms_ease-out]" />
-        <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[92dvh] overflow-y-auto rounded-t-3xl border border-paper-3 bg-paper p-6 shadow-[var(--shadow-lift)] focus:outline-none sm:inset-x-auto sm:top-1/2 sm:bottom-auto sm:left-1/2 sm:w-[min(92vw,520px)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl data-[state=open]:animate-[pop-in_220ms_var(--ease-out-expo)]">
-          <Dialog.Title className="font-display text-xl font-black text-ink">{title}</Dialog.Title>
-          {description ? (
-            <Dialog.Description className="mt-1 text-[15px] leading-relaxed text-ink-2">{description}</Dialog.Description>
-          ) : (
-            <Dialog.Description className="sr-only">{typeof title === 'string' ? title : ''}</Dialog.Description>
-          )}
-          <div className="mt-5">{children}</div>
+        <Dialog.Content
+          className={cn('fixed z-50 bg-paper shadow-[var(--shadow-lift)] focus:outline-none', side === 'right'
+            ? 'inset-y-0 right-0 flex w-full flex-col sm:max-w-xl motion-safe:data-[state=open]:animate-[slide-in-right_220ms_var(--ease-out-expo)]'
+            : 'inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto rounded-t-3xl border border-paper-3 p-6 sm:inset-x-auto sm:top-1/2 sm:bottom-auto sm:left-1/2 sm:w-[min(92vw,520px)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl data-[state=open]:animate-[pop-in_220ms_var(--ease-out-expo)]')}
+          onOpenAutoFocus={side === 'right' ? (event) => {
+            event.preventDefault()
+            if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
+          } : undefined}
+          onCloseAutoFocus={returnFocus ? (event) => { event.preventDefault(); returnFocus() } : undefined}
+        >
+          <div className={side === 'right' ? 'border-b border-paper-3 bg-cream px-5 py-5 sm:px-8 sm:py-6' : undefined}>
+            <Dialog.Title className="font-display text-xl font-black wrap-anywhere text-ink">{title}</Dialog.Title>
+            <Dialog.Description className={description ? 'mt-1 text-sm leading-relaxed text-ink-2' : 'sr-only'}>
+              {description ?? (typeof title === 'string' ? title : '')}
+            </Dialog.Description>
+          </div>
+          <div className={side === 'right' ? 'min-h-0 flex-1' : 'mt-5'}>{children}</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

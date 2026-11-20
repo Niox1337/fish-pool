@@ -127,6 +127,10 @@ pub struct LlmSpec {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    /// Base URL to call instead of `base_url`. Empty means `base_url`.
+    pub endpoint: String,
+    /// Sent as `cf-aig-authorization` when `endpoint` is set.
+    pub gateway_token: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]

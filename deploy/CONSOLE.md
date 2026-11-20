@@ -66,6 +66,7 @@ Worker 从环境读取以下名称。随机密钥都需要分别生成，不要�
 | `ADMIN_EMAILS` | 可选 | 输入允许直接注册为管理员的邮箱，多个地址用英文逗号分隔。邮箱由所有者提供，不能用 OpenSSL 生成。 |
 | `RESEND_API_KEY` | 仅 `EMAIL_PROVIDER = "resend"` 时必需 | 在 Resend 后台创建发送邮件的 API 凭据，不能用 OpenSSL 生成。默认 Cloudflare 邮件方案不需要它。 |
 | `GITHUB_TOKEN` | 可选 | 在 GitHub 创建访问插件仓库所需的 token，用于提高插件检查的 API 限额，不能用 OpenSSL 生成。缺省时使用未认证的 GitHub API。 |
+| `AI_GATEWAY_TOKEN` | 可选 | 在 Cloudflare 后台创建带 AI Gateway Run 权限的 API token。配置后，OpenAI、Anthropic、Google Gemini 和 xAI 的请求由节点经 `AI_GATEWAY` 指向的网关转发。缺省时节点直连这些服务商。 |
 
 在 `console/` 逐项上传，命令会提示输入内容：
 
@@ -87,7 +88,10 @@ wrangler secret put ADMIN_EMAILS
 wrangler secret put NODE_SECRET_NODE_1
 wrangler secret put RESEND_API_KEY
 wrangler secret put GITHUB_TOKEN
+wrangler secret put AI_GATEWAY_TOKEN
 ```
+
+`AI_GATEWAY` 写在 `wrangler.toml` 的 `[vars]` 里，格式是 `https://gateway.ai.cloudflare.com/v1/<账户 ID>/<网关 ID>`。当前使用自建网关 `fish`，网关上已关闭日志、缓存、限速和重试，并开启鉴权。节点请求带 `cf-aig-collect-log: false`，网关不保存用户的对话内容。改动后需要重新推送小鱼（启动、重启或修改设置）才会生效。
 
 `ADMIN_EMAILS` 也能作为普通环境变量读取，但这里使用 secret，避免把个人邮箱写入文件。不要在 `[vars]` 再声明同名变量。它只影响注册时的管理员赋权和免邀请码注册，不会自动提升已有账号。已有账号用后面的 `make-admin.sh`。
 
@@ -135,7 +139,7 @@ routes = [
 
 这是同一个 Worker 的自定义域名，覆盖整个站点，不是仅给 `/api/*` 配一条代理路由。发布时 Cloudflare 会配置 DNS 和证书，已有同名 CNAME 会阻止创建自定义域名，需要所有者先核对并处理冲突。见 [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)。
 
-核对 `[vars]` 的 `DEFAULT_NODE_ID = "node-1"`、`DEFAULT_NODE_URL = "https://node-1.fish.niox.lol"`，与节点的 Tunnel 地址一致。定时任务 `*/5 * * * *` 每 5 分钟执行清理、重试推送和到期处理。
+核对 `[vars]` 的 `DEFAULT_NODE_ID = "node-1"`、`DEFAULT_NODE_URL = "https://fish-node-1.niox.lol"`，与节点的 Tunnel 地址一致。定时任务 `*/5 * * * *` 每 5 分钟执行清理、重试推送和到期处理。
 
 **生产环境绝不能设置 `FISH_DEV`。** 不要在 `wrangler.toml`、Worker secret 或部署终端环境中设置它，包括 `"0"`。开发模式会把验证码和图形验证码答案写入日志，还会允许开发用 HTTP 地址和 GitHub 请求地址覆盖。部署脚本拒绝任何 `[vars].FISH_DEV`，也拒绝远程 secret 列表中的 `FISH_DEV`。
 
@@ -217,3 +221,14 @@ unset ADMIN_EMAIL
 安装前端依赖后，可以在 `console/.dev.vars` 中配置仅限本地使用的 `DATA_KEY`、`NODE_SECRET`、`FISH_DEV=1` 和 `EMAIL_PROVIDER=log`。生成密钥的方法与上面相同。不要把该文件用于生产。
 
 在 `console/` 先执行 `wrangler d1 migrations apply DB --local`，再用 `wrangler dev --local` 启动。配置中的构建命令会生成 SPA 和 Wasm。需要前端热更新时，另开终端在 `web/` 执行 `npm run dev`，Vite 将 `/api` 转发到 `http://127.0.0.1:8787`。本地联调真实节点时，`DEFAULT_NODE_URL` 也要改为本地节点地址，仅放在本地配置中。
+
+## QQ Webhook 回调放行
+
+QQ 开放平台的回调请求打到 `https://fish.niox.lol/api/qq/webhook/<平台 ID>`。在 Cloudflare 后台创建一个 API token，权限为 Zone Read、Zone Settings Read、Bot Management Read 和 Zone WAF Edit，范围限定 `niox.lol`，写进项目根目录 `.env` 的 `CLOUDFLARE_API_TOKEN`，然后执行：
+
+```sh
+scripts/cf-qq-webhook.sh --check
+scripts/cf-qq-webhook.sh --apply
+```
+
+`--check` 只读，列出安全级别、浏览器完整性检查、Bot Fight Mode 和现有自定义规则。`--apply` 在自定义规则最前面加一条跳过规则，只匹配 `POST /api/qq/webhook/*`，重复执行不会重复添加。免费版的 Bot Fight Mode 无法用规则跳过，脚本发现它开着时会提示，需要在 Security > Bots 手动关闭。

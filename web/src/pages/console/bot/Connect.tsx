@@ -1,17 +1,18 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { QRCodeSVG } from 'qrcode.react'
-import { CircleCheck, QrCode, RotateCw, Smartphone, Trash2 } from 'lucide-react'
+import { CircleCheck, Copy, ExternalLink, QrCode, RotateCw, Smartphone, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/api/client'
 import { keys, useBotMutation } from '@/api/hooks'
-import type { Bot, Platform, QrTask } from '@/api/types'
+import type { Bot, Platform, QqMode, QrTask } from '@/api/types'
 import { Button, ConfirmDialog, Field, Input, Switch, useFieldId } from '@/components/ui'
 import { QqPenguin, WeChatBubble } from '@/components/icons'
 import { cn } from '@/lib/cn'
 import { platformName, PlatformStatusPill } from './status'
 import { InlineName } from './shared'
 import { errMsg, useErrorToast } from './errors'
+import { copyText } from '../admin/copy'
 
 type Kind = 'qq' | 'weixin'
 type Phase = 'idle' | 'starting' | 'pending' | 'scanned' | 'expired' | 'error' | 'created'
@@ -261,6 +262,88 @@ function Channel({ icon, title, intro, children }: { icon: ReactNode; title: str
   )
 }
 
+const qqModes: { key: QqMode; label: string; note: string }[] = [
+  { key: 'websocket', label: 'WebSocket（推荐）', note: '小鱼主动连接 QQ，不需要额外配置。' },
+  { key: 'webhook', label: 'Webhook', note: 'QQ 把消息推送到托管班的回调地址，需要在 QQ 开放平台填写地址并勾选事件。' },
+]
+
+function QqConnection({ bot, p }: { bot: Bot; p: Platform }) {
+  const showError = useErrorToast()
+  const update = useBotMutation(bot.id, (b: { mode: QqMode }) => api.updatePlatform(bot.id, p.id, b))
+  const mode: QqMode = update.isPending && update.variables ? update.variables.mode : (p.mode ?? 'websocket')
+  const callback = `${window.location.origin}/api/qq/webhook/${p.id}`
+  const current = qqModes.find((m) => m.key === mode)!
+
+  function pick(next: QqMode) {
+    if (next === mode || update.isPending) return
+    update.mutate(
+      { mode: next },
+      {
+        onSuccess: () => toast.success(next === 'webhook' ? '已改为 Webhook，填好回调地址后就能收到消息' : '已改为 WebSocket，正在重新连接'),
+        onError: (e) => showError(e),
+      },
+    )
+  }
+
+  return (
+    <div className="mt-3 basis-full">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span id={`qq-mode-${p.id}`} className="text-[13px] font-semibold text-ink-2">
+          连接方式
+        </span>
+        <div role="radiogroup" aria-labelledby={`qq-mode-${p.id}`} className="flex rounded-xl border border-paper-3 bg-paper-2 p-0.5">
+          {qqModes.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              role="radio"
+              aria-checked={mode === m.key}
+              disabled={update.isPending}
+              onClick={() => pick(m.key)}
+              className={cn(
+                'cursor-pointer rounded-[10px] px-3 py-1 text-[13px] font-semibold transition-colors duration-150 disabled:cursor-wait',
+                mode === m.key ? 'bg-cream text-ink shadow-[0_1px_2px_rgb(27_33_99/0.12)]' : 'text-ink-3 hover:text-ink',
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="mt-1.5 text-[13px] leading-relaxed text-ink-3">{current.note}</p>
+
+      {mode === 'webhook' && (
+        <div className="mt-3 rounded-xl border border-paper-3 bg-paper/60 p-4">
+          <p className="text-[13px] font-semibold text-ink-2">回调地址</p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 basis-60 break-all rounded-lg bg-white px-3 py-2 font-mono text-[13px] text-ink">{callback}</code>
+            <Button size="sm" variant="secondary" onClick={() => copyText(callback, '回调地址')}>
+              <Copy aria-hidden />
+              复制
+            </Button>
+          </div>
+          <ol className="mt-4 grid list-decimal gap-1.5 pl-5 text-[13px] leading-relaxed text-ink-2 marker:font-semibold marker:text-ink-3">
+            <li>
+              打开{' '}
+              <a href="https://q.qq.com/qqbot/#/developer/webhook-setting" target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-semibold text-sky hover:underline">
+                QQ 开放平台的回调配置
+                <ExternalLink className="size-3" aria-hidden />
+              </a>
+              ，选中 AppID 为 <span className="font-mono">{p.app_id}</span> 的机器人。
+            </li>
+            <li>粘贴回调地址并确认。验证通过后，这里的状态会变成「已连上」。</li>
+            <li>
+              在事件订阅里勾选群聊 @ 消息（<span className="font-mono">GROUP_AT_MESSAGE_CREATE</span>）和单聊消息（
+              <span className="font-mono">C2C_MESSAGE_CREATE</span>）。
+            </li>
+          </ol>
+          <p className="mt-3 text-[13px] leading-relaxed text-ink-3">以后改回 WebSocket 时，记得在开放平台删掉这个回调地址。</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PlatformRow({ bot, p }: { bot: Bot; p: Platform }) {
   const [confirm, setConfirm] = useState(false)
   const showError = useErrorToast()
@@ -293,6 +376,7 @@ function PlatformRow({ bot, p }: { bot: Bot; p: Platform }) {
         {p.status_detail && (
           <p className={cn('mt-1.5 text-[13px] leading-relaxed', p.status === 'error' ? 'text-bad' : 'text-ink-2')}>{p.status_detail}</p>
         )}
+        {p.kind === 'qq_official' && <QqConnection bot={bot} p={p} />}
       </div>
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-2 text-[13px] font-semibold text-ink-2">
@@ -344,7 +428,7 @@ export default function Connect({ bot }: { bot: Bot }) {
         <Channel
           icon={<QqPenguin className="size-5" />}
           title="QQ 官方机器人"
-          intro={<p>扫码创建机器人，自动填写 AppID 和密钥。</p>}
+          intro={<p>扫码创建机器人，自动填写 AppID 和密钥。默认用 WebSocket 连接，接入后可以在下方改成 Webhook。</p>}
         >
           <QrFlow botId={bot.id} kind="qq" again={hasQq} />
           <QqManual botId={bot.id} />

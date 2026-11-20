@@ -88,6 +88,15 @@ fn check_field(path: &str, def: &Value, v: &Value) -> Result<(), String> {
             validate_at(path, items, v)?;
         }
     }
+    if let ("template_list", Some(entries), Some(templates)) = (field_type(def), v.as_array(), def.get("templates")) {
+        for (index, entry) in entries.iter().enumerate() {
+            if let Some(items) = entry.get("__template_key").and_then(Value::as_str)
+                .and_then(|key| templates.get(key)).and_then(|template| template.get("items"))
+            {
+                validate_at(&format!("{path}[{index}]"), items, entry)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -174,5 +183,17 @@ mod tests {
         assert_eq!(base, json!({"a": 1, "b": 2, "n": {"x": 1, "y": 2, "z": 4}}));
         merge_missing(&mut base, &json!({"a": 9, "n": {"y": 3}}), true);
         assert_eq!(base, json!({"a": 9, "b": 2, "n": {"x": 1, "y": 3, "z": 4}}));
+    }
+
+    #[test]
+    fn validates_known_template_items_and_preserves_legacy_entries() {
+        let schema = json!({"rules": {"type": "template_list", "templates": {
+            "rule": {"items": {"count": {"type": "int"}}}
+        }}});
+        assert!(validate(Some(&schema), &json!({"rules": [
+            {"__template_key": "rule", "count": 2}, {"__template_key": "removed", "extra": true}
+        ]})).is_ok());
+        let err = validate(Some(&schema), &json!({"rules": [{"__template_key": "rule", "count": "2"}]})).unwrap_err();
+        assert!(err.contains("rules[0].count"));
     }
 }

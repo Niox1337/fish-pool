@@ -9,7 +9,7 @@ Anything marked unsupported raises `NotImplementedError` (class `astrbot.Unsuppo
 Plugin loading
 - `main.py` with a `Star` subclass, with or without `@register(name, author, desc, version, repo)`. Name, author, description and version fall back to `metadata.yaml`.
 - `__init__(self, context)` and `__init__(self, context, config)`.
-- `_conf_schema.json` defaults (nested `object` items included) merged with the config the node sends. `config` ops from the node replace values live.
+- `_conf_schema.json` defaults (nested `object` items included) merged with the config the node sends. Saving changes in the console reloads the plugin so its constructor and `initialize()` receive the new values.
 - Relative imports inside the plugin (`from .lib import x`). The plugin is imported as `data.plugins.<name>`.
 - `async initialize()` after construction and `async terminate()` on shutdown (5 s limit).
 - Working directory is the plugin data dir. `data/plugins/<name>` points at the plugin source.

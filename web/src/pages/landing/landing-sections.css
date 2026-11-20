@@ -268,6 +268,7 @@
 }
 
 .ls-note {
+  position: relative;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: clamp(16px, 3vw, 40px);
@@ -425,6 +426,15 @@
   overflow-wrap: anywhere;
 }
 
+@media (max-width: 1100px) {
+  .ls-whale {
+    width: 76px;
+  }
+  .ls-checks {
+    padding-right: 64px;
+  }
+}
+
 @media (max-width: 760px) {
   .ls-book {
     grid-template-columns: minmax(0, 1fr);
@@ -437,12 +447,6 @@
   }
   .ls-page {
     padding-bottom: 40px;
-  }
-  .ls-whale {
-    width: 76px;
-  }
-  .ls-checks {
-    padding-right: 64px;
   }
   .ls-note {
     grid-template-columns: 1fr;

@@ -5,6 +5,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/node.Dockerfile
+      args:
+        UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.8.0}
+        CARGO_REGISTRY: ${CARGO_REGISTRY:-}
+        APT_MIRROR: ${APT_MIRROR:-}
+        PIP_INDEX: ${PIP_INDEX:-}
     image: fish-node:latest
     restart: unless-stopped
     environment:
@@ -12,6 +17,7 @@ services:
       FISH_NODE_SECRET: ${FISH_NODE_SECRET:?set FISH_NODE_SECRET in deploy/.env}
       FISH_CONSOLE_URL: ${FISH_CONSOLE_URL:-https://fish.niox.lol}
       RUST_LOG: ${RUST_LOG:-info}
+      FISH_PIP_INDEX: ${PIP_INDEX:-}
     volumes:
       - fish-data:/data
     expose:

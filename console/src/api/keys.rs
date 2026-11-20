@@ -4,6 +4,7 @@ use super::{json_body, Reply};
 use crate::app::{ok_json, App, KEY_COLS};
 use crate::args;
 use crate::error::{ApiError, ApiResult};
+use crate::gateway::AiGateway;
 use crate::http;
 use crate::models::LlmKeyRow;
 use crate::settings::BotSettings;
@@ -13,6 +14,8 @@ use serde_json::{json, Value};
 use worker::{Method, Request};
 
 const MAX_KEYS: i64 = 20;
+const CLAUDE_BASE_URL: &str = "https://api.anthropic.com/v1";
+const CLAUDE_API_VERSION: &str = "2026-10-21";
 
 /// Normalizes a base URL: https (http only in dev), no query or fragment, no trailing slash.
 pub fn normalize_base_url(input: &str, allow_http: bool) -> Option<String> {
@@ -49,8 +52,16 @@ pub async fn list(req: &Request, app: &App) -> ApiResult<Reply> {
         .all(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE user_id = ?1 ORDER BY created_at"), args![user.id])
         .await?;
     let dec = app.decryptor()?;
-    let items: Vec<Value> = rows.iter().map(|r| r.view(dec(&r.api_key_enc).as_deref())).collect();
+    let gateway = app.ai_gateway();
+    let items: Vec<Value> = rows.iter().map(|r| key_view(r, dec(&r.api_key_enc).as_deref(), gateway.as_ref())).collect();
     Ok(Reply::json(json!({"items": items})))
+}
+
+/// Key view plus `via_gateway`, true when the node reaches this provider through the AI Gateway.
+fn key_view(row: &LlmKeyRow, plaintext: Option<&str>, gateway: Option<&AiGateway>) -> Value {
+    let mut view = row.view(plaintext);
+    view["via_gateway"] = json!(gateway.and_then(|g| g.endpoint(&row.base_url)).is_some());
+    view
 }
 
 #[derive(Deserialize)]
@@ -61,11 +72,30 @@ struct CreateReq {
     api_key: String,
 }
 
+fn model_list_url(base_url: &str) -> String {
+    if let Some(origin) = base_url.strip_suffix("/compatible-mode/v1") {
+        let is_beijing_workspace = origin
+            .strip_prefix("https://")
+            .and_then(|host| host.strip_suffix(".cn-beijing.maas.aliyuncs.com"))
+            .is_some_and(|workspace| !workspace.is_empty() && workspace.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        if origin == "https://dashscope.aliyuncs.com" || is_beijing_workspace {
+            return format!("{origin}/api/v1/models");
+        }
+    }
+    format!("{base_url}/models")
+}
+
 async fn validate_upstream(base_url: &str, api_key: &str) -> ApiResult<()> {
     let auth = format!("Bearer {api_key}");
-    let headers = [("authorization", auth.as_str()), ("accept", "application/json"), ("user-agent", "fish-console")];
+    let mut headers = vec![("accept", "application/json"), ("user-agent", "fish-console")];
+    if base_url == CLAUDE_BASE_URL {
+        headers.push(("x-api-key", api_key));
+        headers.push(("anthropic-version", CLAUDE_API_VERSION));
+    } else {
+        headers.push(("authorization", auth.as_str()));
+    }
     let invalid = |m: String| ApiError::new(400, "llm_key_invalid", format!("API Key 校验失败：{m}"));
-    let resp = http::send(Method::Get, &format!("{base_url}/models"), &headers, None, 8_000)
+    let resp = http::send(Method::Get, &model_list_url(base_url), &headers, None, 8_000)
         .await
         .map_err(|e| invalid(if e == "timeout" { "请求超时（8 秒）".into() } else { format!("无法连接到服务：{e}") }))?;
     if !resp.ok() {
@@ -106,7 +136,7 @@ pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
         .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1"), args![id])
         .await?
         .ok_or_else(|| ApiError::internal("inserted key missing"))?;
-    Ok(Reply::json(row.view(Some(api_key))))
+    Ok(Reply::json(key_view(&row, Some(api_key), app.ai_gateway().as_ref())))
 }
 
 pub async fn delete(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
@@ -153,5 +183,13 @@ mod tests {
         assert_eq!(upstream_message(400, r#"{"error":"bad"}"#), "HTTP 400：bad");
         assert_eq!(upstream_message(500, ""), "HTTP 500");
         assert_eq!(upstream_message(502, "gateway"), "HTTP 502：gateway");
+    }
+
+    #[test]
+    fn model_list_uses_dashscope_native_path_only_on_official_beijing_hosts() {
+        assert_eq!(model_list_url("https://dashscope.aliyuncs.com/compatible-mode/v1"), "https://dashscope.aliyuncs.com/api/v1/models");
+        assert_eq!(model_list_url("https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"), "https://llm-demo.cn-beijing.maas.aliyuncs.com/api/v1/models");
+        assert_eq!(model_list_url("https://example.com/compatible-mode/v1"), "https://example.com/compatible-mode/v1/models");
+        assert_eq!(model_list_url(CLAUDE_BASE_URL), "https://api.anthropic.com/v1/models");
     }
 }

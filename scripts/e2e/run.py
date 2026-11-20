@@ -18,18 +18,27 @@ import threading
 import time
 import traceback
 import urllib.error
+from urllib.parse import parse_qs, urlsplit
 import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[2]
 PERSONA = "You are the local test fish. Reply with the deterministic test response."
+TEMPERATURE = 0.5
 PROMPT = "Hello from the full stack test"
 REPLY = "local fish reply"
 API_KEY = "sk-local-e2e-1234"
 MODEL = "fish-e2e"
 REPO = "https://github.com/fish-e2e/cmd_plugin"
 METADATA = b"name: cmd_plugin\nauthor: fish\ndesc: Local command fixture\nversion: 1.2.3\n"
+CONFIG_SCHEMA = {"echo_prefix": {"type": "string", "description": "Echo prefix", "default": "echo"}}
+QQ_APP_ID = "102384756"
+QQ_SECRET = "naOC0ocQE3shWLAfffVLB1rhYPG7"
+QQ_PANEL_TOKEN = "local-qq-panel-token"
+# Ed25519 signature of "1725442341Arq0D5A61EgUu4OxUvOp" under the key derived from QQ_SECRET.
+QQ_VALIDATION_SIG = ("3be3ed93973d9d382e3c4f0a65b57cabc9e48e3f7fcbca6c238e349f51bb5263"
+                     "cb24e3723053f44af5540143a04450bdbdd4824453d483c58ad82e4fb039350a")
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -38,11 +47,14 @@ class Fixture(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), Handler)
         self.record = record
         self.requests = []
+        self.archive_downloads = 0
+        self.panels = {}
         self.lock = threading.Lock()
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as z:
             z.writestr("cmd_plugin/main.py", (ROOT / "sidecar/tests/plugins/cmd_plugin/main.py").read_bytes())
             z.writestr("cmd_plugin/metadata.yaml", METADATA)
+            z.writestr("cmd_plugin/_conf_schema.json", json.dumps(CONFIG_SCHEMA))
         self.archive = archive.getvalue()
 
 
@@ -59,6 +71,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.path.startswith("/v2/panels"):
+            return self.qq_panels("GET")
         if self.path == "/v1/models":
             if self.headers.get("Authorization") != f"Bearer {API_KEY}":
                 return self.reply(401, {"error": {"message": "invalid local credential"}})
@@ -67,11 +81,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"private": False, "default_branch": "main"})
         if self.path == "/gh-raw/fish-e2e/cmd_plugin/main/metadata.yaml":
             return self.reply(200, METADATA, "text/plain")
+        if self.path == "/gh-raw/fish-e2e/cmd_plugin/main/_conf_schema.json":
+            return self.reply(200, CONFIG_SCHEMA)
         if self.path == "/codeload/fish-e2e/cmd_plugin/zip/HEAD":
+            with self.server.lock:
+                self.server.archive_downloads += 1
             return self.reply(200, self.server.archive, "application/zip")
         self.reply(404, {"error": "local fixture route not found"})
 
     def do_POST(self):
+        if self.path == "/qq-token":
+            credentials = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if credentials != {"appId": QQ_APP_ID, "clientSecret": QQ_SECRET}:
+                return self.reply(401, {"message": "invalid QQ fixture credentials"})
+            return self.reply(200, {"access_token": QQ_PANEL_TOKEN, "expires_in": 7200})
+        if self.path == "/v2/panels":
+            return self.qq_panels("POST")
         if self.path != "/v1/chat/completions":
             return self.reply(404, {"error": "local fixture route not found"})
         if self.headers.get("Authorization") != f"Bearer {API_KEY}":
@@ -86,6 +111,41 @@ class Handler(BaseHTTPRequestHandler):
             "choices": [{"index": 0, "message": {"role": "assistant", "content": REPLY}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
         })
+
+    def do_PUT(self):
+        self.qq_panels("PUT")
+
+    def do_DELETE(self):
+        self.qq_panels("DELETE")
+
+    def qq_panels(self, method):
+        if self.headers.get("Authorization") != f"QQBot {QQ_PANEL_TOKEN}" or self.headers.get("X-Union-Appid") != QQ_APP_ID:
+            return self.reply(401, {"message": "invalid panel token or AppID"})
+        url = urlsplit(self.path)
+        panel_id = url.path.rsplit("/", 1)[-1]
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"]))) if method in ("POST", "PUT") else None
+        with self.server.lock:
+            panels = self.server.panels
+            record = panels.get(panel_id)
+            if method == "GET" and url.path == "/v2/panels":
+                scope = parse_qs(url.query).get("scope", [None])[0]
+                return self.reply(200, {"records": [p for p in panels.values() if p["scope"] == scope], "next_cursor": "", "is_end": True})
+            if method == "POST" and body["target_type"] == "all":
+                panel_id = "p_fixture_1"
+                panels[panel_id] = {"panel_id": panel_id, **body, "version": 1}
+                return self.reply(200, {"panel_id": panel_id})
+            if record is None:
+                return self.reply(404, {"message": "unknown fixture panel"})
+            if method == "GET":
+                return self.reply(200, record)
+            if method == "PUT" and set(body) == {"panel"}:
+                record["panel"] = body["panel"]
+                record["version"] += 1
+                return self.reply(200, {"version": record["version"]})
+            if method == "DELETE":
+                del panels[panel_id]
+                return self.reply(200, {})
+            return self.reply(400, {"message": "unexpected QQ panel request"})
 
 
 def free_port():
@@ -161,6 +221,17 @@ class Run:
                 self.cookie = cookie.split(";", 1)[0]
             return response.status, value
 
+    def callback(self, base, path, raw, headers):
+        req = urllib.request.Request(base + path, data=raw.encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "User-Agent": "QQBot-Callback", **headers})
+        try:
+            response = HTTP.open(req, timeout=10)
+        except urllib.error.HTTPError as e:
+            response = e
+        with response:
+            text = response.read().decode()
+            return response.status, json.loads(text) if text else None
+
     def expect(self, name, base, method, path, data=None, signed=False, status=200):
         code, body = self.request(base, method, path, data, signed)
         self.check(name, code == status, f"HTTP {code}: {body}")
@@ -216,6 +287,7 @@ class Run:
         self.stop(production)
         self.processes.remove(production)
         node_env["FISH_DEV"] = "1"
+        node_env.update(FISH_QQ_PANEL_API_BASE=external, FISH_QQ_PANEL_TOKEN_URL=external + "/qq-token")
         self.start("node", [binary], node_env)
         self.until("real node ready", lambda: self.request(node, "GET", "/v1/health", signed=True)[0] == 200)
         self.check("real node accepts decoded-secret HMAC", True)
@@ -275,7 +347,9 @@ ADMIN_EMAILS=admin@example.com
         })
         bot = self.expect("bot created through console", console, "POST", "/api/bots", {"name": "Local test fish"})["id"]
         path = f"/api/bots/{bot}"
-        self.expect("persona set through console", console, "PATCH", path, {"settings": {"persona": {"system_prompt": PERSONA}}})
+        self.expect("persona and temperature set through console", console, "PATCH", path, {"settings": {
+            "persona": {"system_prompt": PERSONA}, "llm": {"temperature": TEMPERATURE},
+        }})
         status = self.expect("real bot status proxied through console", console, "GET", path)
         self.check("real bot is running", status["status"] == "running", status)
         plugin = self.expect("local command plugin installed through console", console, "POST", path + "/plugins", {"repo_url": REPO})
@@ -295,13 +369,38 @@ ADMIN_EMAILS=admin@example.com
         self.check("deterministic LLM reply returned through platform outbox", True)
         with self.fixture.lock:
             requests = list(self.fixture.requests)
-        self.check("LLM received persona, user prompt and selected model", len(requests) == 1 and
-                   requests[0]["model"] == MODEL and requests[0]["messages"] == [
+        self.check("LLM received persona, temperature, user prompt and selected model", len(requests) == 1 and
+                   requests[0]["model"] == MODEL and requests[0]["temperature"] == TEMPERATURE and requests[0]["messages"] == [
                        {"role": "system", "content": PERSONA}, {"role": "user", "content": PROMPT}], requests)
         self.expect("plugin command injected", node, "POST", inject,
                     {"text": "/echo local-command", "session_id": "local-user", "message_id": "command-1"}, signed=True)
         self.until("plugin reply returned to platform", lambda: reply("command-1", "echo:local-command"))
         self.check("real plugin handled command and returned reply", True)
+        plugin_path = path + f"/plugins/{plugin['id']}"
+        edited = self.expect("plugin configuration saved through console", console, "PATCH", plugin_path, {
+            "config": {"echo_prefix": "updated"}, "config_revision": plugin["config_revision"],
+        })
+        self.check("plugin configuration and revision changed", edited["config"] == {"echo_prefix": "updated"}
+                   and edited["config_revision"] != plugin["config_revision"])
+        code, result = self.request(console, "PATCH", plugin_path, {
+            "config": {"echo_prefix": "stale"}, "config_revision": plugin["config_revision"],
+        })
+        self.check("stale edit cannot overwrite plugin configuration", code == 409 and
+                   result["error"]["code"] == "plugin_config_changed", result)
+        self.until("plugin process started again after saving settings", lambda: sum(
+            line["source"] == "plugin:cmd_plugin" and line["message"].startswith("插件已启动 pid=")
+            for line in self.request(console, "GET", path + "/logs")[1]["items"]) >= 2)
+        self.expect("command injected after saving settings", node, "POST", inject,
+                    {"text": "/echo after-save", "session_id": "local-user", "message_id": "command-config"}, signed=True)
+        self.until("plugin replied with settings read in its constructor", lambda: reply("command-config", "updated:after-save"))
+        code, _ = self.request(console, "POST", path + "/plugins/missing/reload")
+        self.check("unknown plugin cannot be reloaded", code == 404)
+        self.expect("reload installed plugin through console", console, "POST", plugin_path + "/reload")
+        self.until("manual reload started the installed plugin again", lambda: sum(
+            line["source"] == "plugin:cmd_plugin" and line["message"].startswith("插件已启动 pid=")
+            for line in self.request(console, "GET", path + "/logs")[1]["items"]) >= 3)
+        with self.fixture.lock:
+            self.check("manual reload reused installed code", self.fixture.archive_downloads == 1)
         self.expect("follow-up chat injected", node, "POST", inject,
                     {"text": "Follow-up", "session_id": "local-user", "message_id": "chat-2"}, signed=True)
         self.until("follow-up reply", lambda: reply("chat-2", REPLY))
@@ -314,6 +413,40 @@ ADMIN_EMAILS=admin@example.com
         self.check("console reports nonzero bot and plugin memory", usage["memory_bytes"] > 0 and
                    any(s["bot_id"] == bot and s["kind"] == "core" and s["memory_bytes"] > 0 for s in usage["sources"]) and
                    any(s["bot_id"] == bot and s["plugin_id"] == plugin["id"] and s["memory_bytes"] > 0 for s in usage["sources"]), usage)
+        qq = self.expect("QQ platform bound in Webhook mode", console, "POST", path + "/platforms/qq/manual",
+                         {"app_id": QQ_APP_ID, "secret": QQ_SECRET, "mode": "webhook"})
+        self.check("platform view reports Webhook mode", qq["mode"] == "webhook", qq)
+        panels = path + f"/platforms/{qq['id']}/qq-panels"
+        panel = {"remark": "Local menu", "items": [{"type": "command", "name": "/echo", "desc": "Local command"}]}
+        empty = self.expect("QQ panel list read via the node", console, "GET", panels + "?scope=group")
+        self.check("QQ group list starts empty", empty["records"] == [])
+        created = self.expect("QQ group panel published", console, "POST", panels, {"scope": "group", "panel": panel})
+        panel_path = panels + "/" + created["panel_id"]
+        record = self.expect("QQ group panel read back", console, "GET", panels + "?scope=group")["records"][0]
+        self.check("QQ panel saved the command and global scope", record["target_type"] == "all"
+                   and record["panel"]["items"][0]["name"] == "/echo")
+        self.expect("QQ panel changed with the current version", console, "PUT", panel_path,
+                    {"panel": {**panel, "remark": "Updated"}, "expected_version": record["version"]})
+        self.expect("stale QQ panel edit rejected", console, "PUT", panel_path,
+                    {"panel": panel, "expected_version": record["version"]}, status=409)
+        self.expect("QQ panel removed", console, "DELETE", panel_path)
+        hook = f"/api/qq/webhook/{qq['id']}"
+        validate = json.dumps({"d": {"plain_token": "Arq0D5A61EgUu4OxUvOp", "event_ts": "1725442341"}, "op": 13})
+        code, answer = self.callback(console, hook, validate, {"X-Bot-Appid": QQ_APP_ID})
+        self.check("callback validation answered by real node through console", code == 200 and
+                   answer == {"plain_token": "Arq0D5A61EgUu4OxUvOp", "signature": QQ_VALIDATION_SIG}, f"HTTP {code}: {answer}")
+        self.until("Webhook platform connected after validation", lambda: any(
+            x["id"] == qq["id"] and x["status"] == "connected" for x in self.request(console, "GET", path)[1]["platforms"]))
+        event = json.dumps({"id": "ev-1", "op": 0, "t": "C2C_MESSAGE_CREATE",
+                            "d": {"id": "m-1", "content": "hi", "author": {"user_openid": "u-1"}}})
+        code, _ = self.callback(console, hook, event, {"X-Bot-Appid": QQ_APP_ID})
+        self.check("unsigned event push rejected", code == 401, code)
+        code, _ = self.callback(console, hook, event, {"X-Bot-Appid": QQ_APP_ID, "X-Signature-Timestamp": "1725442341",
+                                                       "X-Signature-Ed25519": "00" * 64})
+        self.check("forged event signature rejected by node", code == 401, code)
+        code, _ = self.callback(console, "/api/qq/webhook/unknown", validate, {"X-Bot-Appid": QQ_APP_ID})
+        self.check("unknown callback address is 404", code == 404, code)
+        self.expect("Webhook platform removed", console, "DELETE", path + f"/platforms/{qq['id']}")
         self.expect("bot stopped through console", console, "POST", path + "/stop", {})
         self.expect("stopped bot rejects injection", node, "POST", inject,
                     {"text": "stopped", "session_id": "local-user", "message_id": "stopped"}, signed=True, status=400)

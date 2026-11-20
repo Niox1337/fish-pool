@@ -68,7 +68,8 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
     let s: Vec<&str> = segs.iter().map(String::as_str).collect();
 
     let internal = s.first() == Some(&"internal");
-    if is_mutating(&method) && !internal {
+    let qq_callback = s.len() == 3 && s[0] == "qq" && s[1] == "webhook";
+    if is_mutating(&method) && !internal && !qq_callback {
         let csrf = req.headers().get("x-fish-csrf").ok().flatten();
         if csrf.as_deref() != Some("1") {
             return Err(ApiError::new(403, "csrf_failed", "请求缺少安全校验头，请刷新页面后重试"));
@@ -100,7 +101,10 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
 
         (Post, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr"]) => platforms::qr_start(&req, app, id, kind).await,
         (Get, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr", task]) => platforms::qr_poll(&req, app, id, kind, task).await,
+        (Post, ["qq", "webhook", pid]) => platforms::qq_webhook(&mut req, app, pid).await,
         (Post, ["bots", id, "platforms", "qq", "manual"]) => platforms::qq_manual(&mut req, app, id).await,
+        (method @ (Get | Post), ["bots", id, "platforms", pid, "qq-panels"]) => platforms::qq_panels(&mut req, app, id, pid, method, None).await,
+        (method @ (Put | Delete), ["bots", id, "platforms", pid, "qq-panels", panel]) => platforms::qq_panels(&mut req, app, id, pid, method, Some(panel)).await,
         (Patch, ["bots", id, "platforms", pid]) => platforms::patch(&mut req, app, id, pid).await,
         (Delete, ["bots", id, "platforms", pid]) => platforms::delete(&req, app, id, pid).await,
 
@@ -108,6 +112,7 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Post, ["bots", id, "plugins"]) => plugins::install(&mut req, app, id).await,
         (Patch, ["bots", id, "plugins", pid]) => plugins::patch(&mut req, app, id, pid).await,
         (Post, ["bots", id, "plugins", pid, "update"]) => plugins::update(&req, app, id, pid).await,
+        (Post, ["bots", id, "plugins", pid, "reload"]) => plugins::reload(&req, app, id, pid).await,
         (Delete, ["bots", id, "plugins", pid]) => plugins::delete(&req, app, id, pid).await,
 
         (Get, ["usage"]) => usage::get(&req, app).await,

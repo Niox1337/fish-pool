@@ -1,24 +1,28 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ExternalLink, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
 import { keys, useBots, useLlmKeys } from '@/api/hooks'
+import { modelProviders, providerForEndpoint } from '@/api/modelProviders'
 import type { LlmKey } from '@/api/types'
 import { Button, ConfirmDialog, ErrorNote, Field, Input, PageHeader, Skeleton, useFieldId } from '@/components/ui'
 import { cn } from '@/lib/cn'
 import { fmtDate } from '@/lib/format'
 import { Select } from './bot/shared'
-
-const presets = [
-  { name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
-  { name: 'OpenAI', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-  { name: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', model: 'deepseek-ai/DeepSeek-V3' },
-  { name: 'Moonshot', base_url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-  { name: '智谱', base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
-]
+import ModelField from './ModelField'
 
 type Errors = Partial<Record<'provider' | 'name' | 'base_url' | 'model' | 'api_key' | 'form', string>>
+
+function ProviderPlatformLink({ provider }: { provider: (typeof modelProviders)[number] }) {
+  return (
+    <a href={provider.platform_url} target="_blank" rel="noreferrer" title={`${provider.name} 官方平台`}
+      className="inline-flex min-w-0 items-center gap-1 text-[13px] font-semibold text-sky underline-offset-2 hover:underline">
+      <span className="wrap-anywhere">{new URL(provider.platform_url).hostname}</span>
+      <ExternalLink className="size-3.5 shrink-0" aria-hidden />
+    </a>
+  )
+}
 
 function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: () => void; onCancel?: () => void }) {
   const qc = useQueryClient()
@@ -37,14 +41,14 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: () => void
     model: useFieldId('key-model'),
     key: useFieldId('key-secret'),
   }
-  const preset = presets.find((p) => p.name === provider)
+  const preset = modelProviders.find((p) => p.id === provider)
   const connectionOpen = !!provider && (!preset || showConnection)
 
   function pick(value: string) {
-    const next = presets.find((p) => p.name === value)
+    const next = modelProviders.find((p) => p.id === value)
     setProvider(value)
     setBaseUrl(next?.base_url ?? '')
-    setModel(next?.model ?? '')
+    setModel(next?.models[0] ?? '')
     if (!name.trim() || name === preset?.name) setName(next?.name ?? '')
     setShowConnection(false)
     setErrors({})
@@ -82,13 +86,16 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: () => void
   return (
     <form id={id} aria-labelledby={`${id}-title`} onSubmit={submit} noValidate className="grid gap-4 rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
       <h2 id={`${id}-title`} className="text-lg font-semibold text-ink">添加 Key</h2>
-      <Field label="服务商" htmlFor={ids.provider} error={errors.provider}>
+      <Field label="服务商" htmlFor={ids.provider} error={errors.provider} aside={preset && <ProviderPlatformLink provider={preset} />} hint={
+        ['openai', 'google', 'anthropic'].includes(provider) ? '中国大陆未列入此接口的支持地区。' : undefined
+      }>
         <Select id={ids.provider} value={provider} onChange={(e) => pick(e.target.value)} autoFocus={!!onCancel} disabled={busy} aria-invalid={!!errors.provider} required>
           <option value="" disabled>选择服务商</option>
-          {presets.map((p) => <option key={p.name}>{p.name}</option>)}
+          {modelProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           <option value="custom">自定义 OpenAI 兼容接口</option>
         </Select>
       </Field>
+      {provider && <ModelField key={provider} id={ids.model} value={model} onChange={setModel} models={preset?.models} error={errors.model} disabled={busy} />}
       {preset && (
         <button
           type="button"
@@ -99,18 +106,12 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: () => void
         >
           <ChevronDown aria-hidden className={cn('size-4 shrink-0', !connectionOpen && '-rotate-90')} />
           <span className="shrink-0">连接设置</span>
-          {!connectionOpen && <span className="min-w-0 truncate font-normal text-ink-3">{model}</span>}
         </button>
       )}
       <div id={`${id}-connection`} hidden={!connectionOpen} className={cn(connectionOpen && 'grid gap-4 border-t border-paper-3 pt-4')}>
-        <div className="grid items-start gap-4 sm:grid-cols-2">
-          <Field label="名称" htmlFor={ids.name} error={errors.name}>
-            <Input id={ids.name} value={name} onChange={(e) => setName(e.target.value)} maxLength={40} aria-invalid={!!errors.name} disabled={busy} />
-          </Field>
-          <Field label="模型名" htmlFor={ids.model} error={errors.model}>
-            <Input id={ids.model} value={model} onChange={(e) => setModel(e.target.value)} autoCapitalize="off" spellCheck={false} aria-invalid={!!errors.model} disabled={busy} />
-          </Field>
-        </div>
+        <Field label="名称" htmlFor={ids.name} error={errors.name}>
+          <Input id={ids.name} value={name} onChange={(e) => setName(e.target.value)} maxLength={40} aria-invalid={!!errors.name} disabled={busy} />
+        </Field>
         <Field label="接口地址" htmlFor={ids.base} error={errors.base_url}>
           <Input
             id={ids.base}
@@ -118,7 +119,7 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: () => void
             inputMode="url"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://api.deepseek.com/v1"
+            placeholder="https://api.deepseek.com"
             autoCapitalize="off"
             spellCheck={false}
             aria-invalid={!!errors.base_url}
@@ -159,6 +160,7 @@ function KeyRow({ k, usedBy }: { k: LlmKey; usedBy: string[] }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const provider = providerForEndpoint(k.base_url)
 
   async function remove() {
     setBusy(true)
@@ -178,10 +180,18 @@ function KeyRow({ k, usedBy }: { k: LlmKey; usedBy: string[] }) {
   return (
     <li className="flex items-start gap-3 py-4">
       <div className="min-w-0 flex-1">
-        <h3 className="break-words font-semibold text-ink">{k.name}</h3>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <h3 className="font-semibold wrap-anywhere text-ink">{k.name}</h3>
+          {provider && <ProviderPlatformLink provider={provider} />}
+        </div>
         <p className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 break-all text-sm text-ink-2">
           <span>{k.model}</span>
           <code className="text-ink-3">{k.key_masked}</code>
+          {k.via_gateway && (
+            <span className="text-ink-3" title="托管服务器在国内，请求经 Cloudflare AI Gateway 转发到服务商">
+              经 AI Gateway 转发
+            </span>
+          )}
         </p>
         {usedBy.length > 0 && <p className="mt-1 break-words text-sm text-ink-3">使用中 · {usedBy.join('、')}</p>}
         <details className="mt-1 text-sm text-ink-3">
@@ -200,7 +210,7 @@ function KeyRow({ k, usedBy }: { k: LlmKey; usedBy: string[] }) {
         body={
           usedBy.length > 0 ? (
             <>
-              {usedBy.join('、')} 正在使用。删除后，需在「人设与模型」中换一个 Key 才能继续回复。
+              {usedBy.join('、')} 正在使用。删除后，需在「机器人设置」中换一个 Key 才能继续回复。
             </>
           ) : (
             '删除后如需使用，要重新添加。'
@@ -232,7 +242,7 @@ export default function KeysPage() {
     <div className="max-w-2xl">
       <PageHeader
         title="模型 Key"
-        description="小鱼使用你自己的模型服务。添加后在「人设与模型」中选择。"
+        description="添加后在「机器人设置」中选择。"
         actions={!list.isLoading && !empty && !adding && (
           <Button ref={addButton} variant="primary" onClick={() => setAdding(true)}>
             <Plus aria-hidden />

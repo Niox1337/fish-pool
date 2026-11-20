@@ -121,6 +121,11 @@
     scale: 0.96;
   }
 }
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
 .pupil-sheet {
   background-size: 400% 800%;
   background-repeat: no-repeat;

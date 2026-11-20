@@ -86,6 +86,11 @@ impl App {
             .and_then(|s| decode_key32(&s))
     }
 
+    /// AI Gateway from `AI_GATEWAY` and the `AI_GATEWAY_TOKEN` secret, when both are valid.
+    pub fn ai_gateway(&self) -> Option<crate::gateway::AiGateway> {
+        crate::gateway::AiGateway::new(&self.var("AI_GATEWAY")?, &self.var("AI_GATEWAY_TOKEN")?)
+    }
+
     pub fn default_node_id(&self) -> String {
         self.var("DEFAULT_NODE_ID").filter(|s| !s.is_empty()).unwrap_or_else(|| "node-1".into())
     }
@@ -267,7 +272,11 @@ impl App {
             None => None,
         };
         let dec = self.decryptor()?;
-        Ok(build_desired(&user, bot, &platforms, &plugins, key.as_ref(), &dec))
+        let mut desired = build_desired(&user, bot, &platforms, &plugins, key.as_ref(), &dec);
+        if let (Some(llm), Some(gateway)) = (desired.llm.as_mut(), self.ai_gateway()) {
+            gateway.apply(llm);
+        }
+        Ok(desired)
     }
 
     /// Pushes the desired state of a bot. D1 records the outcome: on failure the bot is marked

@@ -177,7 +177,18 @@ impl PlatformRow {
             "enabled": enabled,
             "status": if enabled { self.status.as_str() } else { "disabled" },
             "status_detail": if enabled { self.status_detail.as_str() } else { "" },
+            "mode": self.qq_mode(),
         })
+    }
+
+    /// Connection mode of a QQ platform, `websocket` unless `extra_json.mode` is `webhook`.
+    /// Other platform kinds have no mode.
+    pub fn qq_mode(&self) -> Option<&'static str> {
+        if self.kind != "qq_official" {
+            return None;
+        }
+        let extra = parse_json_or(Some(&self.extra_json), json!({}));
+        Some(if extra.get("mode").and_then(Value::as_str) == Some("webhook") { "webhook" } else { "websocket" })
     }
 }
 
@@ -212,6 +223,9 @@ impl PluginRow {
     pub fn schema(&self) -> Option<Value> {
         self.schema_json.as_deref().and_then(|s| serde_json::from_str(s).ok())
     }
+    pub fn config_revision(&self) -> String {
+        crate::crypto::sha256_hex(format!("{}\n{}", self.schema_json.as_deref().unwrap_or_default(), self.config_json).as_bytes())
+    }
     pub fn view(&self) -> Value {
         json!({
             "id": self.id,
@@ -223,6 +237,7 @@ impl PluginRow {
             "description": self.description,
             "enabled": self.enabled != 0,
             "config": self.config(),
+            "config_revision": self.config_revision(),
             "schema": self.schema(),
             "status": self.status,
             "status_detail": self.status_detail,
@@ -258,6 +273,12 @@ pub struct DesiredLlm {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
+    /// Base URL the node calls instead of `base_url`. Empty means `base_url`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub endpoint: String,
+    /// AI Gateway token sent with requests to `endpoint`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub gateway_token: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -311,7 +332,7 @@ pub fn build_desired(
         .and_then(|k| {
             let api_key = decrypt(&k.api_key_enc)?;
             let model = if settings.llm.model.trim().is_empty() { k.model.clone() } else { settings.llm.model.clone() };
-            Some(DesiredLlm { base_url: k.base_url.clone(), model, api_key })
+            Some(DesiredLlm { base_url: k.base_url.clone(), model, api_key, endpoint: String::new(), gateway_token: String::new() })
         });
     let platforms = platforms
         .iter()

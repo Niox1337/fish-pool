@@ -33,7 +33,10 @@ EMAIL_FROM = "noreply@gengwiki.niox.lol"
 EMAIL_FROM_NAME = "大肥鱼托管班"
 # Seeded into the nodes table on first use. Its HMAC secret is NODE_SECRET (or NODE_SECRET_NODE_1).
 DEFAULT_NODE_ID = "node-1"
-DEFAULT_NODE_URL = "https://node-1.fish.niox.lol"
+DEFAULT_NODE_URL = "https://fish-node-1.niox.lol"
+# Cloudflare AI Gateway for OpenAI, Anthropic, Google Gemini and xAI, which the node cannot reach directly.
+# Takes effect only when the AI_GATEWAY_TOKEN secret is also set.
+AI_GATEWAY = "https://gateway.ai.cloudflare.com/v1/7a723df258edde67c7c291c9a2930a2a/fish"
 # ADMIN_EMAILS is an optional secret containing comma separated admin registration addresses.
 # FISH_DEV is absent in production. Local development sets it in .dev.vars.
 
@@ -44,4 +47,5 @@ DEFAULT_NODE_URL = "https://node-1.fish.niox.lol"
 #   RESEND_API_KEY    only when EMAIL_PROVIDER = "resend"
 #   GITHUB_TOKEN      optional, raises the GitHub API rate limit for plugin inspection
 #   ADMIN_EMAILS      optional, comma separated admin registration addresses
+#   AI_GATEWAY_TOKEN  optional, Cloudflare API token with AI Gateway Run permission for AI_GATEWAY
 # Generate a key with: openssl rand -base64 32
