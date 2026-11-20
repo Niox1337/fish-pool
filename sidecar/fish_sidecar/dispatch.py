@@ -107,6 +107,7 @@ class Dispatcher:
         self.instance = instance
         self.plugin_name = plugin_name
         self.events: OrderedDict[str, AstrMessageEvent] = OrderedDict()
+        self.keep_events_for_model = False
         manager = getattr(getattr(instance, "context", None), "platform_manager", None)
         self.platforms = manager if isinstance(manager, adapter.FishPlatformManager) else None
         self.max_events = 512
@@ -119,6 +120,24 @@ class Dispatcher:
         for tool in tools.plugin_tools():
             out.append({"id": f"tool:{tool.name}", "priority": 0, "kind": "llm_tool", "pattern": tool.name, "tool": tools.tool_schema(tool)})
         return out
+
+    def wake_commands(self) -> list[str] | None:
+        """Returns names the node can safely match before waking a command-only plugin."""
+        if tools.plugin_tools():
+            return None
+        commands: set[str] = set()
+        for md in star_handlers_registry:
+            filters = md.event_filters
+            if md.event_type != EventType.AdapterMessageEvent or len(filters) != 1:
+                return None
+            command = filters[0]
+            if type(command) is not CommandFilter or command.custom_filter_list:
+                return None
+            for name in command.get_complete_command_names():
+                if not isinstance(name, str) or not name or any(char.isspace() for char in name):
+                    return None
+                commands.add(name)
+        return sorted(commands) or None
 
     def inert_handlers(self) -> list[str]:
         out = [
@@ -190,7 +209,8 @@ class Dispatcher:
 
     async def handle_event(self, event_id: str, data: dict[str, Any]) -> None:
         event = build_event(data, event_id)
-        self.remember(event_id, event)
+        if self.keep_events_for_model:
+            self.remember(event_id, event)
         if self.platforms is not None:
             self.platforms.remember(event.platform_meta)
         llm_requested = False

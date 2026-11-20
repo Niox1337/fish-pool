@@ -247,6 +247,11 @@ impl Usage {
         {
             let mut counts = self.over_count.lock().unwrap();
             for (user, (mem, _, quota)) in &per_user {
+                if node.shared.cgroups.as_ref().is_some_and(|cg| cg.enforces_limit(user, *quota)) {
+                    // PSS includes a share of pages that the kernel charges to the fork server.
+                    counts.remove(user);
+                    continue;
+                }
                 let c = counts.entry(user.clone()).or_insert(0);
                 if *mem > quota * MIB {
                     *c += 1;

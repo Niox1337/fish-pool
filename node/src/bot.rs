@@ -114,6 +114,18 @@ const IDLE_CHECK_WAIT: Duration = Duration::from_secs(5);
 /// Longest time an inbound message waits for sleeping plugins to start.
 const WAKE_WAIT: Duration = Duration::from_secs(30);
 
+struct DormantPlugin {
+    activity: watch::Sender<Instant>,
+    commands: Option<Vec<String>>,
+    config: watch::Receiver<Value>,
+}
+
+fn matches_wake_commands(commands: Option<&[String]>, command: Option<&str>) -> bool {
+    commands.is_none_or(|names| {
+        names.is_empty() || command.is_some_and(|word| names.iter().any(|name| name == word))
+    })
+}
+
 /// One tenant bot: desired state, live connections, plugin processes and status.
 pub struct Bot {
     pub id: String,
@@ -128,10 +140,8 @@ pub struct Bot {
     inflight: Mutex<HashMap<String, (ReplyTarget, Instant)>>,
     over_quota: Mutex<HashSet<String>>,
     handlers: Arc<Semaphore>,
-    /// Time of the last inbound message dispatched to plugins.
-    activity: watch::Sender<Instant>,
     /// Plugins stopped while idle. Changed only while holding the `procs` write lock.
-    dormant: Mutex<HashSet<String>>,
+    dormant: Mutex<HashMap<String, DormantPlugin>>,
     /// Bumped whenever a plugin leaves `dormant`.
     dormant_gen: watch::Sender<u64>,
 }
@@ -173,8 +183,7 @@ impl Bot {
             inflight: Mutex::new(HashMap::new()),
             over_quota: Mutex::new(HashSet::new()),
             handlers: Arc::new(Semaphore::new(8)),
-            activity: watch::channel(Instant::now()).0,
-            dormant: Mutex::new(HashSet::new()),
+            dormant: Mutex::new(HashMap::new()),
             dormant_gen: watch::channel(0).0,
         })
     }
@@ -638,7 +647,7 @@ impl Bot {
         }
     }
 
-    /// Resolves once the bot has received no message for `idle` and the plugin reports no
+    /// Resolves once no relevant message has arrived for `idle` and the plugin reports no
     /// background work. Never resolves when `idle` is None.
     async fn wait_idle(
         &self,
@@ -672,15 +681,27 @@ impl Bot {
 
     /// Moves a plugin from `procs` to `dormant`. Returns false, changing nothing, when a message
     /// arrived after `activity` was last read.
-    fn enter_dormant(&self, plugin_id: &str, proc_id: &str, activity: &watch::Receiver<Instant>) -> bool {
+    fn enter_dormant(
+        &self,
+        proc: &PluginProc,
+        activity: &watch::Receiver<Instant>,
+        config: &watch::Receiver<Value>,
+    ) -> bool {
         let mut procs = self.procs.write().unwrap();
-        if activity.has_changed().unwrap_or(true) {
+        if activity.has_changed().unwrap_or(true)
+            || procs.get(&proc.plugin_id).is_none_or(|p| p.proc_id != proc.proc_id)
+        {
             return false;
         }
-        if procs.get(plugin_id).is_some_and(|p| p.proc_id == proc_id) {
-            procs.remove(plugin_id);
-        }
-        self.dormant.lock().unwrap().insert(plugin_id.to_string());
+        procs.remove(&proc.plugin_id);
+        self.dormant.lock().unwrap().insert(
+            proc.plugin_id.clone(),
+            DormantPlugin {
+                activity: proc.activity.clone(),
+                commands: proc.hello.wake_commands.clone(),
+                config: config.clone(),
+            },
+        );
         true
     }
 
@@ -693,21 +714,43 @@ impl Bot {
             }
             self.dormant.lock().unwrap().remove(plugin_id)
         };
-        if was_dormant {
+        if was_dormant.is_some() {
             self.dormant_gen.send_modify(|g| *g += 1);
         }
     }
 
-    /// Records inbound activity, which wakes sleeping plugins, and returns the running plugins
-    /// once none is asleep or `WAKE_WAIT` has passed.
-    async fn awake_procs(&self) -> Vec<Arc<PluginProc>> {
+    /// Wakes plugins that may handle this message and returns the running plugins.
+    async fn awake_procs(&self, ev: &MessageEvent) -> Vec<Arc<PluginProc>> {
+        let command = if ev.is_at_or_wake {
+            ev.message_str
+                // Python's str.isspace also includes these four separators.
+                .split(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+                .find(|word| !word.is_empty())
+        } else {
+            None
+        };
         let mut gen = self.dormant_gen.subscribe();
-        self.activity.send_replace(Instant::now());
         let deadline = tokio::time::Instant::now() + WAKE_WAIT;
         loop {
             {
                 let procs = self.procs.read().unwrap();
-                if self.dormant.lock().unwrap().is_empty() {
+                let now = Instant::now();
+                for proc in procs.values() {
+                    if matches_wake_commands(proc.hello.wake_commands.as_deref(), command) {
+                        proc.activity.send_replace(now);
+                    }
+                }
+                let mut waiting = false;
+                for plugin in self.dormant.lock().unwrap().values() {
+                    // A reload may register different commands from the sleeping process.
+                    if plugin.config.has_changed().unwrap_or(true)
+                        || matches_wake_commands(plugin.commands.as_deref(), command)
+                    {
+                        waiting = true;
+                        plugin.activity.send_replace(now);
+                    }
+                }
+                if !waiting {
                     return procs.values().cloned().collect();
                 }
             }
@@ -727,7 +770,6 @@ impl Bot {
     ) {
         let mut attempt = 0u32;
         let shared = self.shared.clone();
-        let mut activity = self.activity.subscribe();
         loop {
             if cancel.is_cancelled() {
                 return;
@@ -829,6 +871,7 @@ impl Bot {
                     continue;
                 }
             };
+            let mut activity = proc.activity.subscribe();
             self.leave_dormant(&spec.id, Some(proc.clone()));
             let version = Some(proc.hello.version.clone())
                 .filter(|v| !v.is_empty())
@@ -846,7 +889,7 @@ impl Bot {
                     _ = proc.closed.cancelled() => PluginExit::Failed(-1),
                     _ = self.wait_idle(&proc, &mut activity, idle, &src) => PluginExit::Sleep,
                 };
-                if matches!(o, PluginExit::Sleep) && !self.enter_dormant(&spec.id, &proc_id, &activity) {
+                if matches!(o, PluginExit::Sleep) && !self.enter_dormant(&proc, &activity, &config) {
                     continue;
                 }
                 break o;
@@ -882,23 +925,35 @@ impl Bot {
                     }
                     shared.sidecar.forget(&proc_id);
                     let minutes = idle.map(|d| d.as_secs().div_ceil(60)).unwrap_or(0);
-                    self.logs.info(
-                        &src,
-                        format!("机器人 {minutes} 分钟没有收到消息，插件已休眠，收到消息时自动唤醒"),
-                    );
-                    self.set_plugin_status(&spec.id, "sleeping", "空闲休眠中，收到消息时自动唤醒", Some(version));
-                    let woke = loop {
+                    let command_only = proc
+                        .hello
+                        .wake_commands
+                        .as_ref()
+                        .is_some_and(|names| !names.is_empty());
+                    drop(proc);
+                    let trigger = if command_only { "插件指令" } else { "消息" };
+                    self.logs.info(&src, format!("{minutes} 分钟未收到{trigger}，插件已休眠"));
+                    let detail = format!("空闲休眠中，收到{trigger}时自动唤醒");
+                    self.set_plugin_status(&spec.id, "sleeping", &detail, Some(version));
+                    let wake_reason = loop {
                         tokio::select! {
-                            _ = cancel.cancelled() => break false,
-                            changed = activity.changed() => break changed.is_ok(),
-                            updated = config.changed() => if updated.is_err() { break false },
+                            _ = cancel.cancelled() => break None,
+                            changed = activity.changed() => break changed.ok().map(|()| "收到消息，正在唤醒插件"),
+                            updated = config.changed() => {
+                                if updated.is_err() {
+                                    break None;
+                                }
+                                if command_only {
+                                    break Some("配置已更新，正在唤醒插件");
+                                }
+                            }
                         }
                     };
-                    if !woke {
+                    let Some(wake_reason) = wake_reason else {
                         self.leave_dormant(&spec.id, None);
                         return;
-                    }
-                    self.logs.info(&src, "收到消息，正在唤醒插件");
+                    };
+                    self.logs.info(&src, wake_reason);
                     attempt = 0;
                 }
                 PluginExit::Failed(code) => {
@@ -1042,7 +1097,7 @@ impl Bot {
         };
         self.remember_target(&event_id, target.clone());
 
-        let procs = self.awake_procs().await;
+        let procs = self.awake_procs(&ev).await;
         let results = futures_util::future::join_all(procs.iter().map(|p| {
             let (mrx, drx) = p.dispatch(&event_id, &ev);
             let event_id = event_id.clone();

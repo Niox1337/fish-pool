@@ -101,7 +101,9 @@ PIP_INDEX=https://mirrors.cloud.tencent.com/pypi/simple
 - 文件系统隔离: 节点启动时会探测 bubblewrap。可用时插件宿主运行在只读根文件系统中，只能写自己的租户目录和运行目录，看不到 `node.db` 等节点文件。不可用时会记录警告并直接运行插件宿主，此时插件没有沙箱。
 - seccomp 和 AppArmor 被设置为 unconfined，否则 bubblewrap 无法在容器内创建命名空间。
 - 共享导入: 同一份插件安装在插件宿主里只导入一次 (模板进程)，各机器人的插件进程从模板 fork 出来，共享已导入模块的内存，配置、数据目录和工作目录仍然各自独立。模板进程放在 `templates` cgroup，内存上限 512 MB。导入时依赖工作目录、随机数、线程或打开文件，或在模块里保存了导入时的时间或进程号的插件会自动改为单独加载，日志里会写原因。共享安装按插件提交号、当前解析出的依赖版本和 Python 版本区分，依赖有新版本时新安装不会复用旧的依赖。设置 `FISH_SIDECAR_TEMPLATES=0` 可以关闭。
-- 内存优化: 插件宿主设置 `MALLOC_ARENA_MAX=2`，减少多线程下 glibc 的内存碎片。机器人 30 分钟没有收到消息时，没有后台任务的插件会休眠 (状态 `sleeping`)，下一条消息到来时自动唤醒。在 `deploy/.env` 里设置 `FISH_PLUGIN_IDLE_SECS` 可以修改等待时间，设为 0 关闭休眠。
+- 插件宿主设置 `MALLOC_ARENA_MAX=2`，减少多线程下 glibc 的内存碎片。机器人 30 分钟没有收到消息时，空闲插件会休眠，收到消息时自动唤醒。符合条件且在 `metadata.yaml` 声明 `fish_pool: { command_only_idle: true }` 的插件按自己的指令计算空闲时间，由指令或别名唤醒。在 `deploy/.env` 里设置 `FISH_PLUGIN_IDLE_SECS` 可以修改等待时间，设为 0 关闭休眠。
+- 知识库读取 `.txt` 时直接解码文本。使用可写 cgroup v2 的 Linux 节点可以在 `deploy/.env` 里设 `FISH_SIDECAR_WARM_JIEBA=1`，在插件宿主启动时加载并共享知识库的默认分词字典。默认值为 0。开启后插件宿主会常驻字典，适合有多个插件使用知识库的节点。
+- Linux 节点可在 `deploy/.env` 里设 `FISH_SIDECAR_WARM_FAISS=1`，由插件宿主共享镜像内置的 FAISS 导入。默认值为 0。宿主预加载时将 OpenBLAS 初始化为单线程，子进程继承这份库。启用前可验证插件要求的 FAISS 版本和大索引性能。预加载失败或出现额外线程时，宿主会重新启动并改为按需导入。
 
 ## 本地开发
 

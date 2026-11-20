@@ -1,3 +1,5 @@
+import asyncio
+import sys
 from datetime import datetime, timedelta, timezone
 
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -22,6 +24,17 @@ class ManagersPlugin(Star):
         context.register_provider(TestEmbedding({"id": "fixture-embedding"}, {}))
         assert any(profile["id"] == "default" for profile in context.astrbot_config_mgr.get_conf_list())
 
+    @filter.command("open_empty_kb")
+    async def open_empty_kb(self, event: AstrMessageEvent):
+        db = self.context.kb_manager.kb_db
+        before = db.inited
+        count, bases = await asyncio.gather(db.count_kbs(), db.list_kbs())
+        yield event.plain_result(f"{before}|{db.inited}|{count}|{len(bases)}")
+
+    @filter.command("faiss_imported")
+    async def faiss_imported(self, event: AstrMessageEvent):
+        yield event.plain_result(str("faiss" in sys.modules))
+
     @filter.command("populate")
     async def populate(self, event: AstrMessageEvent):
         await self.context.persona_manager.create_persona("fish-teacher", "Talk about fish.")
@@ -39,6 +52,33 @@ class ManagersPlugin(Star):
         assert self.context.get_config(event.unified_msg_origin) is self.context.astrbot_config_mgr.confs[config["id"]]
         notes = await self.context.kb_manager.retrieve("Where do fish sleep?", ["Fish notes"])
         yield event.plain_result(f"{persona.system_prompt}|{config['name']}|{notes['results'][0]['content']}")
+
+    @filter.command("compare_txt")
+    async def compare_txt(self, event: AstrMessageEvent):
+        from astrbot.core.knowledge_base.kb_helper import select_parser
+
+        samples = [
+            b"first  \r\nsecond\r\n\r\n\r\nthird",
+            "池塘里的鱼。\n".encode("utf-8-sig"),
+            "这是一个用来测试编码的知识库文档。".encode("gb18030"),
+            "Wide text.\r\nAnother line.".encode("utf-16"),
+            b"<h1>HTML as plain text</h1>\n",
+            b"",
+        ]
+        plain_parser = await select_parser(".txt")
+        actual = [await plain_parser.parse(data, "notes.TXT") for data in samples]
+        assert "markitdown_no_magika" not in sys.modules, "plain text loaded all document converters"
+
+        from astrbot.core.knowledge_base.parsers.markitdown_parser import MarkitdownParser
+
+        native = MarkitdownParser()
+        expected = [await native.parse(data, "notes.TXT") for data in samples]
+        assert [(result.text, result.media) for result in actual] == [
+            (result.text, result.media) for result in expected
+        ]
+        fallback = await select_parser(".docx")
+        assert isinstance(fallback, MarkitdownParser)
+        yield event.plain_result("text matches native parser")
 
     @filter.command("cron_basic")
     async def cron_basic(self, event: AstrMessageEvent):

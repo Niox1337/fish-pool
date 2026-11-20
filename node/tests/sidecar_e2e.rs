@@ -255,14 +255,14 @@ async fn real_sidecar_load_failure_sets_status_without_restart_loop() {
     node.shutdown().await;
 }
 
-async fn wait_status(node: &Arc<Node>, id: &str, want: &str, secs: u64) {
+async fn wait_status(node: &Arc<Node>, id: &str, wanted: &[&str], secs: u64) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
     loop {
         let s = plugin_status(node, id);
-        if s["status"] == want {
+        if s["status"].as_str().is_some_and(|status| wanted.contains(&status)) {
             return;
         }
-        assert!(tokio::time::Instant::now() < deadline, "{id} did not reach {want}: {s}");
+        assert!(tokio::time::Instant::now() < deadline, "{id} did not reach {wanted:?}: {s}");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -306,8 +306,8 @@ async fn real_sidecar_idle_plugins_sleep_and_wake_on_message() {
     .unwrap();
     node.put(desired).await.unwrap();
 
-    wait_status(&node, "pc", "sleeping", 30).await;
-    wait_status(&node, "pg", "sleeping", 30).await;
+    wait_status(&node, "pc", &["sleeping"], 30).await;
+    wait_status(&node, "pg", &["sleeping"], 30).await;
     let bot = node.get("b1").unwrap();
     assert!(bot.procs.read().unwrap().is_empty());
 
@@ -319,7 +319,7 @@ async fn real_sidecar_idle_plugins_sleep_and_wake_on_message() {
     assert!(reply.contains("started"), "{reply}");
 
     // the plugin with a background task keeps running while the other one sleeps again
-    wait_status(&node, "pc", "sleeping", 15).await;
+    wait_status(&node, "pc", &["sleeping"], 15).await;
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(plugin_status(&node, "pg")["status"], "running");
     let (items, _) = bot.logs.read_after(None, 1000);
@@ -329,6 +329,49 @@ async fn real_sidecar_idle_plugins_sleep_and_wake_on_message() {
             .any(|i| i.source == "plugin:bg_plugin" && i.message.contains("暂不休眠")),
         "no busy log"
     );
+
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn command_only_plugin_sleeps_during_other_traffic_and_wakes_for_alias() {
+    let Some(python) = sidecar_python() else { return };
+    let dir = tempfile::Builder::new().prefix("fc").tempdir_in("/tmp").unwrap();
+    let mut cfg = node_config(dir.path());
+    cfg.dev_services = true;
+    cfg.plugin_idle_sleep = Some(Duration::from_secs(2));
+    let command_only = json!({"id": "cold", "name": "cold_cmd_plugin", "repo_url": "https://github.com/x/cold", "version": "1", "enabled": true, "config": {}});
+    let generic = json!({"id": "echo", "name": "cmd_plugin", "repo_url": "https://github.com/x/cmd", "version": "1", "enabled": true, "config": {}});
+    preinstall(&cfg, &command_only);
+    preinstall(&cfg, &generic);
+    let node = Node::new(cfg, Some(command(&python))).unwrap();
+    let desired = serde_json::from_value(json!({
+        "bot_id": "b1", "user_id": "u1", "name": "小鱼", "running": true,
+        "platforms": [], "plugins": [command_only, generic]
+    }))
+    .unwrap();
+    node.put(desired).await.unwrap();
+    wait_status(&node, "cold", &["running", "sleeping"], 30).await;
+    wait_status(&node, "echo", &["running", "sleeping"], 30).await;
+
+    for n in 1..=8 {
+        assert!(say(&node, "echo active", n).await.contains("echo:active"));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert_eq!(plugin_status(&node, "cold")["status"], "sleeping");
+    assert_eq!(plugin_status(&node, "echo")["status"], "running");
+    assert!(!node.get("b1").unwrap().procs.read().unwrap().contains_key("cold"));
+    assert!(say(&node, "/鱼池\u{3000}有鱼", 9).await.contains("pond:有鱼"));
+    assert_eq!(plugin_status(&node, "cold")["status"], "running");
+
+    assert!(say(&node, "/bait", 10).await.contains("waiting for bait"));
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(plugin_status(&node, "cold")["status"], "running");
+    assert!(say(&node, "shrimp", 11).await.contains("caught:shrimp"));
+
+    wait_status(&node, "cold", &["sleeping"], 30).await;
+    node.get("b1").unwrap().reload_plugin("cold").await.unwrap();
+    wait_status(&node, "cold", &["running"], 30).await;
 
     node.shutdown().await;
 }

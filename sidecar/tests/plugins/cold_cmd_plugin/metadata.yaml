@@ -1,0 +1,6 @@
+name: cold_cmd_plugin
+author: fish
+desc: Cold command test fixture
+version: 1.0.0
+fish_pool:
+  command_only_idle: true

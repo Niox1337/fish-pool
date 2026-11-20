@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::sidecar::Sidecar;
@@ -32,6 +32,7 @@ pub struct Hello {
     pub name: String,
     pub version: String,
     pub handlers: Vec<Handler>,
+    pub wake_commands: Option<Vec<String>>,
 }
 
 /// Line oriented writer to one plugin process.
@@ -91,6 +92,7 @@ pub struct PluginProc {
     pub plugin_name: String,
     pub pid: u32,
     pub hello: Hello,
+    pub(crate) activity: watch::Sender<Instant>,
     writer: ProcWriter,
     waiters: Arc<Mutex<HashMap<String, Waiter>>>,
     /// Cancelled when the plugin socket closes.
@@ -494,6 +496,7 @@ pub async fn launch(
         plugin_name: spec.plugin_name.clone(),
         pid,
         hello,
+        activity: watch::channel(Instant::now()).0,
         writer: writer.clone(),
         waiters: Arc::default(),
         closed: CancellationToken::new(),

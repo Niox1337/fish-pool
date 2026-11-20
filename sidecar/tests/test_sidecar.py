@@ -69,11 +69,22 @@ def test_command_plugin(fork_server, run):
     run(scenario())
 
 
+def test_command_releases_event_without_a_model_callback(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            p = await node.spawn("cold_cmd_plugin")
+            assert [chain_text(s) for s in (await p.event("pond fish"))["sends"]] == ["pond:fish"]
+            assert [chain_text(s) for s in (await p.event("event_released"))["sends"]] == ["True"]
+
+    run(scenario())
+
+
 def test_managers_survive_restart(fork_server, run):
     async def scenario():
         async with FakeNode(fork_server) as node:
             data_dir = os.path.join(node.tmp, "manager-data")
             p = await node.spawn("managers_plugin", data_dir=data_dir)
+            assert not (Path(data_dir) / "knowledge_base" / "kb.db").exists()
             created = await p.event("populate")
             assert created["sends"]
             assert not (await p.event("managers"))["done"]["call_llm"]
@@ -86,6 +97,53 @@ def test_managers_survive_restart(fork_server, run):
             cron = await p.event("cron_basic")
             assert [chain_text(s) for s in cron["sends"]] == ["cron completed"]
             assert [chain_text(s) for s in p.proactive] == ["scheduled fish"]
+
+    run(scenario())
+
+
+def test_empty_kb_opens_once_on_concurrent_use_after_restart(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            data_dir = os.path.join(node.tmp, "empty-kb-data")
+            for _ in range(2):
+                p = await node.spawn("managers_plugin", data_dir=data_dir)
+                opened = await p.event("open_empty_kb")
+                assert [chain_text(s) for s in opened["sends"]] == ["False|True|0|0"], p.logs
+                await p.write({"op": "shutdown"})
+                exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == p.proc_id)
+                assert exited["code"] == 0
+                node.procs.remove(p)
+
+    run(scenario())
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="FAISS preload requires Linux")
+def test_faiss_preload_is_inherited(monkeypatch, run):
+    monkeypatch.setenv("FISH_SIDECAR_WARM_FAISS", "1")
+    server = ForkServerProcess()
+    try:
+        assert len(list(Path(f"/proc/{server.proc.pid}/task").iterdir())) == 1
+
+        async def scenario():
+            async with FakeNode(server) as node:
+                p = await node.spawn("managers_plugin", share_key="faiss-test")
+                inherited = await p.event("faiss_imported")
+                assert [chain_text(s) for s in inherited["sends"]] == ["True"], server.output()
+                assert (await p.event("populate"))["sends"], p.logs
+                restored = await p.event("managers")
+                assert [chain_text(s) for s in restored["sends"]] == ["Talk about fish.|Fish profile|Fish sleep in the pond."]
+
+        run(scenario())
+    finally:
+        server.stop()
+
+
+def test_plain_text_parser_preserves_native_output(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            p = await node.spawn("managers_plugin")
+            result = await p.event("compare_txt")
+            assert [chain_text(s) for s in result["sends"]] == ["text matches native parser"], p.logs
 
     run(scenario())
 
@@ -534,6 +592,7 @@ def test_shared_install_forks_from_one_template(fork_server, run):
             assert cwd_a.startswith(os.path.realpath(node.tmp)) and home_a == os.path.join(cwd_a, "home")
             assert forked_a == str(TEMPLATES)
             if TEMPLATES:
+                assert len(list(Path(f"/proc/{fork_server.proc.pid}/task").iterdir())) == 1
                 assert parent_pid(a.pid) == fork_server.proc.pid
             await node.control.write({"op": "kill", "proc_id": a.proc_id})
             exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == a.proc_id)

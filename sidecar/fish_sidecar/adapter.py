@@ -28,6 +28,7 @@ from astrbot.core.provider.provider import EmbeddingProvider, Provider, RerankPr
 from astrbot.core.star.context import Context
 
 from fish_sidecar import runtime, tools, wire
+from fish_sidecar.knowledge_base import FishKnowledgeBaseManager
 
 PLATFORM_ADAPTER_NAMES = {"qq_official": "qq_official", "weixin_ilink": "weixin_oc"}
 PROVIDER_ID = "fish"
@@ -339,7 +340,7 @@ async def build_context() -> FishContext:
         PlatformMessageHistoryManager(db),
         persona,
         config,
-        kb_mgr.KnowledgeBaseManager(provider_manager),  # type: ignore[arg-type]
+        FishKnowledgeBaseManager(provider_manager),  # type: ignore[arg-type]
         cron,
         None,
     )

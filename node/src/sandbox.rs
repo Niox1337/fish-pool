@@ -140,6 +140,10 @@ fn write(path: &Path, value: &str) -> std::io::Result<()> {
     std::fs::write(path, value)
 }
 
+fn tenant_limit_bytes(memory_mb: u64) -> u64 {
+    memory_mb.max(32) * 1024 * 1024
+}
+
 impl Cgroups {
     /// Sets up `<own cgroup>/node` as a leaf for existing processes and enables the memory controller
     /// for tenant groups. Returns `None` when cgroup v2 is missing or not writable.
@@ -196,11 +200,19 @@ impl Cgroups {
             tracing::warn!("cgroup mkdir {}: {e}", dir.display());
             return;
         }
-        let bytes = memory_mb.max(32) * 1024 * 1024;
+        let bytes = tenant_limit_bytes(memory_mb);
         if let Err(e) = write(&dir.join("memory.max"), &bytes.to_string()) {
             tracing::warn!("cgroup memory.max: {e}");
         }
         let _ = write(&dir.join("memory.swap.max"), "0");
+    }
+
+    /// Whether the kernel enforces the requested limit or a stricter one.
+    pub fn enforces_limit(&self, user_id: &str, memory_mb: u64) -> bool {
+        std::fs::read_to_string(self.tenant(user_id).join("memory.max"))
+            .ok()
+            .and_then(|limit| limit.trim().parse::<u64>().ok())
+            .is_some_and(|limit| limit <= tenant_limit_bytes(memory_mb))
     }
 
     pub fn add_pid(&self, user_id: &str, pid: u32) -> std::io::Result<()> {
@@ -231,6 +243,24 @@ impl Cgroups {
 
     pub fn remove_tenant(&self, user_id: &str) {
         let _ = std::fs::remove_dir(self.tenant(user_id));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tenant_limit_requires_a_finite_cap_at_or_below_quota() {
+        let root = tempfile::tempdir().unwrap();
+        let groups = Cgroups { base: root.path().to_path_buf() };
+        assert!(!groups.enforces_limit("u1", 128));
+        groups.set_limit("u1", 128);
+        assert!(groups.enforces_limit("u1", 128));
+        assert!(groups.enforces_limit("u1", 256));
+        assert!(!groups.enforces_limit("u1", 64));
+        write(&groups.tenant("u1").join("memory.max"), "max\n").unwrap();
+        assert!(!groups.enforces_limit("u1", 128));
     }
 }
 

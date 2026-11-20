@@ -24,6 +24,7 @@ import shutil
 import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -77,30 +78,78 @@ MAX_UNSHAREABLE = 1024
 PR_SET_CHILD_SUBREAPER = 36
 
 
+class FaissPreloadError(RuntimeError):
+    pass
+
+
 def preload() -> list[str]:
     """Imports shared modules so forked children inherit them. Returns modules that failed."""
     from fish_sidecar import astrbot_boot
 
     astrbot_boot.prepare_import()
     failed = []
-    for name in PRELOAD:
-        try:
-            importlib.import_module(name)
-        except Exception as e:
-            failed.append(f"{name}: {e}")
+    warm_faiss = sys.platform.startswith("linux") and os.environ.get("FISH_SIDECAR_WARM_FAISS") == "1"
+    openblas_threads = os.environ.get("OPENBLAS_NUM_THREADS")
+    if warm_faiss:
+        # OpenBLAS can start native workers when NumPy or FAISS is first imported.
+        os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    try:
+        for name in PRELOAD:
+            if warm_faiss and name == "fish_sidecar.adapter":
+                try:
+                    importlib.import_module("astrbot.core.db.vec_db.faiss_impl.vec_db")
+                    importlib.import_module("faiss")
+                except Exception as e:
+                    raise FaissPreloadError(str(e)) from e
+            try:
+                importlib.import_module(name)
+            except Exception as e:
+                failed.append(f"{name}: {e}")
+    finally:
+        if warm_faiss:
+            if openblas_threads is None:
+                os.environ.pop("OPENBLAS_NUM_THREADS", None)
+            else:
+                os.environ["OPENBLAS_NUM_THREADS"] = openblas_threads
     try:
         astrbot_boot.install_log_sink()
     except Exception as e:
         failed.append(f"log sink: {e}")
+    threads_before_warmup = set(threading.enumerate())
     try:
         astrbot_boot.warm_database()
     except Exception as e:
         failed.append(f"database warmup: {e}")
+    finally:
+        # Closing aiosqlite connections can finish just before their workers exit.
+        for thread in set(threading.enumerate()) - threads_before_warmup:
+            thread.join(timeout=1)
+            if thread.is_alive():
+                raise RuntimeError(f"database warmup worker still running before fork: {thread.name}")
+    if sys.platform.startswith("linux") and os.environ.get("FISH_SIDECAR_WARM_JIEBA") == "1":
+        try:
+            import jieba
+
+            with tempfile.TemporaryDirectory(prefix="fish-jieba-warmup-") as cache:
+                original = jieba.dt.tmp_dir
+                try:
+                    jieba.dt.tmp_dir = cache
+                    jieba.initialize()
+                finally:
+                    jieba.dt.tmp_dir = original
+        except Exception as e:
+            failed.append(f"jieba warmup: {e}")
     extra = [t.name for t in threading.enumerate() if t is not threading.main_thread()]
     if extra:
         failed.append("threads started during preload: " + ", ".join(extra))
     gc.collect()
     gc.freeze()
+    if warm_faiss:
+        try:
+            if len(os.listdir("/proc/self/task")) != 1:
+                raise FaissPreloadError("fork server must have a single native thread")
+        except OSError as e:
+            raise FaissPreloadError(str(e)) from e
     return failed
 
 
@@ -741,7 +790,14 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
-    for failure in preload():
+    try:
+        failures = preload()
+    except FaissPreloadError as e:
+        log.warning("FAISS preload failed, restarting with lazy import: %s", e)
+        env = dict(os.environ, FISH_SIDECAR_WARM_FAISS="0")
+        restart_args = sys.argv[1:] if argv is None else argv
+        os.execve(sys.executable, [sys.executable, "-m", "fish_sidecar.server", *restart_args], env)
+    for failure in failures:
         log.warning("preload failed: %s", failure)
     server = ForkServer(args.socket)
     server.listen()

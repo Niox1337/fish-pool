@@ -81,6 +81,7 @@ class ChildRuntime:
         self.ready = False
         self.stopping = asyncio.Event()
         self.dispatcher: Dispatcher | None = None
+        self.wake_commands: list[str] | None = None
         self.plugin: loader.LoadedPlugin | None = None
         self.main_task: asyncio.Task | None = None
         self.reader_task: asyncio.Task | None = None
@@ -220,6 +221,13 @@ class ChildRuntime:
 
     def hello(self) -> None:
         assert self.plugin is not None and self.dispatcher is not None
+        if self.plugin.command_only_idle:
+            self.wake_commands = self.dispatcher.wake_commands()
+        handlers = self.dispatcher.descriptors()
+        # The node routes callbacks using the capabilities advertised at startup.
+        self.dispatcher.keep_events_for_model = any(
+            handler["kind"] in {"llm_request", "llm_tool"} for handler in handlers
+        )
         self.write(
             {
                 "op": "hello",
@@ -227,7 +235,8 @@ class ChildRuntime:
                 "plugin": {
                     "name": self.plugin.name,
                     "version": self.plugin.version,
-                    "handlers": self.dispatcher.descriptors(),
+                    "handlers": handlers,
+                    "wake_commands": self.wake_commands,
                 },
             }
         )
@@ -281,6 +290,9 @@ class ChildRuntime:
             reasons.append(f"{len(tasks)} 个后台任务")
         if self.pending:
             reasons.append(f"{len(self.pending)} 个进行中的模型请求")
+        if self.wake_commands is not None and self.dispatcher is not None:
+            if self.dispatcher.wake_commands() != self.wake_commands:
+                reasons.append("指令唤醒条件已变化")
         try:
             timers = [h for h in self.loop._scheduled if not h.cancelled()]  # type: ignore[attr-defined]
             if timers:

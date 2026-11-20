@@ -14,7 +14,9 @@ from __future__ import annotations
 import importlib.abc
 import importlib.machinery
 import logging
+import mimetypes
 import os
+import re
 import sys
 import tempfile
 import types
@@ -92,7 +94,34 @@ def _patch_tracer_provider(module: types.ModuleType) -> None:
     module.TracerProvider._handle_fork = _handle_fork  # type: ignore[attr-defined]
 
 
+def _patch_kb_parser(module: types.ModuleType) -> None:
+    """Keeps the pinned MarkItDown plain text result without loading its other converters."""
+    from astrbot.core.knowledge_base.parsers.base import BaseParser, ParseResult
+
+    original = module.select_parser
+
+    class PlainTextParser(BaseParser):
+        async def parse(self, file_content: bytes, file_name: str) -> ParseResult:
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext != ".txt" or mimetypes.guess_type(f"file{ext}", strict=False)[0] != "text/plain":
+                return await (await original(".txt")).parse(file_content, file_name)
+
+            from charset_normalizer import from_bytes
+
+            text = str(from_bytes(file_content).best())
+            text = "\n".join(line.rstrip() for line in re.split(r"\r?\n", text))
+            return ParseResult(text=re.sub(r"\n{3,}", "\n\n", text), media=[])
+
+    async def select_parser(ext: str) -> BaseParser:
+        if ext == ".txt":
+            return PlainTextParser()
+        return await original(ext)
+
+    module.select_parser = select_parser
+
+
 PATCHES: dict[str, Callable[[types.ModuleType], None]] = {
+    "astrbot.core.knowledge_base.parsers.util": _patch_kb_parser,
     "astrbot.core.utils.console_sink": _patch_console,
     "astrbot.core.utils.shared_preferences": _patch_preferences,
     "opentelemetry.sdk.trace": _patch_tracer_provider,
@@ -180,27 +209,44 @@ def enter_plugin_root(root: str) -> None:
 
 
 def warm_database() -> None:
-    """Creates AstrBot's tables once in a throwaway in memory SQLite database on the calling thread.
+    """Prepares the ORM and asynchronous SQLite paths used during plugin start-up."""
+    import asyncio
 
-    This configures the ORM mappers and the dialect's type handling in the
-    importing process, so forked plugin processes share them instead of each
-    building them when it first opens its own database.
-    """
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session, configure_mappers
-    from sqlmodel import SQLModel
+    from astrbot.core import astrbot_config
+    from astrbot.core.astrbot_config_mgr import AstrBotConfigManager
+    from astrbot.core.db.sqlite import SQLiteDatabase
+    from astrbot.core.knowledge_base.kb_db_sqlite import KBSQLiteDatabase
+    from astrbot.core.persona_mgr import PersonaManager
+    from astrbot.core.umop_config_router import UmopConfigRouter
+    from astrbot.core.utils.shared_preferences import SharedPreferences
 
-    import astrbot.core.db.po  # noqa: F401
+    async def warm(root: str) -> None:
+        db = SQLiteDatabase(os.path.join(root, "data_v4.db"))
+        preferences = SharedPreferences(db_helper=db)
+        router = UmopConfigRouter(preferences)
+        config = AstrBotConfigManager(astrbot_config, router, preferences)
+        try:
+            await router.initialize()
+            await config.initialize()
+            await PersonaManager(db, config).initialize()
+            await db.list_cron_jobs()
+        finally:
+            try:
+                await preferences.close()
+            finally:
+                await db.engine.dispose()
 
-    engine = create_engine("sqlite://")
-    try:
-        SQLModel.metadata.create_all(engine)
-        configure_mappers()
-        with Session(engine) as session:
-            for table in SQLModel.metadata.tables.values():
-                session.execute(table.select().limit(1))
-    finally:
-        engine.dispose()
+        kb = KBSQLiteDatabase(os.path.join(root, "kb.db"))
+        try:
+            await kb.initialize()
+            await kb.migrate_to_v1()
+            await kb.list_kbs()
+        finally:
+            await kb.close()
+
+    # File-backed SQLite uses the same connection pool and WAL path as plugins.
+    with tempfile.TemporaryDirectory(prefix="fish-db-warmup-") as root:
+        asyncio.run(warm(root))
 
 
 LEGACY_KV = "fish_kv.json"

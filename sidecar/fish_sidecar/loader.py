@@ -43,6 +43,7 @@ class LoadedPlugin:
     instance: Star
     context: Context
     config: AstrBotConfig | None
+    command_only_idle: bool
 
 
 def safe_identifier(name: str) -> str:
@@ -207,8 +208,7 @@ def _requires_config(cls: type) -> bool:
     return len(positional) >= 2 and positional[1].default is positional[1].empty
 
 
-def _apply_metadata(md: StarMetadata, plugin_dir: Path, plugin_name: str) -> None:
-    meta = read_metadata(plugin_dir)
+def _apply_metadata(md: StarMetadata, meta: dict[str, Any], plugin_name: str) -> None:
     for field in ("name", "author", "desc", "short_desc", "repo", "display_name", "support_platforms", "astrbot_version"):
         if meta.get(field) is not None:
             setattr(md, field, meta[field])
@@ -252,7 +252,9 @@ def bind(md: StarMetadata, instance: Star) -> None:
 
 async def instantiate(md: StarMetadata, plugin_dir: Path, plugin_name: str, config_values: dict | None) -> LoadedPlugin:
     """Creates the plugin object the way AstrBot does. Must run on the event loop thread."""
-    _apply_metadata(md, plugin_dir, plugin_name)
+    meta = read_metadata(plugin_dir)
+    _apply_metadata(md, meta, plugin_name)
+    fish_pool = meta.get("fish_pool")
     config = plugin_config(plugin_dir, plugin_name, config_values)
     context = await adapter.build_context()
     StarTools.initialize(context)
@@ -285,6 +287,7 @@ async def instantiate(md: StarMetadata, plugin_dir: Path, plugin_name: str, conf
         instance=instance,
         context=context,
         config=config,
+        command_only_idle=isinstance(fish_pool, dict) and fish_pool.get("command_only_idle") is True,
     )
 
 
