@@ -118,7 +118,7 @@ export default function Logs({ bot }: { bot: Bot }) {
           <div>
             <p className="font-semibold text-ink">还没有日志</p>
             <p className="mt-1 text-sm leading-relaxed text-ink-2">
-              {bot.status === 'stopped' ? '小鱼还在睡觉。点上面的启动，它醒来以后日志会出现在这里。' : '小鱼启动以后，日志会出现在这里，每隔几秒自动刷新。'}
+              {bot.status === 'stopped' ? '启动小鱼后查看日志。' : '每 4 秒刷新。'}
             </p>
           </div>
         </div>
@@ -133,7 +133,7 @@ export default function Logs({ bot }: { bot: Bot }) {
             className="h-[60dvh] min-h-72 overflow-y-auto rounded-2xl bg-cobalt-950 py-2 font-mono text-[13px] leading-relaxed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky"
           >
             {shown.length === 0 ? (
-              <li className="px-3 py-2 text-white/60">没有符合筛选的日志，换个来源或级别试试。</li>
+              <li className="px-3 py-2 text-white/60">没有匹配的日志。</li>
             ) : (
               shown.map((l, i) => <LogRow key={`${l.ts}-${i}`} line={l} />)
             )}
@@ -151,9 +151,11 @@ export default function Logs({ bot }: { bot: Bot }) {
           )}
         </div>
       )}
-      <p className="mt-3 text-[13px] text-ink-3 tabular-nums">
-        共 {items.length} 行{shown.length !== items.length ? `，筛选后 ${shown.length} 行` : ''}。{stick ? '新日志会自动滚到底部。' : '你往上翻了，自动滚动先停下。'}
-      </p>
+      {items.length > 0 && (
+        <p className="mt-3 text-[13px] text-ink-3 tabular-nums">
+          {shown.length !== items.length ? `${shown.length} / ${items.length}` : items.length} 行 · {stick ? '自动跟随' : '已暂停跟随'}
+        </p>
+      )}
     </section>
   )
 }

@@ -35,14 +35,11 @@ function MoreLink({ to, children }: { to: string; children: ReactNode }) {
   )
 }
 
-function Todo({ icon, title, body, children }: { icon: ReactNode; title: string; body: ReactNode; children: ReactNode }) {
+function Todo({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <li className="flex flex-wrap items-center gap-4 rounded-2xl border border-star/70 bg-warn-soft p-4 sm:p-5">
       <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-cream text-warn">{icon}</span>
-      <div className="min-w-0 flex-1 basis-56">
-        <h3 className="font-semibold text-ink">{title}</h3>
-        <p className="mt-0.5 text-sm leading-relaxed text-ink-2">{body}</p>
-      </div>
+      <h3 className="min-w-0 flex-1 font-semibold text-ink">{title}</h3>
       <div className="flex flex-wrap gap-2">{children}</div>
     </li>
   )
@@ -77,7 +74,6 @@ function Todos({ bot }: { bot: Bot }) {
         <Todo
           icon={<Link2 className="size-5" aria-hidden />}
           title="还没接入 QQ 或微信"
-          body="接入以后，群友和好友才能找到这条小鱼。用手机扫个码就行，凭证会自动填好。"
         >
           <ButtonLink to={`${base}/connect`} primary>
             去接入
@@ -88,7 +84,6 @@ function Todos({ bot }: { bot: Bot }) {
         <Todo
           icon={<KeyRound className="size-5" aria-hidden />}
           title="还没选模型 Key"
-          body={haveKeys ? '选一个 Key，小鱼才能开口回话。' : '小鱼要用你自己的模型 Key 才能说话。先添加一个，再回来给它选上。'}
         >
           {haveKeys || llmKeys.isLoading ? (
             <ButtonLink to={`${base}/persona`} primary>
@@ -154,7 +149,7 @@ function Food({ bot }: { bot: Bot }) {
             <div className="grid gap-5">
               <FoodBar label="内存" capacity={usage.data.quota.memory_mb * MB} servings={serv('memory_bytes')} />
               <FoodBar label="存储" capacity={usage.data.quota.storage_mb * MB} servings={serv('storage_bytes')} compact />
-              <p className="text-[13px] leading-relaxed text-ink-3">这里只算这条小鱼吃掉的部分，额度是你所有小鱼一起用的。</p>
+              <p className="text-[13px] text-ink-3">这条小鱼的用量 / 账号总额度</p>
             </div>
           )
         })()
@@ -175,7 +170,7 @@ function PluginHealth({ bot }: { bot: Bot }) {
   return (
     <Panel title="插件" action={<MoreLink to={`/app/bots/${bot.id}/plugins`}>管理插件</MoreLink>}>
       {bot.plugins.length === 0 ? (
-        <p className="text-sm leading-relaxed text-ink-3">还没装插件。插件能让小鱼多会几样本事，比如每日一言、表情包、查天气。</p>
+        <p className="text-sm text-ink-3">暂无插件。</p>
       ) : (
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {rows.map((r) => (
@@ -188,7 +183,7 @@ function PluginHealth({ bot }: { bot: Bot }) {
       )}
       {me && (
         <p className="mt-4 text-[13px] text-ink-3 tabular-nums">
-          这条小鱼装了 {bot.plugins.length} 个，{me.quota.plugins == null ? '账号插件数量不限' : `账号额度共 ${me.quota.plugins} 个`}
+          已安装 {bot.plugins.length} 个 · 账号额度 {me.quota.plugins == null ? '不限' : `${me.quota.plugins} 个`}
         </p>
       )}
     </Panel>
@@ -205,7 +200,7 @@ function RecentLogs({ bot }: { bot: Bot }) {
       ) : logs.error ? (
         <ErrorNote error={logs.error} onRetry={() => logs.refetch()} />
       ) : last.length === 0 ? (
-        <p className="text-sm text-ink-3">小鱼启动以后，日志会出现在这里。</p>
+        <p className="text-sm text-ink-3">暂无日志。</p>
       ) : (
         <ol className="overflow-hidden rounded-xl bg-cobalt-950 py-2 font-mono text-[13px] leading-relaxed">
           {last.map((l, i) => (
@@ -232,7 +227,7 @@ function DeleteBot({ bot }: { bot: Bot }) {
       qc.removeQueries({ queryKey: keys.logs(bot.id) })
       qc.invalidateQueries({ queryKey: keys.bots })
       qc.invalidateQueries({ queryKey: keys.usage })
-      toast.success(`${bot.name} 已经退学了`)
+      toast.success(`${bot.name} 已删除`)
       navigate('/app')
     } catch (e) {
       showError(e, '没能删除，稍后再试')
@@ -244,9 +239,8 @@ function DeleteBot({ bot }: { bot: Bot }) {
     <section className="mt-10 flex flex-wrap items-center gap-4 border-t border-paper-3 pt-6" aria-labelledby="bot-delete">
       <div className="min-w-0 flex-1 basis-64">
         <h2 id="bot-delete" className="font-semibold text-ink">
-          让这条小鱼退学
+          永久删除
         </h2>
-        <p className="mt-0.5 text-sm leading-relaxed text-ink-2">接入、人设、插件和聊天记录会一起删掉，没法找回。</p>
       </div>
       <Button variant="danger" onClick={() => setOpen(true)}>
         <Trash2 aria-hidden />
@@ -258,7 +252,7 @@ function DeleteBot({ bot }: { bot: Bot }) {
         title={`删除 ${bot.name}？`}
         body={
           <p>
-            它会马上停下，接入的 QQ 和微信会断开，装好的 {bot.plugins.length} 个插件和聊天记录都会删除，没法找回。
+            小鱼将停止运行。接入凭证、人设、插件和聊天记录将永久删除。
           </p>
         }
         confirmLabel="确认删除"

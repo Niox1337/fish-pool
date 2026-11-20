@@ -105,7 +105,7 @@ function RedeemForm({ me }: { me: User }) {
         兑换邀请码
       </h2>
       <p className="mt-1 text-sm leading-relaxed text-ink-2">
-        每个邀请码带着一段服务天数。还没到期时从到期日往后加，已经到期时从今天开始算。
+        未到期时从到期日续期，已到期时从今天算起。
       </p>
       <form onSubmit={submit} noValidate className="mt-4">
         <Field label="邀请码" htmlFor="redeem" error={error}>
@@ -166,7 +166,7 @@ export default function AccountPage() {
 
   return (
     <>
-      <PageHeader title="账号" description="服务期限、额度和登录信息都在这里。" />
+      <PageHeader title="账号" />
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
         <div className="grid gap-6">
           <section aria-labelledby="acct-profile" className="rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
@@ -205,14 +205,13 @@ export default function AccountPage() {
               <Stat label="小鱼" value={me.quota.bots == null ? '不限' : `${me.quota.bots} 只`} sub={botCount != null ? `已托管 ${botCount} 只` : undefined} />
               <Stat label="插件" value={me.quota.plugins == null ? '不限' : `${me.quota.plugins} 个`} sub={pluginCount != null ? `已装 ${pluginCount} 个` : undefined} />
             </dl>
-            <p className="mt-4 text-[13px] leading-relaxed text-ink-3">额度由管理员设定，需要更多可以联系发邀请码给你的人。</p>
+            <p className="mt-4 text-[13px] text-ink-3">调整额度请联系管理员。</p>
           </section>
 
           <section aria-labelledby="acct-security" className="rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
             <h2 id="acct-security" className="font-display text-lg font-black text-ink">
               登录与安全
             </h2>
-            <p className="mt-1 text-sm leading-relaxed text-ink-2">改密码会给你的邮箱发一个验证码，验证后设置新密码。</p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Link
                 to={`/reset?email=${encodeURIComponent(me.email)}`}

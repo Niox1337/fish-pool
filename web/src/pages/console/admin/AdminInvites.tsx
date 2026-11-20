@@ -74,7 +74,7 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
   return (
     <form onSubmit={submit} noValidate className="grid gap-4 rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
       <h2 className="font-display text-lg font-black text-ink">生成邀请码</h2>
-      <Field label="服务天数" htmlFor={ids.days} error={errors.days} hint="兑换后给对方的服务期限加上这么多天。">
+      <Field label="服务天数" htmlFor={ids.days} error={errors.days}>
         <div className="flex flex-wrap items-center gap-2">
           <Input
             id={ids.days}
@@ -116,15 +116,15 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
       </div>
       <fieldset className="grid min-w-0 gap-3 border-t border-paper-3 pt-3">
         <legend className="pr-2 font-semibold text-ink">新账号配额</legend>
-        <p className="text-sm text-ink-3">注册时按这里的额度分配资源。已有账号兑换只延长托管时间。</p>
+        <p className="text-sm text-ink-3">仅注册时生效。已有账号兑换只续期。</p>
         {quotaForm ? (
           <QuotaInputs form={quotaForm} onChange={(key, value) => setQuotaEdits((prev) => ({ ...prev, [key]: value }))} />
         ) : <Skeleton className="h-40" />}
       </fieldset>
-      <Field label="备注" htmlFor={ids.note} hint="只有管理员看得到，比如发给谁、哪个群。">
+      <Field label="管理员备注" htmlFor={ids.note}>
         <Input id={ids.note} value={note} onChange={(e) => setNote(e.target.value)} maxLength={80} placeholder="群友试用" />
       </Field>
-      <Field label="兑换截止日" htmlFor={ids.exp} hint="可选。过了这天码就不能兑换，已经兑换的服务不受影响。">
+      <Field label="兑换截止日（可选）" htmlFor={ids.exp} hint="已兑换的服务照常有效。">
         <div className="flex flex-wrap items-center gap-2">
           <Input id={ids.exp} type="date" min={todayInput()} value={expires} onChange={(e) => setExpires(e.target.value)} className="w-44 tabular-nums" />
           {expires && (
@@ -263,8 +263,8 @@ function InviteRow({ inv }: { inv: Invite }) {
         title={`撤销 ${inv.code}？`}
         body={
           inv.used_count > 0
-            ? `撤销后这个码不能再兑换。已经兑换的 ${inv.used_count} 次服务时间保留，不会收回。`
-            : '撤销后这个码不能再兑换。如果已经发给别人，记得告诉对方。'
+            ? '撤销后停止兑换，已兑换的服务照常有效。'
+            : '撤销后此码无法兑换。'
         }
         confirmLabel="撤销邀请码"
         onConfirm={revoke}
@@ -282,7 +282,7 @@ export default function AdminInvites() {
 
   return (
     <>
-      <PageHeader title="邀请码" description="邀请码可用于开通托管或续期。生成时可以指定新账号的资源额度。" />
+      <PageHeader title="邀请码" />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start">
         <div className="grid gap-6">
           <CreateForm defaultQuota={list.data?.default_quota} onCreated={setCreated} />
@@ -323,7 +323,7 @@ export default function AdminInvites() {
           ) : items.length === 0 ? (
             <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">
               {filter === 'unused'
-                ? '没有能兑换的邀请码了。生成后可以复制给要使用托管服务的人。'
+                ? '暂无可兑换的邀请码。'
                 : filter === 'used'
                   ? '还没有用完的邀请码。'
                   : filter === 'revoked'

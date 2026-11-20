@@ -11,7 +11,7 @@ export default function UsagePage() {
     <>
       <PageHeader
         title="资源用量"
-        description="每条小鱼本体、聊天记录和每个插件各占一份饭量，都算在你的额度里。数据每 30 秒刷新一次。"
+        description="每 30 秒刷新。"
       />
       {usage.isLoading ? (
         <UsageSkeleton />

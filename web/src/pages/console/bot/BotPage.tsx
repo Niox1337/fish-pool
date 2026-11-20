@@ -165,7 +165,6 @@ function BotView() {
         <Pupil mood="surprised" size={128} className="mx-auto" />
         <div>
           <h1 className="font-display text-xl font-black text-ink">找不到这只小鱼</h1>
-          <p className="mt-2 text-[15px] leading-relaxed text-ink-2">可能已经退学了，或者链接抄错了一位。回到小鱼列表看看吧。</p>
           <Link
             to="/app"
             className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl border border-star-2 bg-star px-4 text-sm font-semibold text-ink shadow-[var(--shadow-star)] transition-[filter] duration-150 hover:brightness-[1.04]"

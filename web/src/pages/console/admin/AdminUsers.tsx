@@ -73,7 +73,7 @@ export default function AdminUsers() {
 
   return (
     <>
-      <PageHeader title="用户" description="按邮箱搜索，点进去可以延长服务、调整额度、看用量和日志。" />
+      <PageHeader title="用户" />
       <div className="relative mb-5 max-w-md">
         <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-ink-3" aria-hidden />
         <Input
@@ -96,7 +96,7 @@ export default function AdminUsers() {
         <ErrorNote error={first.error} onRetry={() => first.refetch()} />
       ) : items.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">
-          {q ? `没有邮箱包含“${q}”的用户，换个关键词试试。` : '还没有用户。发出邀请码，有人注册后会出现在这里。'}
+          {q ? `没有匹配“${q}”的用户。` : '暂无用户。'}
         </p>
       ) : (
         <div className={cn('transition-opacity duration-150', stale && 'opacity-60')} aria-busy={stale || undefined}>

@@ -11,11 +11,10 @@ import { useErrorToast } from './errors'
 
 const PROMPT_SOFT_LIMIT = 4000
 
-function Block({ title, intro, children }: { title: string; intro?: ReactNode; children: ReactNode }) {
+function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
       <h2 className="font-display text-lg font-black text-ink">{title}</h2>
-      {intro && <p className="mt-1 text-sm leading-relaxed text-ink-2">{intro}</p>}
       <div className="mt-5 grid gap-5">{children}</div>
     </section>
   )
@@ -92,8 +91,8 @@ export default function Persona({
       noValidate
       className="grid gap-4"
     >
-      <Block title="人设" intro="小鱼是谁、怎么说话，都写在这里。">
-        <Field label="名字" htmlFor={ids.name} error={nameErr || undefined} hint="小鱼自称和被人提到时用的名字。">
+      <Block title="人设">
+        <Field label="名字" htmlFor={ids.name} error={nameErr || undefined}>
           <Input
             id={ids.name}
             value={s.persona.name}
@@ -105,7 +104,6 @@ export default function Persona({
         <Field
           label="系统提示词"
           htmlFor={ids.prompt}
-          hint="写清楚它的性格、口头禅、该做什么不该做什么。越具体越像。"
           aside={
             <span className={promptLen > PROMPT_SOFT_LIMIT ? 'text-[13px] font-semibold text-warn tabular-nums' : 'text-[13px] text-ink-3 tabular-nums'}>
               {promptLen} 字{promptLen > PROMPT_SOFT_LIMIT ? '，有点长了，会多花 token' : ''}
@@ -114,7 +112,7 @@ export default function Persona({
         >
           <Textarea id={ids.prompt} rows={8} value={s.persona.system_prompt} onChange={(e) => set('persona', { system_prompt: e.target.value })} />
         </Field>
-        <Field label="开场白" htmlFor={ids.greeting} hint="新会话里小鱼主动说的第一句话。留空就不主动打招呼。">
+        <Field label="开场白" htmlFor={ids.greeting} hint="新会话的首条问候，留空则跳过。">
           <Input
             id={ids.greeting}
             value={s.persona.greeting}
@@ -124,23 +122,23 @@ export default function Persona({
         </Field>
       </Block>
 
-      <Block title="模型" intro="小鱼用你在模型 Key 页添加的 Key 说话。">
+      <Block title="模型">
         <Field
           label="模型 Key"
           htmlFor={ids.key}
           error={missingKey ? '之前选的 Key 已经删掉了，请重新选一个' : undefined}
-          aside={
+          aside={keyList.length > 0 && (
             <Link to="/app/keys" className="text-[13px] font-semibold text-sky hover:underline">
               管理 Key
             </Link>
-          }
+          )}
         >
           {llmKeys.isLoading ? (
             <Skeleton className="h-11" />
           ) : keyList.length === 0 ? (
             <div className="flex flex-wrap items-center gap-3 rounded-xl border border-dashed border-paper-3 bg-paper/60 px-4 py-3">
               <KeyRound className="size-5 shrink-0 text-ink-3" aria-hidden />
-              <p className="min-w-0 flex-1 basis-48 text-sm text-ink-2">还没有模型 Key。添加一个以后回来这里选上，小鱼就能开口了。</p>
+              <p className="min-w-0 flex-1 text-sm text-ink-2">暂无模型 Key。</p>
               <Link
                 to="/app/keys"
                 className="inline-flex h-9 items-center rounded-lg border border-star-2 bg-star px-3 text-[13px] font-semibold text-ink hover:brightness-[1.04]"
@@ -167,7 +165,7 @@ export default function Persona({
             </Select>
           )}
         </Field>
-        <Field label="模型名" htmlFor={ids.model} hint={key ? `选了 Key 会自动填上 ${key.model}，也可以换成同一家的其他模型。` : '和 Key 对应服务商的模型名一致。'}>
+        <Field label="模型名" htmlFor={ids.model} hint="可改为同一服务商的其他模型。">
           <Input
             id={ids.model}
             value={s.llm.model}
@@ -182,7 +180,7 @@ export default function Persona({
           <RangeField
             id={ids.temp}
             label="温度"
-            hint="越低回答越稳，越高越活泼跳脱。"
+            hint="越低越稳定，越高越多样。"
             value={s.llm.temperature}
             min={0}
             max={2}
@@ -193,7 +191,7 @@ export default function Persona({
           <RangeField
             id={ids.turns}
             label="记住几轮对话"
-            hint="越多越懂上下文，也越费 token。"
+            hint="保留更多对话会消耗更多 token。"
             value={s.llm.context_turns}
             min={0}
             max={50}
@@ -201,7 +199,7 @@ export default function Persona({
             onChange={(context_turns) => set('llm', { context_turns })}
           />
         </div>
-        <Field label="单次回复最多 token" htmlFor={ids.tokens} error={tokensErr || undefined} hint="限制每条回复的长度，1024 大约是几百个汉字。">
+        <Field label="单次回复最多 token" htmlFor={ids.tokens} error={tokensErr || undefined}>
           <Input
             id={ids.tokens}
             type="number"
@@ -217,8 +215,8 @@ export default function Persona({
         </Field>
       </Block>
 
-      <Block title="回复规则" intro="决定小鱼什么时候开口、听谁的话。">
-        <Field label="唤醒前缀" htmlFor={ids.prefixes} hint="消息以这些字符开头时当作指令，比如 /help。按回车或逗号添加。">
+      <Block title="回复规则">
+        <Field label="唤醒前缀" htmlFor={ids.prefixes} hint="例如 /help 中的 /。按回车或逗号添加。">
           <ChipsInput id={ids.prefixes} label="唤醒前缀" value={s.behavior.wake_prefixes} onChange={(wake_prefixes) => set('behavior', { wake_prefixes })} placeholder="/" />
         </Field>
         <div className="grid gap-4 rounded-xl border border-paper-3 bg-paper/50 p-4">
@@ -226,18 +224,18 @@ export default function Persona({
           <SwitchRow label="私聊时回复" checked={s.behavior.reply_in_private} onChange={(reply_in_private) => set('behavior', { reply_in_private })} />
           <SwitchRow
             label="群里不 @ 也回复"
-            hint="打开后群里每条消息小鱼都可能接话，比较吵，也更费 token。"
+            hint="开启后可能增加回复次数和 token 用量。"
             checked={s.behavior.reply_in_group_without_at}
             onChange={(reply_in_group_without_at) => set('behavior', { reply_in_group_without_at })}
           />
         </div>
-        <Field label="管理员" htmlFor={ids.admins} hint="管理员能用管理指令。写成 平台:账号，比如 qq:12345。">
+        <Field label="管理员" htmlFor={ids.admins} hint="可用管理指令。格式为「平台:账号」。">
           <ChipsInput id={ids.admins} label="管理员" value={s.behavior.admins} onChange={(admins) => set('behavior', { admins })} placeholder="qq:12345" />
         </Field>
-        <Field label="黑名单" htmlFor={ids.block} hint="小鱼不理这些账号的消息，格式同上。">
+        <Field label="黑名单" htmlFor={ids.block} hint="格式为「平台:账号」。">
           <ChipsInput id={ids.block} label="黑名单" value={s.behavior.blocklist} onChange={(blocklist) => set('behavior', { blocklist })} placeholder="qq:67890" />
         </Field>
-        <Field label="每分钟最多回复几条" htmlFor={ids.rate} error={rateErr || undefined} hint="防止被刷屏，0 表示不限制。">
+        <Field label="每分钟回复上限" htmlFor={ids.rate} error={rateErr || undefined} hint="0 表示不限。">
           <Input
             id={ids.rate}
             type="number"

@@ -97,7 +97,7 @@ function ServicePanel({ user }: { user: AdminUser }) {
           </span>
         )}
       </div>
-      {user.role === 'admin' && <p className="mt-2 text-[13px] text-ink-3">管理员一直有效，这里的期限只在取消管理员身份后才起作用。</p>}
+      {user.role === 'admin' && <p className="mt-2 text-[13px] text-ink-3">到期日仅对普通用户生效。</p>}
 
       <div className="mt-5 grid gap-5">
         <div>
@@ -128,11 +128,11 @@ function ServicePanel({ user }: { user: AdminUser }) {
               延长
             </Button>
           </form>
-          <p className="mt-1.5 text-[13px] text-ink-3">从今天和当前到期日中较晚的那天往后加。</p>
+          <p className="mt-1.5 text-[13px] text-ink-3">已到期的账号从今天续期。</p>
         </div>
 
         <form onSubmit={submitDate} className="border-t border-paper-3 pt-4">
-          <Field label="直接设定到期日" htmlFor={dateId} hint="服务到这一天结束。">
+          <Field label="设定到期日" htmlFor={dateId} hint="当天结束时到期。">
             <div className="flex flex-wrap items-center gap-2">
               <Input id={dateId} type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 w-44 rounded-lg text-sm tabular-nums" />
               <Button type="submit" size="sm" loading={busy === 'date'} disabled={!!busy || !date || date === toDateInput(user.service_until)}>
@@ -300,7 +300,7 @@ function LogsSection({ userId, bots }: { userId: string; bots: Bot[] }) {
   const logs = useAdminBotLogs(userId, botId)
 
   if (bots.length === 0) {
-    return <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">这位用户没有小鱼，也就没有日志。</p>
+    return <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">该用户暂无小鱼。</p>
   }
   return (
     <div className="grid gap-4">
@@ -327,7 +327,7 @@ function LogsSection({ userId, bots }: { userId: string; bots: Bot[] }) {
       ) : logs.error ? (
         <ErrorNote error={logs.error} onRetry={() => logs.refetch()} />
       ) : (logs.data?.items.length ?? 0) === 0 ? (
-        <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">这条小鱼最近没有日志。启动后的连接、模型请求和插件消息会出现在这里。</p>
+        <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">这条小鱼暂无日志。</p>
       ) : (
         <>
           <LogList items={logs.data!.items} />

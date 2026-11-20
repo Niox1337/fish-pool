@@ -233,7 +233,7 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
           )}
         </div>
         <p className="text-[13px] leading-relaxed text-ink-2">
-          内存持续超过额度时，托管班会先停下占内存最多的插件。存储超过额度时，新的插件装不上，删掉不用的插件或聊天记录就能腾出地方。小鱼条数和插件个数也有各自的额度。
+          内存持续超额会停用占用最大的插件。存储超额时，请先清理插件或聊天记录，再安装新插件。
         </p>
       </section>
 
@@ -243,7 +243,7 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
         </h2>
         {groups.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">
-            还没有小鱼在吃饭。收一条小鱼并装上插件后，这里会按小鱼和来源列出内存、存储和 CPU。
+            暂无用量。启动小鱼后查看明细。
           </p>
         ) : (
           <Breakdown groups={groups} />
@@ -256,7 +256,7 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
         </h2>
         {usage.history.length === 0 || (usage.sources.length === 0 && usage.history.every((h) => h.memory_bytes === 0 && h.storage_bytes === 0)) ? (
           <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">
-            还没有记录。小鱼运行起来后，每 5 分钟记一次。
+            暂无记录。小鱼运行后每 5 分钟采样。
           </p>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">

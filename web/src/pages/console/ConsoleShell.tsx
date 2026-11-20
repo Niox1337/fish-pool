@@ -157,8 +157,8 @@ export default function ConsoleShell() {
         {!me.service_active && (
           <div role="status" className="border-b border-pink/50 bg-pink-soft">
             <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-sm text-pink-ink sm:px-8">
-              <span className="font-semibold">服务已到期，小鱼们都先睡下了。</span>
-              <span>设置和插件都还在，兑换新的邀请码就能重新启动。</span>
+              <span className="font-semibold">服务已到期，小鱼已停止。</span>
+              <span>设置和插件已保留。</span>
               <Link to="/app/account#redeem" className="font-semibold underline underline-offset-2">
                 去兑换
               </Link>
@@ -169,7 +169,7 @@ export default function ConsoleShell() {
           <div role="status" className="border-b border-star/60 bg-warn-soft">
             <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-sm text-warn sm:px-8">
               <span className="font-semibold tabular-nums">服务还剩 {left} 天</span>
-              <span>到期后小鱼会停下，提前兑换邀请码可以接着算。</span>
+              <span>到期后小鱼会停止运行。</span>
               <Link to="/app/account#redeem" className="font-semibold underline underline-offset-2">
                 去兑换
               </Link>

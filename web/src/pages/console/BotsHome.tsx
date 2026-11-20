@@ -101,7 +101,7 @@ export default function BotsHome() {
 
   return (
     <>
-      <PageHeader title="我的小鱼" description="每条小鱼都是一个独立运行的机器人。点进去可以接入 QQ 或微信、换人设、装插件、看日志。" />
+      <PageHeader title="我的小鱼" />
 
       {bots.isLoading ? (
         <div className="grid gap-3">
@@ -115,11 +115,7 @@ export default function BotsHome() {
           <Pupil mood="happy" size={144} className="mx-auto" />
           <div>
             <h2 className="font-display text-xl font-black text-ink">还没有托管的小鱼</h2>
-            <ol className="mt-3 grid gap-1.5 text-[15px] leading-relaxed text-ink-2">
-              <li>1. 起个名字，创建第一只小鱼。</li>
-              <li>2. 在接入页用 QQ 或微信扫码，凭证自动填好。</li>
-              <li>3. 在模型 Key 页填上你自己的 Key，小鱼就能开口说话。</li>
-            </ol>
+            <p className="mt-2 text-[15px] leading-relaxed text-ink-2">创建后，接入 QQ 或微信，再选一个模型 Key。</p>
             <div className="mt-5">
               <CreateBot disabled={!!reason} reason={reason} first />
             </div>

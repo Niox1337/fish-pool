@@ -57,12 +57,10 @@ function AddPlugin({ bot, used, quota }: { bot: Bot; used: number; quota: number
         装个新插件
       </h2>
       <p className="mt-1 text-sm leading-relaxed text-ink-2">
-        去{' '}
         <a href={MARKET} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-semibold text-sky hover:underline">
           插件市场
           <ExternalLink className="size-3.5" aria-hidden />
-        </a>{' '}
-        挑一个，复制它的 GitHub 仓库地址贴到这里。
+        </a>
       </p>
       <form onSubmit={inspect} className="mt-4 flex flex-wrap items-start gap-2" noValidate>
         <Field label="GitHub 仓库地址" htmlFor={inputId} error={inspectErr || undefined} className="min-w-0 flex-1 basis-64">
@@ -90,12 +88,9 @@ function AddPlugin({ bot, used, quota }: { bot: Bot; used: number; quota: number
             <span className="text-[13px] text-ink-3 tabular-nums">{preview.version}</span>
             <span className="text-[13px] text-ink-3">作者 {preview.author}</span>
           </div>
-          <p className="mt-1 font-mono text-[12px] break-all text-ink-3">{preview.name}</p>
-          <p className="mt-2 text-sm leading-relaxed text-ink-2">{preview.description || '作者没有写简介。'}</p>
-          <ul className="mt-2 grid gap-0.5 text-[13px] text-ink-3">
-            {preview.has_requirements && <li>需要下载依赖，安装可能要等一两分钟。</li>}
-            {preview.schema && <li>装好后可以在这里改它的设置。</li>}
-          </ul>
+          {preview.display_name && preview.display_name !== preview.name && <p className="mt-1 font-mono text-[12px] break-all text-ink-3">{preview.name}</p>}
+          {preview.description && <p className="mt-2 text-sm leading-relaxed text-ink-2">{preview.description}</p>}
+          {preview.has_requirements && <p className="mt-2 text-[13px] text-ink-3">安装时需下载依赖。</p>}
           {add.error && (
             <div className="mt-3">
               <ActionError error={add.error} />
@@ -108,7 +103,7 @@ function AddPlugin({ bot, used, quota }: { bot: Bot; used: number; quota: number
             <Button variant="ghost" onClick={() => setPreview(null)}>
               换一个
             </Button>
-            {full && <p className="basis-full text-[13px] text-warn">插件额度已经用完了，先移除一个不用的再装。</p>}
+            {full && <p className="basis-full text-[13px] text-warn">额度已满。请先移除一个插件。</p>}
           </div>
         </div>
       )}
@@ -128,7 +123,7 @@ function ConfigSheet({ bot, plugin, open, onOpenChange }: { bot: Bot; plugin: Pl
       open={open}
       onOpenChange={onOpenChange}
       title={`${plugin.display_name || plugin.name} 的设置`}
-      description="保存后插件会用新的设置重新加载。"
+      description="保存后重新加载插件。"
     >
       <form
         onSubmit={(e) => {
@@ -284,7 +279,7 @@ export default function Plugins({ bot }: { bot: Bot }) {
           </h2>
           {quota != null && (
             <p className={used >= quota ? 'text-[13px] font-semibold text-warn tabular-nums' : 'text-[13px] text-ink-3 tabular-nums'}>
-              插件额度 {used} / {quota}，所有小鱼一起算
+              账号插件额度 {used} / {quota}
             </p>
           )}
         </div>
@@ -292,7 +287,7 @@ export default function Plugins({ bot }: { bot: Bot }) {
           <Skeleton className="h-24" />
         ) : bot.plugins.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-sm leading-relaxed text-ink-2">
-            还没装插件。插件能让小鱼多会几样本事，比如每日一言、表情包、查天气。从插件市场复制仓库地址，贴到上面就能装。
+            暂无插件。
           </p>
         ) : (
           <ul className="divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream p-5">

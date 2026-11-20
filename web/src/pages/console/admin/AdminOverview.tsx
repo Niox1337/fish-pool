@@ -79,7 +79,7 @@ function Counts({ o }: { o: Overview }) {
         <div className="grid gap-4">
           <FoodBar label="内存" compact capacity={o.usage.quota_memory_mb * MB} servings={[{ key: 'm', label: '全部用户', bytes: o.usage.memory_bytes }]} />
           <FoodBar label="存储" compact capacity={o.usage.quota_storage_mb * MB} servings={[{ key: 's', label: '全部用户', bytes: o.usage.storage_bytes }]} />
-          <p className="text-[13px] text-ink-3">分母是所有用户额度之和，不是节点容量。</p>
+          <p className="text-[13px] text-ink-3">用量 / 全部用户额度</p>
         </div>
       </Block>
     </div>
@@ -99,12 +99,12 @@ function PluginCpu({ cpu, nodeCount }: { cpu: Overview['plugin_cpu']; nodeCount:
         )}
       </div>
       <p className="mt-1 text-sm text-ink-3">
-        {cpu?.reporting_nodes ?? 0}/{nodeCount} 个节点已上报。每 5 分钟采样，100% 相当于占用一个逻辑核心。
+        上报节点 {cpu?.reporting_nodes ?? 0}/{nodeCount} · 每 5 分钟采样 · 100% 为一个逻辑核心
       </p>
       {!cpu?.reporting_nodes ? (
-        <p className="mt-3 rounded-2xl border border-dashed border-paper-3 p-4 text-sm text-ink-2">还没有插件 CPU 样本。请确认节点在线且已更新。</p>
+        <p className="mt-3 rounded-2xl border border-dashed border-paper-3 p-4 text-sm text-ink-2">暂无样本。请确认节点在线且已更新。</p>
       ) : cpu.items.length === 0 ? (
-        <p className="mt-3 rounded-2xl border border-dashed border-paper-3 p-4 text-sm text-ink-2">已上报节点在本轮没有测到插件 CPU 用量。</p>
+        <p className="mt-3 rounded-2xl border border-dashed border-paper-3 p-4 text-sm text-ink-2">本轮未测到插件 CPU 用量。</p>
       ) : (
         <ul className="mt-3 divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream">
           {cpu.items.map((item) => (
@@ -137,7 +137,7 @@ function Problems({ items }: { items: AdminProblem[] }) {
       {sorted.length === 0 ? (
         <div className="flex items-center gap-4 rounded-2xl border border-dashed border-paper-3 p-4 text-[15px] text-ink-2">
           <Pupil mood="happy" size={56} />
-          所有小鱼、平台和插件都好好的。出错或超出配额的会按时间列在这里。
+          暂无异常或超额。
         </div>
       ) : (
         <ul className="divide-y divide-paper-3 overflow-hidden rounded-2xl border border-paper-3 bg-cream">
@@ -196,7 +196,7 @@ function Nodes({ nodes }: { nodes: AdminNode[] }) {
       </h2>
       {nodes.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-paper-3 p-4 text-[15px] text-ink-2">
-          还没有配置节点，小鱼没地方住。在 Worker 配置里加上节点地址和密钥后会出现在这里。
+          暂无节点。请在 Worker 中配置节点地址和密钥。
         </p>
       ) : (
         <>
@@ -265,7 +265,7 @@ export default function AdminOverview() {
   const q = useAdminOverview()
   return (
     <>
-      <PageHeader title="总览" description="整个托管班的人数、小鱼、插件、节点和需要处理的问题，每 30 秒刷新。" />
+      <PageHeader title="总览" />
       {q.isLoading ? (
         <div className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

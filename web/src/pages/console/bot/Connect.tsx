@@ -98,7 +98,7 @@ function QrFlow({ botId, kind, again }: { botId: string; kind: Kind; again: bool
         {phase === 'created' && (
           <p className="inline-flex items-center gap-1.5 text-sm font-semibold text-ok" role="status">
             <CircleCheck className="size-4" aria-hidden />
-            {name}接好了，可以在下面的列表里管理
+            {name}已接入
           </p>
         )}
         <Button variant={again || phase === 'created' ? 'secondary' : 'primary'} onClick={start} loading={phase === 'starting'} className="justify-self-start">
@@ -148,20 +148,16 @@ function QrFlow({ botId, kind, again }: { botId: string; kind: Kind; again: bool
         {phase === 'pending' && (
           <>
             <p className="font-semibold text-ink">用手机{mid}扫一扫</p>
-            <p className="mt-1">扫完按提示确认，这里会自己刷新。</p>
+            <p className="mt-1">按手机上的提示确认。</p>
           </>
         )}
         {phase === 'scanned' && (
-          <>
-            <p className="font-semibold text-ok">扫到了</p>
-            <p className="mt-1">在手机上点确认，确认后这里会显示接好了。</p>
-          </>
+          <p className="font-semibold text-ok">等待手机确认</p>
         )}
         {phase === 'starting' && <p className="font-semibold text-ink">正在生成新的二维码…</p>}
         {phase === 'expired' && (
           <>
-            <p className="font-semibold text-ink">二维码过期了</p>
-            <p className="mt-1">点“重新生成”换一张新的再扫。</p>
+            <p className="font-semibold text-ink">二维码已过期</p>
           </>
         )}
         {phase === 'error' && (
@@ -179,7 +175,7 @@ function QrFlow({ botId, kind, again }: { botId: string; kind: Kind; again: bool
             className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-sky hover:underline"
           >
             <Smartphone className="size-3.5" aria-hidden />
-            正在用这台手机？点这里打开
+            在本机打开
           </a>
         )}
       </div>
@@ -219,10 +215,10 @@ function QqManual({ botId }: { botId: string }) {
         <span className="mr-1.5 inline-block transition-transform duration-150 group-open:rotate-90" aria-hidden>
           ›
         </span>
-        已经有机器人了？手动填 AppID 和密钥
+        手动填写 AppID 和密钥
       </summary>
       <form onSubmit={submit} className="grid gap-4 px-4 pt-1 pb-4" noValidate>
-        <p className="text-[13px] leading-relaxed text-ink-3">在 QQ 开放平台的机器人管理页，打开开发设置就能找到这两项。</p>
+        <p className="text-[13px] text-ink-3">在 QQ 开放平台的机器人开发设置中查看凭证。</p>
         <Field label="AppID" htmlFor={appIdId} error={error?.field === 'app' ? error.text : undefined}>
           <Input
             id={appIdId}
@@ -322,7 +318,7 @@ function PlatformRow({ bot, p }: { bot: Bot; p: Platform }) {
         open={confirm}
         onOpenChange={setConfirm}
         title={`移除 ${label}？`}
-        body={<p>小鱼会和这个{p.kind === 'qq_official' ? ' QQ ' : '微信'}账号断开，保存的凭证也会删掉。之后想用的话需要重新扫码。</p>}
+        body={<p>移除后会断开连接并删除凭证。要恢复，请重新接入。</p>}
         confirmLabel="确认移除"
         loading={remove.isPending}
         onConfirm={() =>
@@ -348,7 +344,7 @@ export default function Connect({ bot }: { bot: Bot }) {
         <Channel
           icon={<QqPenguin className="size-5" />}
           title="QQ 官方机器人"
-          intro={<p>用手机 QQ 扫码就能创建一个官方机器人，AppID 和密钥会自动填进来，不用自己复制。</p>}
+          intro={<p>扫码创建机器人，自动填写 AppID 和密钥。</p>}
         >
           <QrFlow botId={bot.id} kind="qq" again={hasQq} />
           <QqManual botId={bot.id} />
@@ -356,16 +352,7 @@ export default function Connect({ bot }: { bot: Bot }) {
         <Channel
           icon={<WeChatBubble className="size-5" />}
           title="微信"
-          intro={
-            <>
-              <p>用手机微信扫码，通过 iLink 接入。微信这边有几条限制：</p>
-              <ul className="mt-2 grid gap-1 pl-4 [&>li]:list-disc">
-                <li>只能私聊，不能拉进群</li>
-                <li>只能被动回复，用户先发消息，小鱼才能回</li>
-                <li>只能在用户最后一条消息后的 24 小时内回复</li>
-              </ul>
-            </>
-          }
+          intro={<p>仅支持私聊。小鱼只能在对方最后一条消息后的 24 小时内回复。</p>}
         >
           <QrFlow botId={bot.id} kind="weixin" again={hasWx} />
         </Channel>
@@ -378,7 +365,7 @@ export default function Connect({ bot }: { bot: Bot }) {
         </h2>
         {bot.platforms.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-sm leading-relaxed text-ink-2">
-            还没有接入任何平台。在上面选 QQ 或微信扫个码，接好的平台会出现在这里，可以随时关掉或移除。
+            暂未接入平台。
           </p>
         ) : (
           <ul className="divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream p-5">
