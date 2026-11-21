@@ -19,7 +19,9 @@ use crate::model::{
 use crate::pipeline::{is_listed, wake, RateLimiter};
 use crate::platform::{loopback, qq, weixin, Inbound, PlatformConn, StatusSink};
 use crate::plugin::install::Installer;
-use crate::plugin::{launch, restart_backoff, LaunchSpec, LoadError, OutMsg, PluginOut, PluginProc, Sidecar};
+use crate::plugin::group::has_own_packages;
+use crate::plugin::proc::EXIT_UNGROUPABLE;
+use crate::plugin::{launch, restart_backoff, Groups, LaunchSpec, LoadError, OutMsg, PluginOut, PluginProc, Sidecar, Ungroupable};
 use crate::sandbox::{chown_tree, Cgroups};
 use crate::store::{ConvDb, NodeDb};
 
@@ -30,6 +32,8 @@ pub struct Shared {
     pub db: Arc<NodeDb>,
     pub conv: Arc<ConvDb>,
     pub sidecar: Arc<Sidecar>,
+    /// Group processes that run light plugins of one bot together.
+    pub groups: Arc<Groups>,
     pub events: Events,
     pub cgroups: Option<Cgroups>,
     pub installer: Installer,
@@ -39,6 +43,19 @@ pub struct Shared {
 }
 
 impl Shared {
+    /// Stops a plugin process or a plugin slot of a group process.
+    pub async fn kill_proc(&self, proc_id: &str) {
+        if !self.groups.kill(proc_id) {
+            self.sidecar.kill(proc_id).await;
+        }
+    }
+
+    /// Drops the exit watch of a plugin process or slot.
+    pub fn forget_proc(&self, proc_id: &str) {
+        self.groups.forget(proc_id);
+        self.sidecar.forget(proc_id);
+    }
+
     /// Removes shared plugin installs that no bot uses any more.
     pub async fn gc_shared_plugins(self: &Arc<Self>) {
         let _permit = self.install_sem.acquire().await;
@@ -113,6 +130,8 @@ const INFLIGHT_TTL: Duration = Duration::from_secs(600);
 const IDLE_CHECK_WAIT: Duration = Duration::from_secs(5);
 /// Longest time an inbound message waits for sleeping plugins to start.
 const WAKE_WAIT: Duration = Duration::from_secs(30);
+/// Status detail of a plugin running in a group process.
+const GROUPED_DETAIL: &str = "与同一机器人的其他轻量插件共用一个进程";
 
 struct DormantPlugin {
     activity: watch::Sender<Instant>,
@@ -139,6 +158,9 @@ pub struct Bot {
     rate: Mutex<RateLimiter>,
     inflight: Mutex<HashMap<String, (ReplyTarget, Instant)>>,
     over_quota: Mutex<HashSet<String>>,
+    /// Plugins that run in their own process even when group processes are enabled.
+    // shortcut: kept in memory only, so a node restart tries grouping again, store it in node.db if plugins keep falling back after restarts.
+    solo: Mutex<HashSet<String>>,
     handlers: Arc<Semaphore>,
     /// Plugins stopped while idle. Changed only while holding the `procs` write lock.
     dormant: Mutex<HashMap<String, DormantPlugin>>,
@@ -184,6 +206,7 @@ impl Bot {
             rate: Mutex::new(RateLimiter::default()),
             inflight: Mutex::new(HashMap::new()),
             over_quota: Mutex::new(HashSet::new()),
+            solo: Mutex::new(HashSet::new()),
             handlers: Arc::new(Semaphore::new(8)),
             dormant: Mutex::new(HashMap::new()),
             dormant_gen: watch::channel(0).0,
@@ -825,6 +848,14 @@ impl Bot {
             };
             let _ = std::fs::create_dir_all(&inst.data);
             chown_tree(&shared.cfg, &inst.data);
+            let grouped = shared.cfg.plugin_groups
+                && !self.solo.lock().unwrap().contains(&spec.id)
+                && !has_own_packages(inst.site_packages.as_deref());
+            let workdir = Groups::workdir(&shared.cfg.bot_dir(&user, &self.id));
+            if grouped {
+                let _ = std::fs::create_dir_all(&workdir);
+                chown_tree(&shared.cfg, &workdir);
+            }
             let proc_id = ulid::Ulid::new().to_string().to_lowercase();
             let ls = LaunchSpec {
                 proc_id: proc_id.clone(),
@@ -840,17 +871,28 @@ impl Bot {
             let tenant = shared.cgroups.as_ref().map(|cg| (cg, user.as_str()));
             let launched = tokio::select! {
                 _ = cancel.cancelled() => {
-                    shared.sidecar.kill(&proc_id).await;
+                    shared.kill_proc(&proc_id).await;
                     self.leave_dormant(&spec.id, None);
                     return
                 }
-                r = launch(&shared.sidecar, ls, out_tx.clone(), tenant) => r,
+                r = async {
+                    if grouped {
+                        shared.groups.launch(ls, out_tx.clone(), tenant, &workdir).await
+                    } else {
+                        launch(&shared.sidecar, ls, out_tx.clone(), tenant).await
+                    }
+                } => r,
             };
             if launched.is_err() {
                 self.leave_dormant(&spec.id, None);
             }
             let (proc, mut exit_rx) = match launched {
                 Ok(v) => v,
+                Err(e) if e.downcast_ref::<Ungroupable>().is_some() => {
+                    // The group process already sent the reason to the plugin log.
+                    self.solo.lock().unwrap().insert(spec.id.clone());
+                    continue;
+                }
                 Err(e) if e.downcast_ref::<LoadError>().is_some() => {
                     let detail = e.to_string();
                     self.logs
@@ -864,6 +906,9 @@ impl Bot {
                     continue;
                 }
                 Err(e) => {
+                    if grouped {
+                        self.solo.lock().unwrap().insert(spec.id.clone());
+                    }
                     let msg = format!("{e:#}");
                     self.logs.error(&src, format!("启动失败: {msg}"));
                     self.set_plugin_status(&spec.id, "error", &msg, None);
@@ -879,9 +924,14 @@ impl Bot {
             let version = Some(proc.hello.version.clone())
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| spec.version.clone());
+            let (shared_note, detail) = if grouped {
+                ("，与同一机器人的其他轻量插件共用进程", GROUPED_DETAIL)
+            } else {
+                ("", "")
+            };
             self.logs
-                .info(&src, format!("插件已启动 pid={} 版本 {version}", proc.pid));
-            self.set_plugin_status(&spec.id, "running", "", Some(version.clone()));
+                .info(&src, format!("插件已启动 pid={} 版本 {version}{shared_note}", proc.pid));
+            self.set_plugin_status(&spec.id, "running", detail, Some(version.clone()));
             let started = Instant::now();
             let idle = shared.cfg.plugin_idle_sleep;
             let outcome = loop {
@@ -910,9 +960,9 @@ impl Bot {
                         .await
                         .is_err()
                     {
-                        shared.sidecar.kill(&proc_id).await;
+                        shared.kill_proc(&proc_id).await;
                     }
-                    shared.sidecar.forget(&proc_id);
+                    shared.forget_proc(&proc_id);
                     if matches!(outcome, PluginExit::Stop) {
                         return;
                     }
@@ -924,9 +974,9 @@ impl Bot {
                         .await
                         .is_err()
                     {
-                        shared.sidecar.kill(&proc_id).await;
+                        shared.kill_proc(&proc_id).await;
                     }
-                    shared.sidecar.forget(&proc_id);
+                    shared.forget_proc(&proc_id);
                     let minutes = idle.map(|d| d.as_secs().div_ceil(60)).unwrap_or(0);
                     let command_only = proc
                         .hello
@@ -960,8 +1010,16 @@ impl Bot {
                     attempt = 0;
                 }
                 PluginExit::Failed(code) => {
-                    shared.sidecar.kill(&proc_id).await;
-                    shared.sidecar.forget(&proc_id);
+                    shared.kill_proc(&proc_id).await;
+                    shared.forget_proc(&proc_id);
+                    if grouped {
+                        // Any failure inside a group process moves the plugin to its own process.
+                        self.solo.lock().unwrap().insert(spec.id.clone());
+                        if code == EXIT_UNGROUPABLE {
+                            attempt = 0;
+                            continue;
+                        }
+                    }
                     let detail = proc
                         .last_error
                         .lock()
@@ -1497,8 +1555,20 @@ mod tests {
             plugin_uid: None,
             plugin_gid: None,
             plugin_idle_sleep: None,
+            plugin_groups: false,
         };
         let http = reqwest::Client::new();
+        let sidecar = Arc::new(Sidecar::new(
+            crate::plugin::SidecarCommand {
+                program: "false".into(),
+                args: vec![],
+                envs: vec![],
+                cwd: None,
+                uid: None,
+                gid: None,
+            },
+            dir.join("run"),
+        ));
         Arc::new(Shared {
             installer: Installer {
                 http: http.clone(),
@@ -1510,17 +1580,8 @@ mod tests {
                 codeload_base: None,
                 archive_proxy: None,
             },
-            sidecar: Arc::new(Sidecar::new(
-                crate::plugin::SidecarCommand {
-                    program: "false".into(),
-                    args: vec![],
-                    envs: vec![],
-                    cwd: None,
-                    uid: None,
-                    gid: None,
-                },
-                dir.join("run"),
-            )),
+            sidecar: sidecar.clone(),
+            groups: Arc::new(Groups::new(sidecar)),
             db: Arc::new(NodeDb::open(&dir.join("node.db")).unwrap()),
             conv: Arc::new(ConvDb::open(&dir.join("c.db")).unwrap()),
             events: Events::disabled(),

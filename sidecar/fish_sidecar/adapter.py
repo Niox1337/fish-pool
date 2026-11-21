@@ -316,9 +316,12 @@ async def build_context() -> FishContext:
     from astrbot.core.umop_config_router import UmopConfigRouter
     from astrbot.core.utils.astrbot_path import get_astrbot_knowledge_base_path
 
-    db = core.db_helper
-    router = UmopConfigRouter(core.sp)
-    config = astrbot_config_mgr.AstrBotConfigManager(core.astrbot_config, router, core.sp)
+    # A group process keeps one database per plugin on the runtime. A plugin process uses the rebound globals.
+    current = runtime.current()
+    db = getattr(current, "db", None) or core.db_helper
+    sp = getattr(current, "sp", None) or core.sp
+    router = UmopConfigRouter(sp)
+    config = astrbot_config_mgr.AstrBotConfigManager(core.astrbot_config, router, sp)
     provider_manager = FishProviderManager(llm_tools, config)
     await router.initialize()
     await config.initialize()

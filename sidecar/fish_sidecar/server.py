@@ -8,6 +8,9 @@ template process per shared install and plugin name (see ``fish_sidecar.template
 imports the plugin once and forks each plugin process, so all of them share the imported modules.
 The server is a child subreaper, so those plugin processes become its children like directly
 forked ones. A plugin whose import is not safe to share is spawned directly.
+
+A spawn with ``"mode": "group"`` starts a group process that runs several plugins of one bot
+(see ``fish_sidecar.group``). ``plugin_dir`` is then the work dir of that process.
 """
 
 from __future__ import annotations
@@ -390,9 +393,14 @@ class ForkServer:
             self.close_inherited()
             os.setsid()
             # Objects from the preload stay frozen, so full collections in the plugin do not write to their shared pages.
-            from fish_sidecar import child
+            if spec.get("mode") == "group":
+                from fish_sidecar import group
 
-            code = child.run(spec)
+                code = group.serve(spec)
+            else:
+                from fish_sidecar import child
+
+                code = child.run(spec)
         except SystemExit as e:
             code = e.code if isinstance(e.code, int) else 1
         except BaseException:

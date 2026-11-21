@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
+use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -295,6 +296,71 @@ const IDLE_KEY: &str = "idle";
 /// Exit code of a plugin process whose module failed to import or initialize.
 pub const EXIT_LOAD_FAILED: i32 = 2;
 
+/// Exit code of a plugin in a group process that has to run in its own process.
+pub const EXIT_UNGROUPABLE: i32 = 4;
+
+/// A plugin that cannot share a group process, with the reason the group process reported.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ungroupable(pub String);
+
+impl std::fmt::Display for Ungroupable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Ungroupable {}
+
+/// Stops a starting plugin and releases what its launch registered.
+pub(crate) trait LaunchControl: Send + Sync {
+    fn kill(&self) -> BoxFuture<'_, ()>;
+    fn forget(&self);
+}
+
+struct SidecarControl<'a> {
+    sidecar: &'a Sidecar,
+    proc_id: &'a str,
+}
+
+impl LaunchControl for SidecarControl<'_> {
+    fn kill(&self) -> BoxFuture<'_, ()> {
+        Box::pin(self.sidecar.kill(self.proc_id))
+    }
+
+    fn forget(&self) {
+        self.sidecar.forget(self.proc_id);
+    }
+}
+
+/// Binds the plugin socket of `proc_id` in `run_dir`.
+pub(crate) fn bind_plugin_socket(run_dir: &std::path::Path, proc_id: &str) -> Result<(UnixListener, PathBuf)> {
+    std::fs::create_dir_all(run_dir)?;
+    let sock = run_dir.join(format!("{proc_id}.sock"));
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(&sock)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666));
+    }
+    Ok((listener, sock))
+}
+
+fn exit_error(code: i32, last_log: Option<String>, last_err_log: Option<String>) -> anyhow::Error {
+    if code == EXIT_LOAD_FAILED {
+        let msg = last_err_log.unwrap_or_else(|| format!("插件加载失败 (code {code})"));
+        return anyhow::Error::new(LoadError(msg));
+    }
+    if code == EXIT_UNGROUPABLE {
+        let msg = last_log.unwrap_or_else(|| "插件需要单独运行".into());
+        return anyhow::Error::new(Ungroupable(msg));
+    }
+    match last_err_log {
+        Some(l) => anyhow!("插件在 hello 之前退出 (code {code}): {l}"),
+        None => anyhow!("插件在 hello 之前退出 (code {code})"),
+    }
+}
+
 /// Plugin load failure: an `error` op before `hello`, or exit code `EXIT_LOAD_FAILED`.
 /// Holds the reported message or the last error level log line.
 #[derive(Debug, Clone, PartialEq)]
@@ -328,16 +394,8 @@ pub async fn launch(
     out: mpsc::Sender<OutMsg>,
     tenant: Option<(&Cgroups, &str)>,
 ) -> Result<(Arc<PluginProc>, oneshot::Receiver<i32>)> {
-    std::fs::create_dir_all(&sidecar.run_dir)?;
-    let sock = sidecar.run_dir.join(format!("{}.sock", spec.proc_id));
-    let _ = std::fs::remove_file(&sock);
-    let listener = UnixListener::bind(&sock)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666));
-    }
-    let mut exit_rx = sidecar.watch_exit(&spec.proc_id);
+    let (listener, sock) = bind_plugin_socket(&sidecar.run_dir, &spec.proc_id)?;
+    let exit_rx = sidecar.watch_exit(&spec.proc_id);
     let req = json!({
         "op": "spawn",
         "proc_id": spec.proc_id,
@@ -351,28 +409,57 @@ pub async fn launch(
         "share_key": spec.share_key,
         "config_on_socket": true,
     });
-    let cleanup = |e: anyhow::Error| {
-        let _ = std::fs::remove_file(&sock);
-        sidecar.forget(&spec.proc_id);
-        e
+    let control = SidecarControl {
+        sidecar,
+        proc_id: &spec.proc_id,
     };
-    let pid = sidecar.spawn(req).await.map_err(cleanup)?;
+    let pid = match sidecar.spawn(req).await {
+        Ok(pid) => pid,
+        Err(e) => {
+            let _ = std::fs::remove_file(&sock);
+            control.forget();
+            return Err(e);
+        }
+    };
     if let Some((cgroups, user_id)) = tenant {
         if let Err(e) = cgroups.add_pid(user_id, pid) {
             sidecar.kill(&spec.proc_id).await;
-            return Err(cleanup(anyhow!("无法将插件进程加入内存配额组: {e}")));
+            let _ = std::fs::remove_file(&sock);
+            control.forget();
+            return Err(anyhow!("无法将插件进程加入内存配额组: {e}"));
         }
     }
+    connect(listener, sock, pid, &spec, out, exit_rx, tenant.is_some(), &control).await
+}
+
+/// Accepts the plugin connection, sends the config line and waits for `hello`. `memory_byte`
+/// sends the byte that confirms the memory limit first. On failure the plugin is stopped through
+/// `control` and the error downcasts to `LoadError` or `Ungroupable` when the exit code says so.
+pub(crate) async fn connect(
+    listener: UnixListener,
+    sock: PathBuf,
+    pid: u32,
+    spec: &LaunchSpec,
+    out: mpsc::Sender<OutMsg>,
+    mut exit_rx: oneshot::Receiver<i32>,
+    memory_byte: bool,
+    control: &dyn LaunchControl,
+) -> Result<(Arc<PluginProc>, oneshot::Receiver<i32>)> {
+    let cleanup = |e: anyhow::Error| {
+        let _ = std::fs::remove_file(&sock);
+        control.forget();
+        e
+    };
     let mut stream = tokio::select! {
         r = tokio::time::timeout(Duration::from_secs(60), listener.accept()) => match r {
             Ok(Ok((s, _))) => s,
-            Ok(Err(e)) => { sidecar.kill(&spec.proc_id).await; return Err(cleanup(e.into())) }
-            Err(_) => { sidecar.kill(&spec.proc_id).await; return Err(cleanup(anyhow!("插件进程未连接"))) }
+            Ok(Err(e)) => { control.kill().await; return Err(cleanup(e.into())) }
+            Err(_) => { control.kill().await; return Err(cleanup(anyhow!("插件进程未连接"))) }
         },
         code = &mut exit_rx => {
             let code = code.unwrap_or(-1);
-            if code == EXIT_LOAD_FAILED {
-                return Err(cleanup(anyhow::Error::new(LoadError(format!("插件加载失败 (code {code})")))));
+            if code == EXIT_LOAD_FAILED || code == EXIT_UNGROUPABLE {
+                return Err(cleanup(exit_error(code, None, None)));
             }
             return Err(cleanup(anyhow!("插件进程启动后立即退出 (code {code})")));
         }
@@ -382,13 +469,13 @@ pub async fn launch(
     // The config goes over this socket, so it never passes through the fork server or a template
     // process that later forks plugin processes of other tenants.
     let mut first = Vec::new();
-    if tenant.is_some() {
+    if memory_byte {
         first.push(0x01);
     }
     first.extend_from_slice(json!({"op": "config", "config": spec.config}).to_string().as_bytes());
     first.push(b'\n');
     if let Err(e) = stream.write_all(&first).await {
-        sidecar.kill(&spec.proc_id).await;
+        control.kill().await;
         return Err(cleanup(e.into()));
     }
 
@@ -400,6 +487,7 @@ pub async fn launch(
     let mut drain_deadline = hello_deadline;
     let mut exited: Option<i32> = None;
     let mut last_err_log: Option<String> = None;
+    let mut last_log: Option<String> = None;
     let phase = loop {
         let deadline = if exited.is_some() {
             drain_deadline
@@ -436,6 +524,7 @@ pub async fn launch(
                         if is_error_level(level) {
                             last_err_log = Some(message.clone());
                         }
+                        last_log = Some(message.clone());
                     }
                     let _ = out
                         .send(OutMsg {
@@ -457,27 +546,19 @@ pub async fn launch(
                 None => match tokio::time::timeout(Duration::from_secs(3), &mut exit_rx).await {
                     Ok(c) => c.unwrap_or(-1),
                     Err(_) => {
-                        sidecar.kill(&spec.proc_id).await;
+                        control.kill().await;
                         -1
                     }
                 },
             };
-            if code == EXIT_LOAD_FAILED {
-                let msg = last_err_log.unwrap_or_else(|| format!("插件加载失败 (code {code})"));
-                return Err(cleanup(anyhow::Error::new(LoadError(msg))));
-            }
-            let msg = match last_err_log {
-                Some(l) => format!("插件在 hello 之前退出 (code {code}): {l}"),
-                None => format!("插件在 hello 之前退出 (code {code})"),
-            };
-            return Err(cleanup(anyhow!(msg)));
+            return Err(cleanup(exit_error(code, last_log, last_err_log)));
         }
         PreHello::Error(msg) => {
-            sidecar.kill(&spec.proc_id).await;
+            control.kill().await;
             return Err(cleanup(anyhow::Error::new(LoadError(msg))));
         }
         PreHello::Timeout => {
-            sidecar.kill(&spec.proc_id).await;
+            control.kill().await;
             return Err(cleanup(anyhow!("等待插件 hello 超时")));
         }
     };

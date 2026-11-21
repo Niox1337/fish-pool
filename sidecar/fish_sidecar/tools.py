@@ -1,7 +1,9 @@
 """Function tools registered in AstrBot's tool manager, as seen by the node.
 
 A plugin process runs a single plugin, so every active function tool in
-``llm_tools`` belongs to it. Sub agent handoff tools are not exposed.
+``llm_tools`` belongs to it. A group process runs several plugins and passes the
+plugin's module prefix to keep only that plugin's tools. Sub agent handoff tools
+are not exposed.
 """
 
 from __future__ import annotations
@@ -16,25 +18,36 @@ from astrbot.core.provider.register import llm_tools
 TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def plugin_tools() -> list[FunctionTool]:
+def owned(tool: FunctionTool, prefix: str | None) -> bool:
+    """True when ``prefix`` is None or the tool's handler module is ``prefix`` or inside it."""
+    if prefix is None:
+        return True
+    path = getattr(tool, "handler_module_path", None) or ""
+    return path == prefix or path.startswith(prefix + ".")
+
+
+def plugin_tools(prefix: str | None = None) -> list[FunctionTool]:
     """Active function tools, the last registration of each name winning."""
     out: dict[str, FunctionTool] = {}
     for tool in llm_tools.func_list:
-        if isinstance(tool, HandoffTool) or not getattr(tool, "active", True):
+        if isinstance(tool, HandoffTool) or not getattr(tool, "active", True) or not owned(tool, prefix):
             continue
         if isinstance(tool.name, str) and TOOL_NAME.match(tool.name):
             out[tool.name] = tool
     return list(out.values())
 
 
-def inactive_tools() -> list[str]:
+def inactive_tools(prefix: str | None = None) -> list[str]:
     """Names of registered tools the node cannot call."""
-    exposed = {t.name for t in plugin_tools()}
-    return [str(getattr(t, "name", "?")) for t in llm_tools.func_list if getattr(t, "name", None) not in exposed]
+    exposed = {t.name for t in plugin_tools(prefix)}
+    return [
+        str(getattr(t, "name", "?")) for t in llm_tools.func_list
+        if owned(t, prefix) and getattr(t, "name", None) not in exposed
+    ]
 
 
-def find_tool(name: str) -> FunctionTool | None:
-    return next((t for t in plugin_tools() if t.name == name), None)
+def find_tool(name: str, prefix: str | None = None) -> FunctionTool | None:
+    return next((t for t in plugin_tools(prefix) if t.name == name), None)
 
 
 def tool_schema(tool: FunctionTool) -> dict[str, Any]:

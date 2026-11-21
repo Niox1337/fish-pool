@@ -738,3 +738,101 @@ def test_import_watch_recognizes_clock_readings_and_pid(tmp_path):
     other.pid_read = True
     other.scan_values([pid_only])
     assert "模板进程号" in other.reasons[0]
+
+
+def handler_ids(proc: PluginProc) -> set[str]:
+    return {h["id"] for h in proc.hello["plugin"]["handlers"]}
+
+
+def test_group_runs_plugins_with_separate_state(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            group = await node.group()
+            cmd = await group.load("cmd_plugin", config={"echo_prefix": "A"})
+            conf_dir = os.path.join(node.tmp, "conf", "data")
+            conf = await group.load("conf_plugin", config={"times": 9}, data_dir=conf_dir)
+            spin = await group.load("spin_plugin")
+            assert cmd.hello["plugin"]["name"] == "cmd_plugin"
+            assert all(".cmd_plugin." in i or i == "tool:echo_tool" for i in handler_ids(cmd)), handler_ids(cmd)
+            assert all(".conf_plugin." in i for i in handler_ids(conf)), handler_ids(conf)
+            assert conf.hello["plugin"]["wake_commands"] is None
+
+            r = await cmd.event("echo hi")
+            assert [chain_text(s) for s in r["sends"]] == ["A:hi"]
+            r = await conf.event("echo hi")
+            assert not r["matched"]
+            r = await conf.event("conf")
+            assert [chain_text(s) for s in r["sends"]] == ["hello|9|False|7~"]
+            r = await conf.event("kv a")
+            assert chain_text(r["sends"][0]) == "none->a|conf_plugin|True~"
+            assert os.path.exists(os.path.join(conf_dir, "data_v4.db"))
+            assert os.path.isdir(os.path.join(conf_dir, "plugin_data", "conf_plugin"))
+            assert os.path.exists(os.path.join(conf_dir, "config", "conf_plugin_config.json"))
+
+            await cmd.event("whoami")
+            await cmd.wait_log("whoami answered")
+            await spin.event("say x")
+            await spin.wait_log("printed x")
+            assert not any("whoami" in m["message"] for m in conf.logs + spin.logs)
+
+            await conf.write({"op": "shutdown"})
+            assert (await group.exited(conf.proc_id))["code"] == 0
+            again = await group.load("conf_plugin", data_dir=conf_dir)
+            r = await again.event("kv b")
+            assert chain_text(r["sends"][0]) == "a->b|conf_plugin|True~"
+            fresh_dir = os.path.join(node.tmp, "fresh", "data")
+            await again.write({"op": "shutdown"})
+            await group.exited(again.proc_id)
+            fresh = await group.load("conf_plugin", data_dir=fresh_dir)
+            r = await fresh.event("kv c")
+            assert chain_text(r["sends"][0]) == "none->c|conf_plugin|True~"
+            r = await cmd.event("echo still")
+            assert [chain_text(s) for s in r["sends"]] == ["A:still"]
+
+            await group.write({"op": "unload", "proc_id": cmd.proc_id})
+            assert (await group.exited(cmd.proc_id))["code"] == 0
+            await group.write({"op": "exit"})
+            done = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == group.proc_id)
+            assert done["code"] == 0
+
+    run(scenario())
+
+
+def test_group_sends_unsuitable_plugins_back(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            group = await node.group()
+            await group.load("relimport_plugin")
+            for plugin, needle in [("bg_plugin", "后台任务"), ("thread_plugin", "线程"), ("cwd_plugin", "相对路径"), ("twin_plugin", "lib")]:
+                proc_id, lines, _ = await group.load_raw(plugin)
+                exited = await group.exited(proc_id)
+                assert exited["code"] == 4 and exited["drain"] is False, (plugin, exited)
+                logs = []
+                try:
+                    while True:
+                        logs.append(await lines.next(timeout=2))
+                except (EOFError, TimeoutError):
+                    pass
+                assert not any(m.get("op") == "hello" for m in logs), (plugin, logs)
+                assert any(needle in m.get("message", "") for m in logs), (plugin, logs)
+
+    run(scenario())
+
+
+def test_group_demotes_a_plugin_that_blocks_the_loop(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            group = await node.group()
+            spin = await group.load("spin_plugin")
+            cmd = await group.load("cmd_plugin")
+            r = await spin.event("spin 6")
+            assert [chain_text(s) for s in r["sends"]] == ["spun"]
+            exited = await group.exited(spin.proc_id)
+            assert exited["code"] == 4 and exited["drain"] is False, exited
+            await spin.wait_log("阻塞事件循环")
+            r = await cmd.event("echo ok")
+            assert [chain_text(s) for s in r["sends"]] == ["echo:ok"]
+            r = await cmd.event("spin 1")
+            assert not r["matched"]
+
+    run(scenario())

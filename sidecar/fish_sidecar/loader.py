@@ -27,7 +27,7 @@ from astrbot.core.star.star import StarMetadata, star_map, star_registry
 from astrbot.core.star.star_handler import star_handlers_registry
 from astrbot.core.star.star_tools import StarTools
 
-from fish_sidecar import adapter, astrbot_boot
+from fish_sidecar import adapter, astrbot_boot, runtime
 
 log = logging.getLogger("astrbot")
 
@@ -175,7 +175,7 @@ def plugin_config(plugin_dir: Path, plugin_name: str, values: dict | None, requi
     schema = read_schema(plugin_dir)
     if schema is None and not required:
         return None
-    path = Path.cwd() / "config" / f"{plugin_name}_config.json"
+    path = runtime.data_dir() / "config" / f"{plugin_name}_config.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(values or {}, ensure_ascii=False, indent=2), "utf-8")
     return _open_config(path, schema, values)

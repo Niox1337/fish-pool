@@ -7,6 +7,7 @@ The child process registers a runtime object here. The AstrBot adapters in
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -32,6 +33,12 @@ class Runtime(Protocol):
 
 
 _runtime: Runtime | None = None
+# Set inside a group process, where each plugin runs in its own context.
+slot: ContextVar[Runtime | None] = ContextVar("fish_slot", default=None)
+
+
+def current() -> Runtime | None:
+    return slot.get() or _runtime
 
 
 def set_runtime(runtime: Runtime | None) -> None:
@@ -40,23 +47,26 @@ def set_runtime(runtime: Runtime | None) -> None:
 
 
 def get_runtime() -> Runtime:
-    if _runtime is None:
+    rt = current()
+    if rt is None:
         raise RuntimeError("the plugin process is not connected to a fish node")
-    return _runtime
+    return rt
 
 
 def has_runtime() -> bool:
-    return _runtime is not None
+    return current() is not None
 
 
 def data_dir() -> Path:
     """The writable data directory of the current plugin process."""
-    if _runtime is not None:
-        return Path(_runtime.data_dir)
+    rt = current()
+    if rt is not None:
+        return Path(rt.data_dir)
     return Path(os.environ.get("FISH_PLUGIN_DATA_DIR") or Path.cwd()).resolve()
 
 
 def plugin_name() -> str:
-    if _runtime is not None:
-        return _runtime.plugin_name
+    rt = current()
+    if rt is not None:
+        return rt.plugin_name
     return os.environ.get("FISH_PLUGIN_NAME", "")

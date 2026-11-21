@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::events::Events;
 use crate::model::DesiredBot;
 use crate::plugin::install::{self, Installer};
-use crate::plugin::{Sidecar, SidecarCommand};
+use crate::plugin::{Groups, Sidecar, SidecarCommand};
 use crate::qr::QrTasks;
 use crate::sandbox::{self, Cgroups};
 use crate::sign::SignedClient;
@@ -72,10 +72,12 @@ impl Node {
         let cgroups = Cgroups::init(&cfg);
         let sidecar = Sidecar::new(cmd, cfg.run_dir());
         sidecar.set_template_cgroup(cgroups.as_ref().and_then(|c| c.templates_group(TEMPLATE_MEMORY_MB)));
+        let sidecar = Arc::new(sidecar);
         let shared = Arc::new(Shared {
             db: Arc::new(NodeDb::open(&cfg.data_dir.join("node.db"))?),
             conv: Arc::new(ConvDb::open(&cfg.data_dir.join("conversations.db"))?),
-            sidecar: Arc::new(sidecar),
+            groups: Arc::new(Groups::new(sidecar.clone())),
+            sidecar,
             events,
             cgroups,
             installer: Installer {

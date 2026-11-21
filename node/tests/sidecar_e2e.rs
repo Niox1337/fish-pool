@@ -171,6 +171,7 @@ fn node_config(dir: &Path) -> Config {
         plugin_uid: None,
         plugin_gid: None,
         plugin_idle_sleep: None,
+        plugin_groups: false,
     }
 }
 
@@ -372,6 +373,66 @@ async fn command_only_plugin_sleeps_during_other_traffic_and_wakes_for_alias() {
     wait_status(&node, "cold", &["sleeping"], 30).await;
     node.get("b1").unwrap().reload_plugin("cold").await.unwrap();
     wait_status(&node, "cold", &["running"], 30).await;
+
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn light_plugins_share_a_group_process_and_others_run_alone() {
+    let Some(python) = sidecar_python() else { return };
+    let dir = tempfile::Builder::new().prefix("fg").tempdir_in("/tmp").unwrap();
+    let mut cfg = node_config(dir.path());
+    cfg.dev_services = true;
+    cfg.plugin_groups = true;
+    cfg.plugin_idle_sleep = Some(Duration::from_secs(3));
+    let cmd = json!({"id": "pc", "name": "cmd_plugin", "repo_url": "https://github.com/x/cmd", "version": "1", "enabled": true, "config": {}});
+    let conf = json!({"id": "pf", "name": "conf_plugin", "repo_url": "https://github.com/x/conf", "version": "1", "enabled": true, "config": {}});
+    let bg = json!({"id": "pg", "name": "bg_plugin", "repo_url": "https://github.com/x/bg", "version": "1", "enabled": true, "config": {}});
+    preinstall(&cfg, &cmd);
+    preinstall(&cfg, &conf);
+    preinstall(&cfg, &bg);
+    let node = Node::new(cfg, Some(command(&python))).unwrap();
+    let desired = serde_json::from_value(json!({
+        "bot_id": "b1", "user_id": "u1", "name": "小鱼", "running": true,
+        "platforms": [], "plugins": [cmd, conf, bg]
+    }))
+    .unwrap();
+    node.put(desired).await.unwrap();
+
+    for id in ["pc", "pf", "pg"] {
+        wait_status(&node, id, &["running"], 30).await;
+    }
+    let bot = node.get("b1").unwrap();
+    let pids: Vec<u32> = {
+        let procs = bot.procs.read().unwrap();
+        ["pc", "pf", "pg"].iter().map(|id| procs[*id].pid).collect()
+    };
+    assert_eq!(pids[0], pids[1]);
+    assert_ne!(pids[0], pids[2]);
+    assert!(plugin_status(&node, "pc")["status_detail"].as_str().unwrap().contains("共用"));
+    assert_eq!(plugin_status(&node, "pg")["status_detail"], "");
+    let (items, _) = bot.logs.read_after(None, 1000);
+    assert!(
+        items
+            .iter()
+            .any(|i| i.source == "plugin:bg_plugin" && i.message.contains("改为单独运行")),
+        "no fallback log"
+    );
+
+    let reply = say(&node, "echo hi", 1).await;
+    assert!(reply.contains("echo:hi"), "{reply}");
+    let reply = say(&node, "kv a", 2).await;
+    assert!(reply.contains("none->a|conf_plugin|True"), "{reply}");
+
+    // the group process ends when its plugins sleep, and a message starts a new one for them
+    wait_status(&node, "pc", &["sleeping"], 20).await;
+    wait_status(&node, "pf", &["sleeping"], 20).await;
+    let reply = say(&node, "kv b", 3).await;
+    assert!(reply.contains("a->b|conf_plugin|True"), "{reply}");
+    let procs = bot.procs.read().unwrap();
+    assert_eq!(procs["pc"].pid, procs["pf"].pid);
+    assert_ne!(procs["pc"].pid, pids[0]);
+    drop(procs);
 
     node.shutdown().await;
 }

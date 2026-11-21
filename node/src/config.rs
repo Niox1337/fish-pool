@@ -28,6 +28,8 @@ pub struct Config {
     /// A plugin process stops after its bot receives no message for this long and starts again
     /// on the next message. None disables it.
     pub plugin_idle_sleep: Option<Duration>,
+    /// Runs light plugins of a bot in one shared process. Set by `FISH_PLUGIN_GROUPS`.
+    pub plugin_groups: bool,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -57,6 +59,10 @@ fn idle_sleep(value: Option<&str>) -> Option<Duration> {
 
 fn dev_services_enabled(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true"))
+}
+
+fn flag(value: Option<&str>) -> bool {
+    matches!(value.map(str::to_ascii_lowercase).as_deref(), Some("1" | "true" | "yes" | "on"))
 }
 
 impl Config {
@@ -94,6 +100,7 @@ impl Config {
                 parse_id("FISH_PLUGIN_GID").or(parse_id("FISH_PLUGIN_UID"))
             },
             plugin_idle_sleep: idle_sleep(env("FISH_PLUGIN_IDLE_SECS").as_deref()),
+            plugin_groups: flag(env("FISH_PLUGIN_GROUPS").as_deref()),
         })
     }
 
@@ -156,6 +163,13 @@ mod tests {
         assert!(!dev_services_enabled(Some("false")));
         assert!(dev_services_enabled(Some("1")));
         assert!(dev_services_enabled(Some("true")));
+    }
+
+    #[test]
+    fn flag_parsing() {
+        assert!(!flag(None));
+        assert!(flag(Some("1")) && flag(Some("TRUE")) && flag(Some("on")));
+        assert!(!flag(Some("0")) && !flag(Some("off")));
     }
 
     #[test]

@@ -100,33 +100,48 @@ def handler_descriptor(md: StarHandlerMetadata) -> dict[str, Any] | None:
 
 
 class Dispatcher:
-    """Runs the plugin side of the message pipeline. ``runtime`` provides ``write`` and ``llm``."""
+    """Runs the plugin side of the message pipeline. ``runtime`` provides ``write`` and ``llm``.
 
-    def __init__(self, runtime: Any, instance: Any, plugin_name: str) -> None:
+    ``module_prefix`` limits handlers and tools to one plugin package when the
+    process holds several plugins. None uses every registered handler.
+    """
+
+    def __init__(self, runtime: Any, instance: Any, plugin_name: str, module_prefix: str | None = None) -> None:
         self.runtime = runtime
         self.instance = instance
         self.plugin_name = plugin_name
+        self.module_prefix = module_prefix
         self.events: OrderedDict[str, AstrMessageEvent] = OrderedDict()
         self.keep_events_for_model = False
         manager = getattr(getattr(instance, "context", None), "platform_manager", None)
         self.platforms = manager if isinstance(manager, adapter.FishPlatformManager) else None
         self.max_events = 512
 
+    def owns(self, md: StarHandlerMetadata) -> bool:
+        prefix = self.module_prefix
+        if prefix is None:
+            return True
+        path = md.handler_module_path or ""
+        return path == prefix or path.startswith(prefix + ".")
+
+    def registry(self) -> list[StarHandlerMetadata]:
+        return [md for md in star_handlers_registry if self.owns(md)]
+
     def handlers(self, event_type: EventType) -> list[StarHandlerMetadata]:
-        return star_handlers_registry.get_handlers_by_event_type(event_type)
+        return [md for md in star_handlers_registry.get_handlers_by_event_type(event_type) if self.owns(md)]
 
     def descriptors(self) -> list[dict[str, Any]]:
-        out = [d for d in (handler_descriptor(md) for md in star_handlers_registry) if d is not None]
-        for tool in tools.plugin_tools():
+        out = [d for d in (handler_descriptor(md) for md in self.registry()) if d is not None]
+        for tool in tools.plugin_tools(self.module_prefix):
             out.append({"id": f"tool:{tool.name}", "priority": 0, "kind": "llm_tool", "pattern": tool.name, "tool": tools.tool_schema(tool)})
         return out
 
     def wake_commands(self) -> list[str] | None:
         """Returns names the node can safely match before waking a command-only plugin."""
-        if tools.plugin_tools():
+        if tools.plugin_tools(self.module_prefix):
             return None
         commands: set[str] = set()
-        for md in star_handlers_registry:
+        for md in self.registry():
             filters = md.event_filters
             if md.event_type != EventType.AdapterMessageEvent or len(filters) != 1:
                 return None
@@ -142,10 +157,10 @@ class Dispatcher:
     def inert_handlers(self) -> list[str]:
         out = [
             f"{INERT_EVENT_TYPES[md.event_type]}:{md.handler_name}"
-            for md in star_handlers_registry
+            for md in self.registry()
             if md.event_type in INERT_EVENT_TYPES
         ]
-        out += [f"llm_tool:{name}" for name in tools.inactive_tools()]
+        out += [f"llm_tool:{name}" for name in tools.inactive_tools(self.module_prefix)]
         return out
 
     def remember(self, event_id: str, event: AstrMessageEvent) -> None:
@@ -359,7 +374,7 @@ class Dispatcher:
         Returned and yielded strings form the tool result. Yielded or returned message
         results are sent to the user directly, as in AstrBot.
         """
-        tool = tools.find_tool(name)
+        tool = tools.find_tool(name, self.module_prefix)
         if tool is None:
             return {"error": f"没有名为 {name} 的工具"}
         event = self.events.get(event_id)

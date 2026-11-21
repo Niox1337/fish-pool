@@ -24,6 +24,7 @@ log = logging.getLogger("astrbot")
 EXIT_OK = 0
 EXIT_LOAD_FAILED = 2
 EXIT_CONNECT_FAILED = 3
+EXIT_UNGROUPABLE = 4
 LLM_TIMEOUT_S = 180
 TERMINATE_TIMEOUT_S = 5
 
@@ -55,9 +56,13 @@ class _LineWriter(io.TextIOBase):
             self.runtime.write_threadsafe({"op": "log", "level": self.level, "message": line})
 
 
+class Ungroupable(Exception):
+    """The plugin cannot share a process with other plugins. The message says why."""
+
+
 def _idle_thread(thread: threading.Thread) -> bool:
-    """True for threads that exist while the plugin is idle: asyncio executor workers and AstrBot's SQLite connection workers."""
-    if thread.name.startswith("asyncio"):
+    """True for threads that exist while the plugin is idle: asyncio executor workers, AstrBot's SQLite connection workers and fish's own threads."""
+    if thread.name.startswith("asyncio") or getattr(thread, "fish_internal", False):
         return True
     target = getattr(thread, "_target", None)
     return (getattr(target, "__module__", None) or "").startswith("aiosqlite")
@@ -178,6 +183,33 @@ class ChildRuntime:
                 await asyncio.sleep(0.1)
         raise ConnectionError(f"cannot connect to {path}: {last}")
 
+    def attach(self) -> None:
+        """Makes this runtime the target of adapter calls, logs and SIGTERM."""
+        runtime.set_runtime(self)
+        self.install_logging()
+        self.loop.add_signal_handler(signal.SIGTERM, self.stopping.set)
+
+    def import_plugin(self) -> tuple[str, Any]:
+        """Imports the plugin package and returns its name and ``main`` module."""
+        preimported = None
+        if self.spec.get("preimported"):
+            from fish_sidecar import template
+
+            preimported = template.preimported
+            if preimported is None:
+                raise RuntimeError("template did not import the plugin")
+        return loader.import_main(
+            self.plugin_dir,
+            self.spec.get("venv_site_packages"),
+            self.data_dir,
+            self.plugin_name,
+            preimported,
+        )
+
+    def module_prefix(self, package: str) -> str | None:
+        """Package that owns the handlers this runtime serves. None serves every handler."""
+        return None
+
     def install_logging(self) -> None:
         """Sends AstrBot, plugin and standard library log records, and stdout and stderr lines, to the node."""
         debug = bool(self.spec.get("debug"))
@@ -191,21 +223,8 @@ class ChildRuntime:
         sys.stderr = _LineWriter(self, "warning")
 
     async def load(self) -> None:
-        preimported = None
-        if self.spec.get("preimported"):
-            from fish_sidecar import template
-
-            preimported = template.preimported
-            if preimported is None:
-                raise RuntimeError("template did not import the plugin")
         # The import runs on the event loop thread, so module level code can create tasks and schedulers.
-        package, main = loader.import_main(
-            self.plugin_dir,
-            self.spec.get("venv_site_packages"),
-            self.data_dir,
-            self.plugin_name,
-            preimported,
-        )
+        package, main = self.import_plugin()
         moved = await astrbot_boot.migrate_legacy_kv(str(self.data_dir))
         if moved:
             self.write({"op": "log", "level": "info", "message": f"已把 {moved} 条插件数据从 {astrbot_boot.LEGACY_KV} 迁入 AstrBot 数据库"})
@@ -214,7 +233,7 @@ class ChildRuntime:
         md.root_dir_name = self.plugin_dir.name
         self.plugin = await loader.instantiate(md, self.plugin_dir, self.plugin_name, self.spec.get("config") or {})
         self.plugin.package = package
-        self.dispatcher = Dispatcher(self, self.plugin.instance, self.plugin.name)
+        self.dispatcher = Dispatcher(self, self.plugin.instance, self.plugin.name, self.module_prefix(package))
         await self.plugin.context.kb_manager.initialize()
         await self.plugin.instance.initialize()
         await self.plugin.context.cron_manager.start(self.plugin.context)
@@ -281,11 +300,26 @@ class ChildRuntime:
         elif op == "shutdown":
             self.stopping.set()
 
+    def owns_context(self, ctx: Any) -> bool:
+        """True when work running in the contextvars context ``ctx`` belongs to this plugin."""
+        return True
+
+    def own_fds(self) -> set[int]:
+        """Descriptors of this runtime itself, which do not count as plugin connections."""
+        fds = {self.loop._ssock.fileno()}  # type: ignore[attr-defined]
+        sock = self.writer.get_extra_info("socket") if self.writer is not None else None
+        if sock is not None:
+            fds.add(sock.fileno())
+        return fds
+
     def busy_reasons(self) -> list[str]:
         """Describes work that would be lost if the process stopped now. Empty when the plugin is idle."""
         reasons: list[str] = []
         own = {self.main_task, self.reader_task, asyncio.current_task()}
-        tasks = [t for t in asyncio.all_tasks(self.loop) if t not in own and not t.done()]
+        tasks = [
+            t for t in asyncio.all_tasks(self.loop)
+            if t not in own and not t.done() and self.owns_context(t.get_context())
+        ]
         if tasks:
             reasons.append(f"{len(tasks)} 个后台任务")
         if self.pending:
@@ -294,13 +328,13 @@ class ChildRuntime:
             if self.dispatcher.wake_commands() != self.wake_commands:
                 reasons.append("指令唤醒条件已变化")
         try:
-            timers = [h for h in self.loop._scheduled if not h.cancelled()]  # type: ignore[attr-defined]
+            timers = [
+                h for h in self.loop._scheduled  # type: ignore[attr-defined]
+                if not h.cancelled() and self.owns_context(getattr(h, "_context", None))
+            ]
             if timers:
                 reasons.append(f"{len(timers)} 个定时器")
-            own_fds = {self.loop._ssock.fileno()}  # type: ignore[attr-defined]
-            sock = self.writer.get_extra_info("socket") if self.writer is not None else None
-            if sock is not None:
-                own_fds.add(sock.fileno())
+            own_fds = self.own_fds()
             fds = [k.fd for k in self.loop._selector.get_map().values() if k.fd not in own_fds]  # type: ignore[attr-defined]
             if fds:
                 reasons.append(f"{len(fds)} 个打开的网络连接")
@@ -350,8 +384,7 @@ class ChildRuntime:
         except (ConnectionError, TimeoutError, ValueError, asyncio.IncompleteReadError) as e:
             print(f"fish child {self.proc_id}: {e}", file=sys.__stderr__)
             return EXIT_CONNECT_FAILED
-        runtime.set_runtime(self)
-        self.install_logging()
+        self.attach()
         if self.spec.get("preimported"):
             from fish_sidecar import template
 
@@ -360,11 +393,15 @@ class ChildRuntime:
         note = self.spec.get("template_note")
         if note:
             self.write({"op": "log", "level": "info", "message": f"插件单独加载，未与其他机器人共享导入: {note}"})
-        self.loop.add_signal_handler(signal.SIGTERM, self.stopping.set)
         self.main_task = asyncio.current_task()
         reader_task = self.reader_task = self.loop.create_task(self.read_loop())
         try:
             await self.load()
+        except Ungroupable as e:
+            self.write({"op": "log", "level": "info", "message": f"插件改为单独运行: {e}"})
+            await self._drain()
+            reader_task.cancel()
+            return EXIT_UNGROUPABLE
         except BaseException as e:
             self.write({"op": "log", "level": "error", "message": f"plugin load failed: {describe_error(e)}"})
             self.write({"op": "log", "level": "debug", "message": traceback.format_exc(limit=12)})

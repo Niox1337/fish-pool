@@ -168,15 +168,33 @@ impl Usage {
                 cpu_percent: 0.0,
             },
         ];
-        for spec in plugins {
+        // Plugins in one group process share its pid. The process is measured once and split evenly.
+        let pids: Vec<u32> = {
+            let procs = bot.procs.read().unwrap();
+            plugins.iter().map(|s| procs.get(&s.id).map(|p| p.pid).unwrap_or(0)).collect()
+        };
+        let mut sharers: HashMap<u32, u32> = HashMap::new();
+        for pid in pids.iter().filter(|p| **p != 0) {
+            *sharers.entry(*pid).or_insert(0) += 1;
+        }
+        let mut measured: HashMap<u32, (u64, f64)> = HashMap::new();
+        for (spec, pid) in plugins.into_iter().zip(pids) {
             let dir = bot.shared.cfg.plugin_dir(&user, &bot.id, &spec.name);
             let shared = bot.shared.clone();
             // Each bot is charged the full size of the shared install it uses, as if it had its own copy.
             let storage = tokio::task::spawn_blocking(move || dir_size(&dir) + shared.installer.shared_size(&dir))
                 .await
                 .unwrap_or(0);
-            let pid = bot.procs.read().unwrap().get(&spec.id).map(|p| p.pid).unwrap_or(0);
-            let (mem, cpu) = self.process(pid).await;
+            let (mem, cpu) = match measured.get(&pid) {
+                Some(v) => *v,
+                None => {
+                    let v = self.process(pid).await;
+                    measured.insert(pid, v);
+                    v
+                }
+            };
+            let n = sharers.get(&pid).copied().unwrap_or(1).max(1);
+            let (mem, cpu) = (mem / n as u64, cpu / n as f64);
             out.push(Source {
                 bot_id: bot.id.clone(),
                 kind: "plugin",
