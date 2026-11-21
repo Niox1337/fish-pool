@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /api/
+Disallow: /login
+Disallow: /register
+Disallow: /reset
+
+Sitemap: https://fish.niox.lol/sitemap.xml

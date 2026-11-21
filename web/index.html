@@ -2,15 +2,26 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="applicable-device" content="pc,mobile" />
+    <meta http-equiv="Cache-Control" content="no-transform" />
+    <meta http-equiv="Cache-Control" content="no-siteapp" />
+    <meta name="renderer" content="webkit" />
+    <meta name="format-detection" content="telephone=no" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#192785" />
-    <meta name="description" content="大肥鱼托管班：注册后一键部署你的 AI 聊天小鱼，扫码接入 QQ 和微信，自带模型 Key，装上 AstrBot 插件，服务器交给我们照看。" />
+    <!--seo:start-->
+    <meta name="description" content="大肥鱼托管班是 QQ 和微信 AI 聊天机器人的托管平台。手机扫码接入，自带大模型 Key，一键安装 AstrBot 插件。" />
     <title>大肥鱼托管班</title>
+    <!--seo:end-->
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      var root = document.getElementById('root')
+      if (root.dataset.route !== location.pathname) root.replaceChildren()
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

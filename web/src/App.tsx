@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import Landing from './pages/landing/Landing'
+import { titleFor } from './seo'
 
 const AuthPage = lazy(() => import('./pages/auth/AuthPage'))
 const ConsoleShell = lazy(() => import('./pages/console/ConsoleShell'))
@@ -19,6 +20,9 @@ const AdminSystem = lazy(() => import('./pages/console/admin/AdminSystem'))
 
 export default function App() {
   const location = useLocation()
+  useEffect(() => {
+    document.title = titleFor(location.pathname)
+  }, [location.pathname])
   return (
     <ErrorBoundary variant="screen" resetKey={location.pathname}>
       <Suspense fallback={<div className="min-h-dvh bg-paper" />}>

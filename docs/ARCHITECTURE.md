@@ -30,6 +30,8 @@ Browser ──HTTPS──> fish.niox.lol  (Worker "fish-console": /api/* handled
                   sidecar fork server ──fork──> one Python process per (bot, plugin)
 ```
 
+The web build prerenders `/` (`index.html`) and `/about` (`about.html`) to static HTML with their titles, descriptions, Open Graph tags and JSON-LD (`web/src/seo.ts`, `web/scripts/prerender.mjs`), and writes `sitemap.xml`. The browser hydrates a prerendered page when its path matches the root's `data-route`. On fallback paths an inline script empties the root first and the app renders from scratch.
+
 The console Worker is the source of truth for users, bots, credentials and plugin lists. The node is an executor that caches the desired state it receives and reports live status and usage. The node persists its cache in SQLite so it can restart without the console.
 
 ## 3. Shared conventions
