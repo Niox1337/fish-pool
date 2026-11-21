@@ -389,7 +389,7 @@ class ForkServer:
         try:
             self.close_inherited()
             os.setsid()
-            gc.unfreeze()
+            # Objects from the preload stay frozen, so full collections in the plugin do not write to their shared pages.
             from fish_sidecar import child
 
             code = child.run(spec)

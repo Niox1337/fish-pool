@@ -1,3 +1,4 @@
+import gc
 import os
 
 from astrbot.api.event import AstrMessageEvent, filter
@@ -13,3 +14,7 @@ class PidPlugin(Star):
     @filter.command("pid")
     async def pid(self, event: AstrMessageEvent):
         yield event.plain_result(f"{OWNER_PID}|{os.getpid()}")
+
+    @filter.command("frozen")
+    async def frozen(self, event: AstrMessageEvent):
+        yield event.plain_result(str(gc.get_freeze_count()))

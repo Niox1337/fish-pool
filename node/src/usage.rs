@@ -51,18 +51,6 @@ struct PluginCpuSample {
     plugins: Vec<PluginCpu>,
 }
 
-/// Sum of all `Pss:` lines of `/proc/<pid>/smaps_rollup`, in bytes.
-pub fn parse_pss(text: &str) -> Option<u64> {
-    let mut total = None;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("Pss:") {
-            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-            total = Some(total.unwrap_or(0) + kb * 1024);
-        }
-    }
-    total
-}
-
 /// `VmRSS` of `/proc/<pid>/status`, in bytes.
 pub fn parse_status_rss(text: &str) -> Option<u64> {
     text.lines()
@@ -99,7 +87,7 @@ pub fn burst_limit(quota: u64, working_set: u64, available: u64, reserve: u64) -
 }
 
 impl Usage {
-    /// Returns `(memory_bytes, cpu_percent)` of a process.
+    /// Returns `(memory_bytes, cpu_percent)` of a process. Memory is private clean plus private dirty from `smaps_rollup`, or `VmRSS` when that file is unreadable.
     pub async fn process(&self, pid: u32) -> (u64, f64) {
         if pid == 0 {
             return (0, 0.0);
@@ -108,7 +96,8 @@ impl Usage {
             let mem = match tokio::fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))
                 .await
                 .ok()
-                .and_then(|t| parse_pss(&t))
+                .and_then(|t| crate::system::parse_rollup(&t))
+                .and_then(|m| m.uss)
             {
                 Some(m) => m,
                 None => tokio::fs::read_to_string(format!("/proc/{pid}/status"))
@@ -264,7 +253,7 @@ impl Usage {
             let mut counts = self.over_count.lock().unwrap();
             for (user, (mem, _, quota)) in &per_user {
                 if node.shared.cgroups.as_ref().is_some_and(|cg| cg.memory_max(user).is_some()) {
-                    // Kernel-limited tenants are handled by `enforce_bursts`. PSS includes a share of pages that the kernel charges to the fork server.
+                    // Kernel-limited tenants are handled by `enforce_bursts`.
                     counts.remove(user);
                     continue;
                 }
@@ -507,9 +496,6 @@ mod tests {
 
     #[test]
     fn proc_parsers() {
-        let rollup = "00400000-7fff [rollup]\nRss:  2048 kB\nPss:  1024 kB\nPss_Anon: 512 kB\nPss_File: 512 kB\n";
-        assert_eq!(parse_pss(rollup), Some(1024 * 1024));
-        assert_eq!(parse_pss("Rss: 1 kB"), None);
         assert_eq!(
             parse_status_rss("Name:\tpython\nVmRSS:\t  3000 kB\n"),
             Some(3000 * 1024)

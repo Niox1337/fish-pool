@@ -641,6 +641,16 @@ def test_import_that_cannot_be_shared_loads_directly(fork_server, run, plugin, c
     run(scenario())
 
 
+def test_direct_plugin_keeps_preloaded_objects_frozen(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            p = await node.spawn("pid_plugin")
+            r = await p.event("frozen")
+            assert int(chain_text(r["sends"][0])) > 0
+
+    run(scenario())
+
+
 @pytest.mark.skipif(not TEMPLATES, reason="templates need Linux")
 def test_template_disabled_by_env(run, monkeypatch):
     monkeypatch.setenv("FISH_SIDECAR_TEMPLATES", "0")
