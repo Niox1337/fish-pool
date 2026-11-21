@@ -45,7 +45,14 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
   const [quotaEdits, setQuotaEdits] = useState<Partial<QuotaForm>>({})
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState<Errors>({})
-  const ids = { days: useFieldId('inv-days'), count: useFieldId('inv-count'), uses: useFieldId('inv-uses'), note: useFieldId('inv-note'), exp: useFieldId('inv-exp'), gw: useFieldId('inv-gw') }
+  const ids = {
+    days: useFieldId('inv-days'),
+    count: useFieldId('inv-count'),
+    uses: useFieldId('inv-uses'),
+    note: useFieldId('inv-note'),
+    exp: useFieldId('inv-exp'),
+    gw: useFieldId('inv-gw'),
+  }
   const quotaForm = defaultQuota ? { ...quotaToForm(defaultQuota), ...quotaEdits } : undefined
   const quotaValid = quotaForm && quotaFields.every((field) => !quotaFieldError(quotaForm[field.key], field))
 
@@ -64,7 +71,15 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
     if (Object.keys(next).length || !quotaForm || !quotaValid) return
     setBusy(true)
     try {
-      const r = await api.adminCreateInvites({ days: d, count: c, max_uses: u, quota: quotaFromForm(quotaForm), note: note.trim() || undefined, expires_at: expires ? endOfDay(expires) : null, gateway_budget: g && Number(g) > 0 ? g : undefined })
+      const r = await api.adminCreateInvites({
+        days: d,
+        count: c,
+        max_uses: u,
+        quota: quotaFromForm(quotaForm),
+        note: note.trim() || undefined,
+        expires_at: expires ? endOfDay(expires) : null,
+        gateway_budget: g && Number(g) > 0 ? g : undefined,
+      })
       qc.invalidateQueries({ queryKey: [...keys.admin, 'invites'] })
       qc.invalidateQueries({ queryKey: [...keys.admin, 'overview'] })
       onCreated(r.items)
@@ -102,7 +117,9 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
                 aria-pressed={days === String(d)}
                 className={cn(
                   'cursor-pointer rounded-full border px-3 py-1 text-[13px] font-semibold tabular-nums transition-colors duration-150',
-                  days === String(d) ? 'border-cobalt bg-cobalt text-white' : 'border-paper-3 bg-white text-ink-2 hover:border-ink-3/50 hover:text-ink',
+                  days === String(d)
+                    ? 'border-cobalt bg-cobalt text-white'
+                    : 'border-paper-3 bg-white text-ink-2 hover:border-ink-3/50 hover:text-ink',
                 )}
               >
                 {d} 天
@@ -113,10 +130,30 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
       </Field>
       <div className="grid grid-cols-2 gap-4">
         <Field label="生成个数" htmlFor={ids.count} error={errors.count}>
-          <Input id={ids.count} type="number" inputMode="numeric" min={1} max={50} value={count} onChange={(e) => setCount(e.target.value)} aria-invalid={!!errors.count} className="tabular-nums" />
+          <Input
+            id={ids.count}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={50}
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+            aria-invalid={!!errors.count}
+            className="tabular-nums"
+          />
         </Field>
         <Field label="每个码可用次数" htmlFor={ids.uses} error={errors.max_uses}>
-          <Input id={ids.uses} type="number" inputMode="numeric" min={1} max={1000} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} aria-invalid={!!errors.max_uses} className="tabular-nums" />
+          <Input
+            id={ids.uses}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={1000}
+            value={maxUses}
+            onChange={(e) => setMaxUses(e.target.value)}
+            aria-invalid={!!errors.max_uses}
+            className="tabular-nums"
+          />
         </Field>
       </div>
       <fieldset className="grid min-w-0 gap-3 border-t border-paper-3 pt-3">
@@ -124,11 +161,26 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
         <p className="text-sm text-ink-3">仅注册时生效。已有账号兑换只续期。</p>
         {quotaForm ? (
           <QuotaInputs form={quotaForm} onChange={(key, value) => setQuotaEdits((prev) => ({ ...prev, [key]: value }))} />
-        ) : <Skeleton className="h-40" />}
+        ) : (
+          <Skeleton className="h-40" />
+        )}
       </fieldset>
-      <Field label="活动额度（可选）" htmlFor={ids.gw} error={errors.gateway} hint="每次兑换都会生成一个带这笔额度的模型 Key，加进对方的模型 Key 并给没有可用 Key 的小鱼用上。">
+      <Field
+        label="活动额度（可选）"
+        htmlFor={ids.gw}
+        error={errors.gateway}
+        hint="每次兑换都会生成一个带这笔额度的模型 Key，加进对方的模型 Key 并给没有可用 Key 的小鱼用上。"
+      >
         <div className="flex items-center gap-2">
-          <Input id={ids.gw} inputMode="decimal" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="0" aria-invalid={!!errors.gateway} className="w-28 tabular-nums" />
+          <Input
+            id={ids.gw}
+            inputMode="decimal"
+            value={gateway}
+            onChange={(e) => setGateway(e.target.value)}
+            placeholder="0"
+            aria-invalid={!!errors.gateway}
+            className="w-28 tabular-nums"
+          />
           <span className="text-sm text-ink-2">元</span>
         </div>
       </Field>
@@ -137,7 +189,14 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
       </Field>
       <Field label="兑换截止日（可选）" htmlFor={ids.exp} hint="已兑换的服务照常有效。">
         <div className="flex flex-wrap items-center gap-2">
-          <Input id={ids.exp} type="date" min={todayInput()} value={expires} onChange={(e) => setExpires(e.target.value)} className="w-44 tabular-nums" />
+          <Input
+            id={ids.exp}
+            type="date"
+            min={todayInput()}
+            value={expires}
+            onChange={(e) => setExpires(e.target.value)}
+            className="w-44 tabular-nums"
+          />
           {expires && (
             <Button size="sm" variant="ghost" onClick={() => setExpires('')}>
               不设截止
@@ -156,7 +215,9 @@ function CreateForm({ defaultQuota, onCreated }: { defaultQuota?: Quota; onCreat
 }
 
 function inviteQuotaLabel(quota: Quota | null) {
-  return quota ? `内存 ${quota.memory_mb} MiB · 存储 ${quota.storage_mb} MiB · 小鱼 ${quota.bots ?? '不限'} · 插件 ${quota.plugins ?? '不限'}` : '注册时使用默认配额'
+  return quota
+    ? `内存 ${quota.memory_mb} MiB · 存储 ${quota.storage_mb} MiB · 小鱼 ${quota.bots ?? '不限'} · 插件 ${quota.plugins ?? '不限'}`
+    : '注册时使用默认配额'
 }
 
 function Created({ items, onClose }: { items: Invite[]; onClose: () => void }) {
@@ -230,7 +291,14 @@ function InviteRow({ inv }: { inv: Invite }) {
   return (
     <li className="px-4 py-3.5 sm:px-5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <code className={cn('font-mono text-[15px] font-semibold tracking-wider text-ink select-all', inv.revoked_at && 'text-ink-3 line-through')}>{inv.code}</code>
+        <code
+          className={cn(
+            'font-mono text-[15px] font-semibold tracking-wider text-ink select-all',
+            inv.revoked_at && 'text-ink-3 line-through',
+          )}
+        >
+          {inv.code}
+        </code>
         <Pill tone={st.tone}>{st.label}</Pill>
         <span className="text-sm text-ink tabular-nums">{inv.days} 天</span>
         <span className="text-sm text-ink-2 tabular-nums" title="已用次数 / 可用次数">
@@ -252,7 +320,9 @@ function InviteRow({ inv }: { inv: Invite }) {
       <p className="mt-1 text-[13px] text-ink-2 tabular-nums">{inviteQuotaLabel(inv.quota)}</p>
       {inv.gateway_budget && <p className="mt-1 text-[13px] text-ink-2 tabular-nums">附带活动额度 {inv.gateway_budget} 元</p>}
       <p className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[13px] text-ink-3 tabular-nums">
-        <span>{inv.created_by_email} 于 {fmtDate(inv.created_at)} 生成</span>
+        <span>
+          {inv.created_by_email} 于 {fmtDate(inv.created_at)} 生成
+        </span>
         <span>{inv.expires_at ? `${fmtDate(inv.expires_at)} 前可兑换` : '不限兑换日期'}</span>
         {inv.revoked_at && <span className="text-bad">{fmtDate(inv.revoked_at)} 撤销</span>}
       </p>
@@ -268,7 +338,11 @@ function InviteRow({ inv }: { inv: Invite }) {
               </span>
               {r.gateway === 'granted' && <span className="text-ok">活动额度已到账</span>}
               {r.gateway === 'pending' && <span className="text-ink-3">活动额度发放中</span>}
-              {r.gateway === 'failed' && <span className="text-bad" title={r.gateway_error ?? undefined}>活动额度发放失败，稍后自动重试</span>}
+              {r.gateway === 'failed' && (
+                <span className="text-bad" title={r.gateway_error ?? undefined}>
+                  活动额度发放失败，稍后自动重试
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -277,11 +351,7 @@ function InviteRow({ inv }: { inv: Invite }) {
         open={open}
         onOpenChange={setOpen}
         title={`撤销 ${inv.code}？`}
-        body={
-          inv.used_count > 0
-            ? '撤销后停止兑换，已兑换的服务照常有效。'
-            : '撤销后此码无法兑换。'
-        }
+        body={inv.used_count > 0 ? '撤销后停止兑换，已兑换的服务照常有效。' : '撤销后此码无法兑换。'}
         confirmLabel="撤销邀请码"
         onConfirm={revoke}
         loading={busy}
@@ -347,7 +417,12 @@ export default function AdminInvites() {
                     : '还没有生成过邀请码。'}
             </p>
           ) : (
-            <ul className={cn('divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream transition-opacity duration-150', list.isFetching && 'opacity-70')}>
+            <ul
+              className={cn(
+                'divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream transition-opacity duration-150',
+                list.isFetching && 'opacity-70',
+              )}
+            >
               {items.map((inv) => (
                 <InviteRow key={inv.code} inv={inv} />
               ))}

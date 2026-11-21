@@ -171,7 +171,9 @@ impl Groups {
     /// Stops waiting for the slot's exit code. The group process exits once no slot is waited for.
     pub fn forget(&self, proc_id: &str) {
         let mut st = self.state.lock().unwrap();
-        let Some(host) = st.slots.get(proc_id).cloned() else { return };
+        let Some(host) = st.slots.get(proc_id).cloned() else {
+            return;
+        };
         host.slots.lock().unwrap().remove(proc_id);
         Self::retire_if_empty(&mut st, &host);
     }
@@ -197,7 +199,9 @@ impl Groups {
     }
 
     fn slot_exited(&self, host: &Arc<Host>, v: &Value) {
-        let Some(proc_id) = v.get("proc_id").and_then(Value::as_str) else { return };
+        let Some(proc_id) = v.get("proc_id").and_then(Value::as_str) else {
+            return;
+        };
         let code = v.get("code").and_then(Value::as_i64).unwrap_or(-1) as i32;
         if v.get("drain").and_then(Value::as_bool).unwrap_or(false) {
             host.draining.store(true, Ordering::Relaxed);
@@ -334,7 +338,9 @@ impl Groups {
         tokio::spawn(async move {
             let read = async {
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+                    let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
                     if v.get("op").and_then(Value::as_str) == Some("slot_exited") {
                         groups.slot_exited(&h, &v);
                     }

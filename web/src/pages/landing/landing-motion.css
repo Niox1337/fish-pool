@@ -17,7 +17,9 @@
   }
 }
 @keyframes lp-twinkle {
-  0%, 70%, 100% {
+  0%,
+  70%,
+  100% {
     scale: 1;
     rotate: 0deg;
   }
@@ -186,9 +188,15 @@
       translate 0.7s var(--ease-out-expo),
       scale 0.7s var(--ease-out-expo);
   }
-  .ls-checks li:nth-child(1) { transition-delay: 0.3s; }
-  .ls-checks li:nth-child(2) { transition-delay: 0.4s; }
-  .ls-checks li:nth-child(3) { transition-delay: 0.5s; }
+  .ls-checks li:nth-child(1) {
+    transition-delay: 0.3s;
+  }
+  .ls-checks li:nth-child(2) {
+    transition-delay: 0.4s;
+  }
+  .ls-checks li:nth-child(3) {
+    transition-delay: 0.5s;
+  }
   .ls-whale {
     transition-delay: 0.7s;
   }
@@ -224,7 +232,9 @@
     animation: lp-caret 1s steps(1) infinite;
   }
   .ls-demo-add {
-    transition: translate 0.12s ease-out, filter 0.12s ease-out;
+    transition:
+      translate 0.12s ease-out,
+      filter 0.12s ease-out;
   }
   .ls-shelf-row {
     transition:

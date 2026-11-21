@@ -368,7 +368,14 @@ export type NodeSystem = {
   disk: { path: string; total_bytes: number; free_bytes: number; avail_bytes: number; inodes_total: number; inodes_free: number } | null
   storage: { node_db_bytes: number; conversations_db_bytes: number; tenants_bytes: number; uv_cache_bytes: number | null }
   cgroups_enabled: boolean
-  tenants: { user_id: string; memory_current_bytes: number; memory_max_bytes: number | null; memory_peak_bytes: number | null; oom_kills: number; procs: number }[]
+  tenants: {
+    user_id: string
+    memory_current_bytes: number
+    memory_max_bytes: number | null
+    memory_peak_bytes: number | null
+    oom_kills: number
+    procs: number
+  }[]
   bots: SysCounts
   platforms: ({ kind: string } & SysCounts)[]
   plugins: SysCounts
@@ -376,7 +383,15 @@ export type NodeSystem = {
     window_s: number
     errors: number
     warns: number
-    bots: { bot_id: string; bot_name: string; user_id: string; errors: number; warns: number; last_error_at: number | null; last_error: string | null }[]
+    bots: {
+      bot_id: string
+      bot_name: string
+      user_id: string
+      errors: number
+      warns: number
+      last_error_at: number | null
+      last_error: string | null
+    }[]
   }
 }
 

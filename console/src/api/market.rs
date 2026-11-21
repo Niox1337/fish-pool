@@ -23,7 +23,11 @@ pub struct MarketPlugin {
 }
 
 fn field<'a>(record: &'a Value, key: &str) -> Option<&'a str> {
-    record.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+    record
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 fn entry(id: &str, record: &Value) -> Option<MarketPlugin> {
@@ -42,14 +46,27 @@ fn entry(id: &str, record: &Value) -> Option<MarketPlugin> {
         || repo.canonical_url(),
         |branch| format!("{}/tree/{branch}", repo.canonical_url()),
     );
-    let description = field(record, "short_desc").or_else(|| field(record, "desc")).unwrap_or("");
-    let tags = record.get("tags").and_then(Value::as_array).into_iter().flatten()
-        .filter_map(Value::as_str).take(12).map(|tag| tag.chars().take(40).collect()).collect();
+    let description = field(record, "short_desc")
+        .or_else(|| field(record, "desc"))
+        .unwrap_or("");
+    let tags = record
+        .get("tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .take(12)
+        .map(|tag| tag.chars().take(40).collect())
+        .collect();
     Some(MarketPlugin {
         id: plugin_id,
         name: name.to_string(),
         author: author.to_string(),
-        display_name: field(record, "display_name").unwrap_or(name).chars().take(100).collect(),
+        display_name: field(record, "display_name")
+            .unwrap_or(name)
+            .chars()
+            .take(100)
+            .collect(),
         description: description.chars().take(260).collect(),
         repo_url,
         category: field(record, "category").unwrap_or("").chars().take(40).collect(),
@@ -61,7 +78,9 @@ fn catalogue(raw: &Value) -> Option<Vec<MarketPlugin>> {
     if raw.get("$meta")?.get("schema_version")?.as_u64() != Some(1) {
         return None;
     }
-    let mut entries: Vec<_> = raw.as_object()?.iter()
+    let mut entries: Vec<_> = raw
+        .as_object()?
+        .iter()
         .filter(|(id, _)| id.as_str() != "$meta")
         .filter_map(|(id, record)| {
             let downloads = record.get("download_count").and_then(Value::as_u64).unwrap_or(0);
@@ -94,10 +113,22 @@ async fn body(req: &Request, app: &App) -> ApiResult<Value> {
     }
 
     let source = if app.dev { app.var("ASTRBOT_MARKET_URL") } else { None };
-    let response = http::send(Method::Get, source.as_deref().unwrap_or(REGISTRY), &[("accept", "application/json")], None, 8_000)
-        .await.map_err(|_| unavailable())?;
-    let items = response.ok().then(|| response.json()).flatten()
-        .as_ref().and_then(catalogue).ok_or_else(unavailable)?;
+    let response = http::send(
+        Method::Get,
+        source.as_deref().unwrap_or(REGISTRY),
+        &[("accept", "application/json")],
+        None,
+        8_000,
+    )
+    .await
+    .map_err(|_| unavailable())?;
+    let items = response
+        .ok()
+        .then(|| response.json())
+        .flatten()
+        .as_ref()
+        .and_then(catalogue)
+        .ok_or_else(unavailable)?;
     let body = json!({ "items": items });
     if !app.dev {
         if let Ok(mut cached) = Response::from_json(&body) {
@@ -117,7 +148,9 @@ pub async fn list(req: &Request, app: &App) -> ApiResult<Reply> {
 pub async fn find(req: &Request, app: &App, id: &str) -> ApiResult<MarketPlugin> {
     let body = body(req, app).await?;
     let items: Vec<MarketPlugin> = serde_json::from_value(body["items"].clone()).map_err(|_| unavailable())?;
-    items.into_iter().find(|item| item.id == id)
+    items
+        .into_iter()
+        .find(|item| item.id == id)
         .ok_or_else(|| ApiError::new(404, "market_plugin_not_found", "插件市场里没有这个插件"))
 }
 

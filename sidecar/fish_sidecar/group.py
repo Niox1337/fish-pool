@@ -57,14 +57,35 @@ MAX_SOURCE_BYTES = 3 * 1024 * 1024
 # shortcut: text patterns miss indirect uses and flag harmless ones, replace with an AST pass when false results show up in plugin logs.
 BLOCKERS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bThread\s*\(|start_new_thread|\bTimer\s*\(|ThreadPoolExecutor|ProcessPoolExecutor"), "启动线程"),
-    (re.compile(r"\bcreate_task\b|\bensure_future\b|\bregister_task\b|\bTaskGroup\b|\bcall_later\b|\bcall_at\b"), "启动后台任务"),
+    (
+        re.compile(r"\bcreate_task\b|\bensure_future\b|\bregister_task\b|\bTaskGroup\b|\bcall_later\b|\bcall_at\b"),
+        "启动后台任务",
+    ),
     (re.compile(r"apscheduler|\bcron_manager\b|\badd_job\b|^\s*(?:import|from)\s+schedule\b", re.M), "定时任务"),
     (re.compile(r"\btime\.sleep\s*\(|^\s*from\s+time\s+import\s+[^\n]*\bsleep\b", re.M), "阻塞等待"),
-    (re.compile(r"^\s*(?:import|from)\s+(?:requests|urllib3|http\.client|urllib\.request)\b|\burlopen\s*\(", re.M), "同步网络请求"),
+    (
+        re.compile(r"^\s*(?:import|from)\s+(?:requests|urllib3|http\.client|urllib\.request)\b|\burlopen\s*\(", re.M),
+        "同步网络请求",
+    ),
     (re.compile(r"\bsubprocess\b|\bos\.system\b|\bos\.popen\b|\bos\.fork\b|\bmultiprocessing\b|\bos\.exec"), "子进程"),
-    (re.compile(r"\bos\.chdir\b|\bos\.putenv\b|\bos\.environ\s*\[[^\]]*\]\s*=(?!=)|\bos\.environ\.(?:update|setdefault|pop)\b"), "修改进程环境"),
-    (re.compile(r"\bgetcwd\b|\bPath\.cwd\b|\bPath\s*\(\s*[rbuf]*['\"](?![/{])|\bopen\s*\(\s*[rbuf]*['\"](?![/{])|\bos\.(?:path\.\w+|listdir|makedirs|mkdir|remove|unlink|scandir|rename|replace)\s*\(\s*[rbuf]*['\"](?![/{])|['\"](?:\./|data/)"), "使用相对路径"),
-    (re.compile(r"\bsys\.(?:stdout|stderr|stdin)\s*=(?!=)|\bsys\.path\b|\bsys\.exit\b|\bos\._exit\b|\bsignal\.|\batexit\b"), "修改进程状态"),
+    (
+        re.compile(
+            r"\bos\.chdir\b|\bos\.putenv\b|\bos\.environ\s*\[[^\]]*\]\s*=(?!=)|\bos\.environ\.(?:update|setdefault|pop)\b"
+        ),
+        "修改进程环境",
+    ),
+    (
+        re.compile(
+            r"\bgetcwd\b|\bPath\.cwd\b|\bPath\s*\(\s*[rbuf]*['\"](?![/{])|\bopen\s*\(\s*[rbuf]*['\"](?![/{])|\bos\.(?:path\.\w+|listdir|makedirs|mkdir|remove|unlink|scandir|rename|replace)\s*\(\s*[rbuf]*['\"](?![/{])|['\"](?:\./|data/)"
+        ),
+        "使用相对路径",
+    ),
+    (
+        re.compile(
+            r"\bsys\.(?:stdout|stderr|stdin)\s*=(?!=)|\bsys\.path\b|\bsys\.exit\b|\bos\._exit\b|\bsignal\.|\batexit\b"
+        ),
+        "修改进程状态",
+    ),
     (re.compile(r"\bsession_waiter\b|\bSessionWaiter\b"), "会话等待"),
     (re.compile(r"\bkb_manager\b|\bkb_mgr\b|\bknowledge_base\b"), "知识库"),
 ]
@@ -154,7 +175,9 @@ def purge(package: str, plugin_dir: Path) -> None:
 
     for md in [m for m in star_handlers_registry if _owned(m.handler_module_path, package)]:
         star_handlers_registry.remove(md)
-    llm_tools.func_list[:] = [t for t in llm_tools.func_list if not _owned(getattr(t, "handler_module_path", None), package)]
+    llm_tools.func_list[:] = [
+        t for t in llm_tools.func_list if not _owned(getattr(t, "handler_module_path", None), package)
+    ]
     for key in [k for k in star_map if _owned(k, package)]:
         del star_map[key]
     star_registry[:] = [m for m in star_registry if not _owned(m.module_path, package)]
@@ -206,7 +229,11 @@ def _make_contextual(obj: Any, attr: str) -> None:
         else:
             setattr(found, name, value)
 
-    proxy = type(base)(base.__name__, (base,), {"__getattribute__": __getattribute__, "__setattr__": __setattr__, "__module__": base.__module__})
+    proxy = type(base)(
+        base.__name__,
+        (base,),
+        {"__getattribute__": __getattribute__, "__setattr__": __setattr__, "__module__": base.__module__},
+    )
     obj.__class__ = proxy
 
 
@@ -347,7 +374,11 @@ class SlotRuntime(ChildRuntime):
         if self.queued_tasks:
             raise Ungroupable("加载时注册了后台任务")
         own = {self.main_task, self.reader_task, asyncio.current_task()}
-        tasks = [t for t in asyncio.all_tasks(self.loop) if t not in own and not t.done() and self.owns_context(t.get_context())]
+        tasks = [
+            t
+            for t in asyncio.all_tasks(self.loop)
+            if t not in own and not t.done() and self.owns_context(t.get_context())
+        ]
         if tasks:
             raise Ungroupable(f"加载后仍有 {len(tasks)} 个后台任务")
 
@@ -368,7 +399,11 @@ class SlotRuntime(ChildRuntime):
     async def cleanup(self) -> None:
         """Cancels the slot's remaining tasks, closes its database and removes the plugin from the registries."""
         current = asyncio.current_task()
-        tasks = [t for t in asyncio.all_tasks(self.loop) if t is not current and not t.done() and self.owns_context(t.get_context())]
+        tasks = [
+            t
+            for t in asyncio.all_tasks(self.loop)
+            if t is not current and not t.done() and self.owns_context(t.get_context())
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
@@ -387,7 +422,6 @@ class SlotRuntime(ChildRuntime):
                 log.debug("database close failed: %s", e)
         if self.package is not None:
             purge(self.package, self.plugin_dir)
-
 
 
 class GroupHost:
@@ -426,7 +460,11 @@ class GroupHost:
         home = self.workdir / "home"
         home.mkdir(exist_ok=True)
         os.environ["HOME"] = str(home)
-        for var, sub in (("XDG_CONFIG_HOME", ".config"), ("XDG_CACHE_HOME", ".cache"), ("XDG_DATA_HOME", ".local/share")):
+        for var, sub in (
+            ("XDG_CONFIG_HOME", ".config"),
+            ("XDG_CACHE_HOME", ".cache"),
+            ("XDG_DATA_HOME", ".local/share"),
+        ):
             os.environ[var] = str(home / sub)
         astrbot_boot.enter_plugin_root(str(self.workdir))
 
@@ -467,14 +505,23 @@ class GroupHost:
         try:
             code = await slot.run()
         except BaseException as e:
-            print(f"fish group slot {slot.proc_id}: {e}\n{traceback.format_exc(limit=8)}", file=sys.__stderr__, flush=True)
+            print(
+                f"fish group slot {slot.proc_id}: {e}\n{traceback.format_exc(limit=8)}", file=sys.__stderr__, flush=True
+            )
         try:
             await slot.cleanup()
         except BaseException as e:
             print(f"fish group slot {slot.proc_id} cleanup: {e}", file=sys.__stderr__, flush=True)
         self.slots.pop(slot.proc_id, None)
         self.slot_tasks.pop(slot.proc_id, None)
-        self.write({"op": "slot_exited", "proc_id": slot.proc_id, "code": code, "drain": slot.package is not None and code != EXIT_OK and slot.forced_code is None})
+        self.write(
+            {
+                "op": "slot_exited",
+                "proc_id": slot.proc_id,
+                "code": code,
+                "drain": slot.package is not None and code != EXIT_OK and slot.forced_code is None,
+            }
+        )
         try:
             if self.writer is not None:
                 await self.writer.drain()

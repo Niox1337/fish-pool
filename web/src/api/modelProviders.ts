@@ -123,10 +123,11 @@ export const modelProviders: ModelProvider[] = [
 
 export function providerForEndpoint(baseUrl: string) {
   const url = baseUrl.replace(/\/+$/, '')
-  return modelProviders.find((provider) =>
-    provider.base_url === url ||
-    (provider.id === 'deepseek' && url === `${provider.base_url}/v1`) ||
-    (provider.id === 'minimax' && ['https://api.minimaxi.com/v1', 'https://api.minimax.io/v1'].includes(url)) ||
-    (provider.id === 'qwen' && /^https:\/\/[a-z0-9-]+\.cn-beijing\.maas\.aliyuncs\.com\/compatible-mode\/v1$/.test(url)),
+  return modelProviders.find(
+    (provider) =>
+      provider.base_url === url ||
+      (provider.id === 'deepseek' && url === `${provider.base_url}/v1`) ||
+      (provider.id === 'minimax' && ['https://api.minimaxi.com/v1', 'https://api.minimax.io/v1'].includes(url)) ||
+      (provider.id === 'qwen' && /^https:\/\/[a-z0-9-]+\.cn-beijing\.maas\.aliyuncs\.com\/compatible-mode\/v1$/.test(url)),
   )
 }

@@ -171,7 +171,10 @@ impl Usage {
         // Plugins in one group process share its pid. The process is measured once and split evenly.
         let pids: Vec<u32> = {
             let procs = bot.procs.read().unwrap();
-            plugins.iter().map(|s| procs.get(&s.id).map(|p| p.pid).unwrap_or(0)).collect()
+            plugins
+                .iter()
+                .map(|s| procs.get(&s.id).map(|p| p.pid).unwrap_or(0))
+                .collect()
         };
         let mut sharers: HashMap<u32, u32> = HashMap::new();
         for pid in pids.iter().filter(|p| **p != 0) {
@@ -218,7 +221,11 @@ impl Usage {
         let bots = node.all();
         let mut rows = vec![];
         let mut snapshot = HashMap::new();
-        let mut cpu = PluginCpuSample { percent: 0.0, sampled_at: ts, plugins: Vec::new() };
+        let mut cpu = PluginCpuSample {
+            percent: 0.0,
+            sampled_at: ts,
+            plugins: Vec::new(),
+        };
         let mut per_user: HashMap<String, (u64, u64, u64)> = HashMap::new();
         let mut largest: HashMap<String, (u64, Arc<Bot>, String)> = HashMap::new();
         for bot in &bots {
@@ -257,7 +264,11 @@ impl Usage {
             }
             snapshot.insert(bot.id.clone(), sources);
         }
-        cpu.plugins.sort_unstable_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent).then_with(|| a.plugin_id.cmp(&b.plugin_id)));
+        cpu.plugins.sort_unstable_by(|a, b| {
+            b.cpu_percent
+                .total_cmp(&a.cpu_percent)
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+        });
         cpu.plugins.truncate(CPU_PLUGIN_ROWS);
         *self.snapshot.lock().unwrap() = snapshot;
         *self.plugin_cpu.lock().unwrap() = Some(cpu);
@@ -270,7 +281,12 @@ impl Usage {
         {
             let mut counts = self.over_count.lock().unwrap();
             for (user, (mem, _, quota)) in &per_user {
-                if node.shared.cgroups.as_ref().is_some_and(|cg| cg.memory_max(user).is_some()) {
+                if node
+                    .shared
+                    .cgroups
+                    .as_ref()
+                    .is_some_and(|cg| cg.memory_max(user).is_some())
+                {
                     // Kernel-limited tenants are handled by `enforce_bursts`.
                     counts.remove(user);
                     continue;
@@ -318,7 +334,9 @@ impl Usage {
                 if cg.memory_max(user).is_none() {
                     continue;
                 }
-                let Some(ws) = cg.tenant_working_set(user) else { continue };
+                let Some(ws) = cg.tenant_working_set(user) else {
+                    continue;
+                };
                 let quota = tenant_limit_bytes(*mb);
                 cg.set_memory_max(user, *mb, burst_limit(quota, ws, available, NODE_RESERVE));
                 if ws <= quota {
@@ -341,7 +359,10 @@ impl Usage {
         let minutes = BURST_WINDOW.as_secs() / 60;
         for user in started {
             for bot in bots.iter().filter(|b| b.user_id() == user) {
-                bot.logs.warn("core", format!("内存超出配额，正在临时使用节点余量。{minutes} 分钟内回落到配额以内就不会停止插件"));
+                bot.logs.warn(
+                    "core",
+                    format!("内存超出配额，正在临时使用节点余量。{minutes} 分钟内回落到配额以内就不会停止插件"),
+                );
             }
         }
         for user in expired {
@@ -354,7 +375,10 @@ impl Usage {
                 }
             }
             if let Some((_, bot, plugin_id)) = largest {
-                tracing::warn!("memory burst of {user} lasted {minutes} min, stopping plugin {plugin_id} of bot {}", bot.id);
+                tracing::warn!(
+                    "memory burst of {user} lasted {minutes} min, stopping plugin {plugin_id} of bot {}",
+                    bot.id
+                );
                 bot.stop_over_quota(&plugin_id).await;
             }
         }
@@ -428,7 +452,14 @@ impl Usage {
             .into_iter()
             .map(|(ts, m, s)| json!({"ts": ts, "memory_bytes": m, "storage_bytes": s}))
             .collect();
-        let quota = if bots.is_empty() { Quota::default() } else { Quota { memory_mb: qmem, storage_mb: qsto } };
+        let quota = if bots.is_empty() {
+            Quota::default()
+        } else {
+            Quota {
+                memory_mb: qmem,
+                storage_mb: qsto,
+            }
+        };
         json!({
             "quota": quota,
             "memory_bytes": sources.iter().map(|s| s.memory_bytes).sum::<u64>(),

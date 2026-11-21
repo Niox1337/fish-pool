@@ -62,7 +62,10 @@ class CmdPlugin(Star):
     async def ask_tool(self, event: AstrMessageEvent):
         tools = self.context.get_llm_tool_manager()
         response = await self.context.tool_loop_agent(
-            event=event, chat_provider_id="fish", prompt="Please use the echo tool",
-            tools=ToolSet([tools.get_func("echo_tool")]), max_steps=3,
+            event=event,
+            chat_provider_id="fish",
+            prompt="Please use the echo tool",
+            tools=ToolSet([tools.get_func("echo_tool")]),
+            max_steps=3,
         )
         yield event.plain_result(response.completion_text)

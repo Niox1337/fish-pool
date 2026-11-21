@@ -41,7 +41,8 @@ def inactive_tools(prefix: str | None = None) -> list[str]:
     """Names of registered tools the node cannot call."""
     exposed = {t.name for t in plugin_tools(prefix)}
     return [
-        str(getattr(t, "name", "?")) for t in llm_tools.func_list
+        str(getattr(t, "name", "?"))
+        for t in llm_tools.func_list
         if owned(t, prefix) and getattr(t, "name", None) not in exposed
     ]
 
@@ -52,7 +53,11 @@ def find_tool(name: str, prefix: str | None = None) -> FunctionTool | None:
 
 def tool_schema(tool: FunctionTool) -> dict[str, Any]:
     """``{"name", "description", "parameters"}`` for the node."""
-    parameters = tool.parameters if isinstance(tool.parameters, dict) and tool.parameters else {"type": "object", "properties": {}}
+    parameters = (
+        tool.parameters
+        if isinstance(tool.parameters, dict) and tool.parameters
+        else {"type": "object", "properties": {}}
+    )
     return {"name": tool.name, "description": tool.description or tool.name, "parameters": parameters}
 
 
@@ -72,7 +77,9 @@ def invoke(tool: FunctionTool, event: Any, context: Any, arguments: dict[str, An
     """Starts the tool the way AstrBot's local tool executor does. Returns a coroutine, async generator or value."""
     if tool.handler is not None:
         return tool.handler(event, **call_kwargs(tool.handler, arguments))
-    overrides_call = any("call" in ty.__dict__ and ty.__dict__["call"] is not FunctionTool.call for ty in type(tool).mro())
+    overrides_call = any(
+        "call" in ty.__dict__ and ty.__dict__["call"] is not FunctionTool.call for ty in type(tool).mro()
+    )
     if overrides_call:
         from astrbot.core.agent.run_context import ContextWrapper
         from astrbot.core.astr_agent_context import AstrAgentContext

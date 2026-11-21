@@ -9,7 +9,7 @@ use crate::args;
 use crate::error::{ApiError, ApiResult};
 use crate::invite::{self, InviteRow, DAY_MS, INVITE_COLS};
 use crate::models::{admin_user_view, AccountQuota, BotRow, UserCounts, UserRow, UNLIMITED_COUNT, USER_COUNTS_SQL};
-use crate::util::{now_ms, log_error};
+use crate::util::{log_error, now_ms};
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -22,7 +22,11 @@ const PROBE_TIMEOUT_MS: u64 = 5_000;
 
 fn query_param(req: &Request, key: &str) -> ApiResult<Option<String>> {
     let url = req.url()?;
-    Ok(url.query_pairs().find(|(k, _)| k == key).map(|(_, v)| v.into_owned()).filter(|v| !v.is_empty()))
+    Ok(url
+        .query_pairs()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.into_owned())
+        .filter(|v| !v.is_empty()))
 }
 
 /// Escapes `%`, `_` and `\` for `LIKE ... ESCAPE '\'`.
@@ -56,15 +60,27 @@ struct Probe {
 async fn probe(app: &App, node: NodeInfo, with_health: bool) -> Probe {
     let client = match app.node_client(&node.id).await {
         Ok(c) => c,
-        Err(e) => return Probe { node, health: Err(e.message), summary: None },
+        Err(e) => {
+            return Probe {
+                node,
+                health: Err(e.message),
+                summary: None,
+            }
+        }
     };
     let health = if with_health {
-        client.call(Method::Get, "/v1/health", None, PROBE_TIMEOUT_MS).await.map_err(|e| e.detail())
+        client
+            .call(Method::Get, "/v1/health", None, PROBE_TIMEOUT_MS)
+            .await
+            .map_err(|e| e.detail())
     } else {
         Ok(Value::Null)
     };
     let summary = match &health {
-        Ok(_) => match client.call(Method::Get, "/v1/usage/summary", None, PROBE_TIMEOUT_MS).await {
+        Ok(_) => match client
+            .call(Method::Get, "/v1/usage/summary", None, PROBE_TIMEOUT_MS)
+            .await
+        {
             Ok(v) => Some(v),
             Err(e) => {
                 log_error(&format!("usage summary of {}: {e:?}", node.id));
@@ -79,7 +95,10 @@ async fn probe(app: &App, node: NodeInfo, with_health: bool) -> Probe {
 /// Probes every node in parallel and records the contact time of the ones that answered.
 async fn probe_nodes(app: &App, with_health: bool) -> ApiResult<Vec<Probe>> {
     app.ensure_default_node().await?;
-    let nodes: Vec<NodeInfo> = app.db.all("SELECT id, base_url, last_seen_at FROM nodes ORDER BY id", &[]).await?;
+    let nodes: Vec<NodeInfo> = app
+        .db
+        .all("SELECT id, base_url, last_seen_at FROM nodes ORDER BY id", &[])
+        .await?;
     let mut probes = join_all(nodes.into_iter().map(|n| probe(app, n, with_health))).await;
     let now = now_ms();
     for p in probes.iter_mut() {
@@ -125,8 +144,14 @@ fn plugin_cpu_overview(probes: &[Probe]) -> Value {
     let mut reporting_nodes = 0;
     let mut items = Vec::new();
     for p in probes {
-        let Some(sample) = p.summary.as_ref().and_then(|s| s.get("plugin_cpu"))
-            .and_then(|v| PluginCpuSample::deserialize(v).ok()) else { continue; };
+        let Some(sample) = p
+            .summary
+            .as_ref()
+            .and_then(|s| s.get("plugin_cpu"))
+            .and_then(|v| PluginCpuSample::deserialize(v).ok())
+        else {
+            continue;
+        };
         reporting_nodes += 1;
         percent += sample.percent;
         items.extend(sample.plugins.into_iter().map(|plugin| AdminPluginCpu {
@@ -135,8 +160,12 @@ fn plugin_cpu_overview(probes: &[Probe]) -> Value {
             plugin,
         }));
     }
-    items.sort_unstable_by(|a, b| b.plugin.cpu_percent.total_cmp(&a.plugin.cpu_percent)
-        .then_with(|| a.plugin.plugin_id.cmp(&b.plugin.plugin_id)));
+    items.sort_unstable_by(|a, b| {
+        b.plugin
+            .cpu_percent
+            .total_cmp(&a.plugin.cpu_percent)
+            .then_with(|| a.plugin.plugin_id.cmp(&b.plugin.plugin_id))
+    });
     items.truncate(20);
     json!({ "percent": (reporting_nodes > 0).then_some(percent), "reporting_nodes": reporting_nodes, "items": items })
 }
@@ -189,7 +218,13 @@ async fn user_nodes(app: &App, user_ids: &[String]) -> ApiResult<HashMap<String,
     }
     let marks = vec!["?"; user_ids.len()].join(", ");
     let binds: Vec<JsValue> = user_ids.iter().map(|u| JsValue::from_str(u)).collect();
-    let rows: Vec<Row> = app.db.all(&format!("SELECT DISTINCT user_id, node_id FROM bots WHERE user_id IN ({marks})"), &binds).await?;
+    let rows: Vec<Row> = app
+        .db
+        .all(
+            &format!("SELECT DISTINCT user_id, node_id FROM bots WHERE user_id IN ({marks})"),
+            &binds,
+        )
+        .await?;
     for r in rows {
         out.entry(r.user_id).or_default().insert(r.node_id);
     }
@@ -278,7 +313,11 @@ struct Problem {
 pub async fn overview(req: &Request, app: &App) -> ApiResult<Reply> {
     app.require_admin(req).await?;
     let now = now_ms();
-    let t: Totals = app.db.first(TOTALS_SQL, args![now, DAY_MS]).await?.ok_or_else(|| ApiError::internal("totals query returned no row"))?;
+    let t: Totals = app
+        .db
+        .first(TOTALS_SQL, args![now, DAY_MS])
+        .await?
+        .ok_or_else(|| ApiError::internal("totals query returned no row"))?;
     let problems: Vec<Problem> = app.db.all(PROBLEMS_SQL, &[]).await?;
     let probes = probe_nodes(app, true).await?;
     let (mut memory, mut storage) = (0i64, 0i64);
@@ -296,8 +335,14 @@ pub async fn overview(req: &Request, app: &App) -> ApiResult<Reply> {
             Ok(h) => {
                 n.insert("online".into(), json!(true));
                 n.insert("version".into(), h.get("version").cloned().unwrap_or(Value::Null));
-                n.insert("memory_total_bytes".into(), h.get("memory_total_bytes").cloned().unwrap_or(Value::Null));
-                n.insert("memory_used_bytes".into(), h.get("memory_used_bytes").cloned().unwrap_or(Value::Null));
+                n.insert(
+                    "memory_total_bytes".into(),
+                    h.get("memory_total_bytes").cloned().unwrap_or(Value::Null),
+                );
+                n.insert(
+                    "memory_used_bytes".into(),
+                    h.get("memory_used_bytes").cloned().unwrap_or(Value::Null),
+                );
                 n.insert("bots".into(), h.get("bots").cloned().unwrap_or(json!(0)));
             }
             Err(e) => {
@@ -361,12 +406,31 @@ const D1_SQL: &str = "SELECT \
 
 /// Tables reported by [`D1_SQL`], in display order.
 pub const D1_TABLES: [&str; 16] = [
-    "users", "sessions", "bots", "platforms", "plugins", "llm_keys", "invite_codes", "invite_redemptions", "gateway_accounts", "gateway_credits",
-    "email_codes", "captchas", "rate_events", "qr_tasks", "node_tombstones", "nodes",
+    "users",
+    "sessions",
+    "bots",
+    "platforms",
+    "plugins",
+    "llm_keys",
+    "invite_codes",
+    "invite_redemptions",
+    "gateway_accounts",
+    "gateway_credits",
+    "email_codes",
+    "captchas",
+    "rate_events",
+    "qr_tasks",
+    "node_tombstones",
+    "nodes",
 ];
 
 /// Shapes the D1 counter row into table rows and named counters.
-pub fn d1_view(row: &Map<String, Value>, duration_ms: Option<f64>, size_bytes: Option<usize>, round_trip_ms: i64) -> Value {
+pub fn d1_view(
+    row: &Map<String, Value>,
+    duration_ms: Option<f64>,
+    size_bytes: Option<usize>,
+    round_trip_ms: i64,
+) -> Value {
     let n = |k: &str| row.get(k).and_then(Value::as_i64).unwrap_or(0);
     let tables: Vec<Value> = D1_TABLES.iter().map(|t| json!({"name": t, "rows": n(t)})).collect();
     json!({
@@ -397,7 +461,12 @@ pub fn system_user_ids(system: &Value) -> Vec<String> {
     for p in system.get("processes").and_then(Value::as_array).into_iter().flatten() {
         take(p.get("plugin").and_then(|x| x.get("user_id")));
     }
-    for b in system.pointer("/logs/bots").and_then(Value::as_array).into_iter().flatten() {
+    for b in system
+        .pointer("/logs/bots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         take(b.get("user_id"));
     }
     ids.sort();
@@ -411,14 +480,25 @@ pub async fn system(req: &Request, app: &App) -> ApiResult<Reply> {
     let (rows, meta): (Vec<Map<String, Value>>, _) = app.db.all_meta(D1_SQL, args![now, DAY_MS]).await?;
     let d1_rtt = now_ms() - now;
     let row = rows.into_iter().next().unwrap_or_default();
-    let d1 = d1_view(&row, meta.as_ref().and_then(|m| m.duration), meta.as_ref().and_then(|m| m.size_after), d1_rtt);
+    let d1 = d1_view(
+        &row,
+        meta.as_ref().and_then(|m| m.duration),
+        meta.as_ref().and_then(|m| m.size_after),
+        d1_rtt,
+    );
 
     app.ensure_default_node().await?;
-    let nodes: Vec<NodeInfo> = app.db.all("SELECT id, base_url, last_seen_at FROM nodes ORDER BY id", &[]).await?;
+    let nodes: Vec<NodeInfo> = app
+        .db
+        .all("SELECT id, base_url, last_seen_at FROM nodes ORDER BY id", &[])
+        .await?;
     let results = join_all(nodes.into_iter().map(|node| async move {
         let started = now_ms();
         let res = match app.node_client(&node.id).await {
-            Ok(c) => c.call(Method::Get, "/v1/system", None, SYSTEM_TIMEOUT_MS).await.map_err(|e| e.detail()),
+            Ok(c) => c
+                .call(Method::Get, "/v1/system", None, SYSTEM_TIMEOUT_MS)
+                .await
+                .map_err(|e| e.detail()),
             Err(e) => Err(e.message),
         };
         (node, res, now_ms() - started)
@@ -461,7 +541,10 @@ pub async fn system(req: &Request, app: &App) -> ApiResult<Reply> {
         }
         let marks = vec!["?"; user_ids.len()].join(", ");
         let binds: Vec<JsValue> = user_ids.iter().map(|u| JsValue::from_str(u)).collect();
-        let found: Vec<U> = app.db.all(&format!("SELECT id, email FROM users WHERE id IN ({marks})"), &binds).await?;
+        let found: Vec<U> = app
+            .db
+            .all(&format!("SELECT id, email FROM users WHERE id IN ({marks})"), &binds)
+            .await?;
         for u in found {
             users.insert(u.id, json!(u.email));
         }
@@ -523,7 +606,11 @@ impl AdminUserRow {
 }
 
 fn admin_user_select() -> String {
-    let cols = crate::app::USER_COLS.split(", ").map(|c| format!("u.{c}")).collect::<Vec<_>>().join(", ");
+    let cols = crate::app::USER_COLS
+        .split(", ")
+        .map(|c| format!("u.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!("SELECT {cols}, {USER_COUNTS_SQL} FROM users u")
 }
 
@@ -531,12 +618,20 @@ async fn admin_users(app: &App, rows: Vec<AdminUserRow>) -> ApiResult<Vec<Value>
     let ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
     let nodes = user_nodes(app, &ids).await?;
     let needs_probe = nodes.values().any(|n| !n.is_empty());
-    let usage = if needs_probe { user_usage(&probe_nodes(app, false).await?, &nodes) } else { HashMap::new() };
+    let usage = if needs_probe {
+        user_usage(&probe_nodes(app, false).await?, &nodes)
+    } else {
+        HashMap::new()
+    };
     Ok(rows
         .into_iter()
         .map(|r| {
             let (user, counts) = r.split();
-            let u = if nodes.get(&user.id).is_some_and(|n| n.is_empty()) { Some((0, 0)) } else { usage.get(&user.id).copied() };
+            let u = if nodes.get(&user.id).is_some_and(|n| n.is_empty()) {
+                Some((0, 0))
+            } else {
+                usage.get(&user.id).copied()
+            };
             admin_user_view(&user, &counts, u)
         })
         .collect())
@@ -553,26 +648,35 @@ async fn admin_user(app: &App, id: &str) -> ApiResult<Value> {
 
 pub async fn users(req: &Request, app: &App) -> ApiResult<Reply> {
     app.require_admin(req).await?;
-    let q = query_param(req, "q")?.map(|q| q.trim().to_lowercase()).filter(|q| !q.is_empty());
+    let q = query_param(req, "q")?
+        .map(|q| q.trim().to_lowercase())
+        .filter(|q| !q.is_empty());
     let cursor = query_param(req, "cursor")?;
     let sql = format!(
         "{} WHERE (?1 IS NULL OR u.email LIKE ?1 ESCAPE '\\') AND (?2 IS NULL OR u.id < ?2) ORDER BY u.id DESC LIMIT ?3",
         admin_user_select()
     );
-    let mut rows: Vec<AdminUserRow> = app.db.all(&sql, args![q.as_deref().map(like_pattern), cursor, PAGE + 1]).await?;
+    let mut rows: Vec<AdminUserRow> = app
+        .db
+        .all(&sql, args![q.as_deref().map(like_pattern), cursor, PAGE + 1])
+        .await?;
     let next = if rows.len() as i64 > PAGE {
         rows.truncate(PAGE as usize);
         rows.last().map(|r| r.id.clone())
     } else {
         None
     };
-    Ok(Reply::json(json!({"items": admin_users(app, rows).await?, "cursor": next})))
+    Ok(Reply::json(
+        json!({"items": admin_users(app, rows).await?, "cursor": next}),
+    ))
 }
 
 pub async fn user(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
     app.require_admin(req).await?;
     let user = admin_user(app, id).await?;
-    Ok(Reply::json(json!({"user": user, "bots": bots_for_user(app, id).await?})))
+    Ok(Reply::json(
+        json!({"user": user, "bots": bots_for_user(app, id).await?}),
+    ))
 }
 
 pub async fn user_usage_route(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
@@ -585,7 +689,10 @@ pub async fn user_bot_logs(req: &Request, app: &App, id: &str, bot_id: &str) -> 
     app.require_admin(req).await?;
     let bot: BotRow = app
         .db
-        .first(&format!("SELECT {BOT_COLS} FROM bots WHERE id = ?1 AND user_id = ?2"), args![bot_id, id])
+        .first(
+            &format!("SELECT {BOT_COLS} FROM bots WHERE id = ?1 AND user_id = ?2"),
+            args![bot_id, id],
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("机器人不存在"))?;
     proxy_logs(req, app, &bot).await
@@ -601,7 +708,9 @@ const QUOTA_FIELDS: [(&str, &str, i64, i64); 4] = [
 
 /// Validated column updates from a PATCH body quota object.
 pub fn quota_updates(quota: &Value) -> ApiResult<Vec<(&'static str, i64)>> {
-    let obj = quota.as_object().ok_or_else(|| ApiError::bad_request("quota 必须是对象"))?;
+    let obj = quota
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("quota 必须是对象"))?;
     if let Some(k) = obj.keys().find(|k| !QUOTA_FIELDS.iter().any(|f| f.0 == k.as_str())) {
         return Err(ApiError::bad_request(format!("未知的配额字段 {k}")));
     }
@@ -612,7 +721,10 @@ pub fn quota_updates(quota: &Value) -> ApiResult<Vec<(&'static str, i64)>> {
                 out.push((col, UNLIMITED_COUNT));
                 continue;
             }
-            let n = v.as_i64().filter(|n| (min..=max).contains(n)).ok_or_else(|| ApiError::bad_request(format!("{field} 应为 {min} 到 {max} 的整数")))?;
+            let n = v
+                .as_i64()
+                .filter(|n| (min..=max).contains(n))
+                .ok_or_else(|| ApiError::bad_request(format!("{field} 应为 {min} 到 {max} 的整数")))?;
             out.push((col, n));
         }
     }
@@ -620,7 +732,12 @@ pub fn quota_updates(quota: &Value) -> ApiResult<Vec<(&'static str, i64)>> {
 }
 
 /// New service_until after optionally setting it and then extending it by whole days.
-pub fn next_service_until(current: Option<i64>, set: Option<Option<i64>>, extend_days: Option<i64>, now: i64) -> Option<i64> {
+pub fn next_service_until(
+    current: Option<i64>,
+    set: Option<Option<i64>>,
+    extend_days: Option<i64>,
+    now: i64,
+) -> Option<i64> {
     let base = match set {
         Some(v) => v,
         None => current,
@@ -634,7 +751,9 @@ pub fn next_service_until(current: Option<i64>, set: Option<Option<i64>>, extend
 pub async fn patch_user(req: &mut Request, app: &App, id: &str) -> ApiResult<Reply> {
     app.require_admin(req).await?;
     let body: Value = json_body(req).await?;
-    let obj = body.as_object().ok_or_else(|| ApiError::bad_request("请求体必须是对象"))?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("请求体必须是对象"))?;
     let user = app.user_by_id(id).await?;
     let quota = match obj.get("quota") {
         Some(q) => quota_updates(q)?,
@@ -643,11 +762,19 @@ pub async fn patch_user(req: &mut Request, app: &App, id: &str) -> ApiResult<Rep
     let set = match obj.get("service_until") {
         None => None,
         Some(Value::Null) => Some(None),
-        Some(v) => Some(Some(v.as_i64().filter(|n| *n >= 0).ok_or_else(|| ApiError::bad_request("service_until 应为毫秒时间戳或 null"))?)),
+        Some(v) => {
+            Some(Some(v.as_i64().filter(|n| *n >= 0).ok_or_else(|| {
+                ApiError::bad_request("service_until 应为毫秒时间戳或 null")
+            })?))
+        }
     };
     let extend = match obj.get("extend_days") {
         None | Some(Value::Null) => None,
-        Some(v) => Some(v.as_i64().filter(|n| (1..=3650).contains(n)).ok_or_else(|| ApiError::bad_request("extend_days 应为 1 到 3650 的整数"))?),
+        Some(v) => Some(
+            v.as_i64()
+                .filter(|n| (1..=3650).contains(n))
+                .ok_or_else(|| ApiError::bad_request("extend_days 应为 1 到 3650 的整数"))?,
+        ),
     };
     let now = now_ms();
     let service_changed = set.is_some() || extend.is_some();
@@ -662,14 +789,19 @@ pub async fn patch_user(req: &mut Request, app: &App, id: &str) -> ApiResult<Rep
             });
         }
         binds.push(JsValue::from_str(&user.id));
-        app.db.run(&format!("UPDATE users SET {} WHERE id = ?", sets.join(", ")), &binds).await?;
+        app.db
+            .run(&format!("UPDATE users SET {} WHERE id = ?", sets.join(", ")), &binds)
+            .await?;
     }
     if !quota.is_empty() {
         #[derive(Deserialize)]
         struct Id {
             id: String,
         }
-        let bots: Vec<Id> = app.db.all("SELECT id FROM bots WHERE user_id = ?1", args![user.id]).await?;
+        let bots: Vec<Id> = app
+            .db
+            .all("SELECT id FROM bots WHERE user_id = ?1", args![user.id])
+            .await?;
         for b in bots {
             app.push_bot(&b.id).await?;
         }
@@ -749,7 +881,10 @@ async fn invite_views(app: &App, rows: Vec<InviteListRow>) -> ApiResult<Vec<Valu
         .into_iter()
         .map(|r| {
             let red = redemptions.remove(&r.code).unwrap_or_default();
-            let quota = r.quota_json.as_deref().and_then(|s| serde_json::from_str::<AccountQuota>(s).ok());
+            let quota = r
+                .quota_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<AccountQuota>(s).ok());
             json!({
                 "code": r.code, "days": r.days, "max_uses": r.max_uses, "used_count": r.used_count, "note": r.note,
                 "created_by_email": r.created_by_email, "created_at": r.created_at, "expires_at": r.expires_at,
@@ -785,7 +920,9 @@ pub async fn invites(req: &Request, app: &App) -> ApiResult<Reply> {
     app.require_admin(req).await?;
     let status = query_param(req, "status")?.unwrap_or_else(|| "all".into());
     let filter = status_filter(&status)?;
-    let cursor = query_param(req, "cursor")?.map(|c| parse_invite_cursor(&c)).transpose()?;
+    let cursor = query_param(req, "cursor")?
+        .map(|c| parse_invite_cursor(&c))
+        .transpose()?;
     let (ts, code) = match &cursor {
         Some((t, c)) => (Some(*t), Some(c.as_str())),
         None => (None, None),
@@ -801,7 +938,9 @@ pub async fn invites(req: &Request, app: &App) -> ApiResult<Reply> {
     } else {
         None
     };
-    Ok(Reply::json(json!({"items": invite_views(app, rows).await?, "cursor": next, "default_quota": AccountQuota::default()})))
+    Ok(Reply::json(
+        json!({"items": invite_views(app, rows).await?, "cursor": next, "default_quota": AccountQuota::default()}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -891,20 +1030,38 @@ pub async fn create_invites(req: &mut Request, app: &App) -> ApiResult<Reply> {
 
 /// Optional gateway credit of an invite as fen, empty meaning none.
 pub fn gateway_fen(budget: Option<&str>) -> ApiResult<i64> {
-    let Some(b) = budget.map(str::trim).filter(|b| !b.is_empty()) else { return Ok(0) };
+    let Some(b) = budget.map(str::trim).filter(|b| !b.is_empty()) else {
+        return Ok(0);
+    };
     crate::gengwiki::parse_fen(b)
         .filter(|f| *f <= crate::gengwiki::MAX_CREDIT_FEN)
-        .ok_or_else(|| ApiError::bad_request(format!("网关额度应为 0 到 {} 元，最多两位小数", crate::gengwiki::MAX_CREDIT_FEN / 100)))
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "网关额度应为 0 到 {} 元，最多两位小数",
+                crate::gengwiki::MAX_CREDIT_FEN / 100
+            ))
+        })
 }
 
 pub async fn revoke_invite(req: &Request, app: &App, code: &str) -> ApiResult<Reply> {
     app.require_admin(req).await?;
     let code = invite::normalize(code).ok_or_else(|| ApiError::not_found("邀请码不存在"))?;
-    let row: Option<InviteRow> = app.db.first(&format!("SELECT {INVITE_COLS} FROM invite_codes WHERE code = ?1"), args![code]).await?;
+    let row: Option<InviteRow> = app
+        .db
+        .first(
+            &format!("SELECT {INVITE_COLS} FROM invite_codes WHERE code = ?1"),
+            args![code],
+        )
+        .await?;
     if row.is_none() {
         return Err(ApiError::not_found("邀请码不存在"));
     }
-    app.db.run("UPDATE invite_codes SET revoked_at = COALESCE(revoked_at, ?2) WHERE code = ?1", args![code, now_ms()]).await?;
+    app.db
+        .run(
+            "UPDATE invite_codes SET revoked_at = COALESCE(revoked_at, ?2) WHERE code = ?1",
+            args![code, now_ms()],
+        )
+        .await?;
     Ok(Reply::json(ok_json()))
 }
 
@@ -946,16 +1103,25 @@ mod tests {
         assert_eq!(next_service_until(Some(5), None, None, now), Some(5));
         assert_eq!(next_service_until(Some(5), Some(None), None, now), None);
         assert_eq!(next_service_until(None, None, Some(2), now), Some(now + 2 * DAY_MS));
-        assert_eq!(next_service_until(Some(now + DAY_MS), None, Some(2), now), Some(now + 3 * DAY_MS));
+        assert_eq!(
+            next_service_until(Some(now + DAY_MS), None, Some(2), now),
+            Some(now + 3 * DAY_MS)
+        );
         assert_eq!(next_service_until(Some(1), None, Some(1), now), Some(now + DAY_MS));
-        assert_eq!(next_service_until(Some(1), Some(Some(now + 5)), Some(1), now), Some(now + 5 + DAY_MS));
+        assert_eq!(
+            next_service_until(Some(1), Some(Some(now + 5)), Some(1), now),
+            Some(now + 5 + DAY_MS)
+        );
     }
 
     #[test]
     fn invite_filters_and_cursor() {
         assert!(status_filter("unused").is_ok());
         assert!(status_filter("bogus").is_err());
-        assert_eq!(parse_invite_cursor("123.FISH-AAAA-BBBB").unwrap(), (123, "FISH-AAAA-BBBB".to_string()));
+        assert_eq!(
+            parse_invite_cursor("123.FISH-AAAA-BBBB").unwrap(),
+            (123, "FISH-AAAA-BBBB".to_string())
+        );
         assert!(parse_invite_cursor("x.FISH").is_err());
         assert!(parse_invite_cursor("nodot").is_err());
     }
@@ -992,11 +1158,23 @@ mod tests {
     fn usage_known_only_when_all_nodes_answer() {
         let probes = vec![
             Probe {
-                node: NodeInfo { id: "n1".into(), base_url: String::new(), last_seen_at: None },
+                node: NodeInfo {
+                    id: "n1".into(),
+                    base_url: String::new(),
+                    last_seen_at: None,
+                },
                 health: Ok(Value::Null),
                 summary: Some(json!({"users": [{"user_id": "u1", "memory_bytes": 5, "storage_bytes": 7}]})),
             },
-            Probe { node: NodeInfo { id: "n2".into(), base_url: String::new(), last_seen_at: None }, health: Err("down".into()), summary: None },
+            Probe {
+                node: NodeInfo {
+                    id: "n2".into(),
+                    base_url: String::new(),
+                    last_seen_at: None,
+                },
+                health: Err("down".into()),
+                summary: None,
+            },
         ];
         let mut nodes = HashMap::new();
         nodes.insert("u1".to_string(), HashSet::from(["n1".to_string()]));

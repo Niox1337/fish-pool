@@ -13,20 +13,15 @@ import portrait from '@/assets/whale/portrait.webp'
 const sheets: Partial<Record<Mood, string>> = { idle, eat, sleep, wave }
 const stills: Partial<Record<Mood, string>> = { dizzy, happy, surprised, portrait }
 
-export function Pupil({
-  mood,
-  size = 72,
-  className,
-}: {
-  mood: Mood
-  size?: number
-  className?: string
-}) {
+export function Pupil({ mood, size = 72, className }: { mood: Mood; size?: number; className?: string }) {
   const sheet = sheets[mood]
   if (sheet) {
     return (
-      <span aria-hidden className={cn('pupil-sheet inline-block shrink-0', className)}
-        style={{ width: size, height: size, backgroundImage: `url(${sheet})` }} />
+      <span
+        aria-hidden
+        className={cn('pupil-sheet inline-block shrink-0', className)}
+        style={{ width: size, height: size, backgroundImage: `url(${sheet})` }}
+      />
     )
   }
   return (

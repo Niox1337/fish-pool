@@ -9,7 +9,15 @@ import { isObject, schemaFields, withDefaults, type Obj } from './schema'
 
 type SetValidity = (id: string, valid: boolean) => void
 
-function DraftField({ id, value, onChange, onValidity, kind, label, hint }: {
+function DraftField({
+  id,
+  value,
+  onChange,
+  onValidity,
+  kind,
+  label,
+  hint,
+}: {
   id: string
   value: unknown
   onChange: (value: unknown) => void
@@ -19,7 +27,7 @@ function DraftField({ id, value, onChange, onValidity, kind, label, hint }: {
   hint?: ReactNode
 }) {
   const numeric = kind === 'int' || kind === 'float'
-  const [text, setText] = useState(() => numeric ? String(value ?? '') : JSON.stringify(value ?? null, null, 2))
+  const [text, setText] = useState(() => (numeric ? String(value ?? '') : JSON.stringify(value ?? null, null, 2)))
   const [error, setError] = useState('')
   useEffect(() => () => onValidity(id, true), [id, onValidity])
 
@@ -73,7 +81,13 @@ function DraftField({ id, value, onChange, onValidity, kind, label, hint }: {
   )
 }
 
-function ListField({ label, hint, field, values, onChange }: {
+function ListField({
+  label,
+  hint,
+  field,
+  values,
+  onChange,
+}: {
   label: string
   hint?: ReactNode
   field: SchemaField
@@ -113,7 +127,7 @@ function ListField({ label, hint, field, values, onChange }: {
                   spellCheck={!field.secret}
                   autoComplete={field.secret ? 'off' : undefined}
                   aria-label={`${label} 第 ${index + 1} 项`}
-                  onChange={(event) => onChange(values.map((item, i) => i === index ? event.target.value : item))}
+                  onChange={(event) => onChange(values.map((item, i) => (i === index ? event.target.value : item)))}
                   className="min-w-0 flex-1"
                 />
                 <Button
@@ -138,7 +152,15 @@ function ListField({ label, hint, field, values, onChange }: {
   )
 }
 
-function TemplateList({ id, label, hint, templates, values, onChange, onValidity }: {
+function TemplateList({
+  id,
+  label,
+  hint,
+  templates,
+  values,
+  onChange,
+  onValidity,
+}: {
   id: string
   label: string
   hint?: ReactNode
@@ -177,7 +199,10 @@ function TemplateList({ id, label, hint, templates, values, onChange, onValidity
             <details key={row.id} open={row.expanded} className="group rounded-xl border border-paper-3 bg-cream">
               <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3.5 py-3 text-sm font-semibold text-ink [&::-webkit-details-marker]:hidden">
                 <ChevronDown className="size-4 shrink-0 -rotate-90 text-ink-3 transition-transform group-open:rotate-0" aria-hidden />
-                <span className="min-w-0 flex-1 truncate">{title}{detail && <span className="ml-2 font-normal text-ink-3">{detail}</span>}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {title}
+                  {detail && <span className="ml-2 font-normal text-ink-3">{detail}</span>}
+                </span>
               </summary>
               <div className="grid gap-3 border-t border-paper-3 px-3.5 py-4">
                 {template ? (
@@ -186,15 +211,24 @@ function TemplateList({ id, label, hint, templates, values, onChange, onValidity
                     <SchemaForm
                       schema={items}
                       value={withDefaults(items, instance)}
-                      onChange={(next) => onChange(values.map((entry, i) => i === index ? { ...next, __template_key: templateKey } : entry))}
+                      onChange={(next) =>
+                        onChange(values.map((entry, i) => (i === index ? { ...next, __template_key: templateKey } : entry)))
+                      }
                       onValidity={onValidity}
                     />
                   </>
-                ) : <p className="text-sm text-ink-3">插件当前版本没有提供这项设置的模板。</p>}
-                <Button variant="ghost" size="sm" className="justify-self-start text-bad" onClick={() => {
-                  setRows(rows.filter((_, i) => i !== index))
-                  onChange(values.filter((_, i) => i !== index))
-                }}>
+                ) : (
+                  <p className="text-sm text-ink-3">插件当前版本没有提供这项设置的模板。</p>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="justify-self-start text-bad"
+                  onClick={() => {
+                    setRows(rows.filter((_, i) => i !== index))
+                    onChange(values.filter((_, i) => i !== index))
+                  }}
+                >
                   <Trash2 aria-hidden />
                   移除这项
                 </Button>
@@ -204,8 +238,18 @@ function TemplateList({ id, label, hint, templates, values, onChange, onValidity
         })}
         {types.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
-            <Select id={id} aria-label={`${label}类型`} value={selected} onChange={(event) => setSelected(event.target.value)} className="min-w-0 flex-1 basis-36">
-              {types.map(([name, template]) => <option key={name} value={name}>{template.name || name}</option>)}
+            <Select
+              id={id}
+              aria-label={`${label}类型`}
+              value={selected}
+              onChange={(event) => setSelected(event.target.value)}
+              className="min-w-0 flex-1 basis-36"
+            >
+              {types.map(([name, template]) => (
+                <option key={name} value={name}>
+                  {template.name || name}
+                </option>
+              ))}
             </Select>
             <Button variant="secondary" onClick={add}>
               <Plus aria-hidden />
@@ -218,7 +262,13 @@ function TemplateList({ id, label, hint, templates, values, onChange, onValidity
   )
 }
 
-function FieldInput({ name, field, value, onChange, onValidity }: {
+function FieldInput({
+  name,
+  field,
+  value,
+  onChange,
+  onValidity,
+}: {
   name: string
   field: SchemaField
   value: unknown
@@ -228,15 +278,22 @@ function FieldInput({ name, field, value, onChange, onValidity }: {
   const id = useFieldId('plugin-setting')
   const label = field.description || name
   const hint = field.hint ? <span className={cn(field.obvious_hint && 'font-semibold text-warn')}>{field.hint}</span> : undefined
-  const [listEditor] = useState(() => field.secret || !!field.options?.length
-    || !Array.isArray(value) || value.every((entry) => typeof entry === 'string'))
+  const [listEditor] = useState(
+    () => field.secret || !!field.options?.length || !Array.isArray(value) || value.every((entry) => typeof entry === 'string'),
+  )
 
   if (field.type === 'bool') {
     return (
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <label htmlFor={id} className="text-sm font-semibold text-ink">{label}</label>
-          {hint && <p id={`${id}-hint`} className="mt-1 text-[13px] leading-relaxed text-ink-3">{hint}</p>}
+          <label htmlFor={id} className="text-sm font-semibold text-ink">
+            {label}
+          </label>
+          {hint && (
+            <p id={`${id}-hint`} className="mt-1 text-[13px] leading-relaxed text-ink-3">
+              {hint}
+            </p>
+          )}
         </div>
         <Switch id={id} checked={value === true} onCheckedChange={onChange} />
       </div>
@@ -259,8 +316,17 @@ function FieldInput({ name, field, value, onChange, onValidity }: {
     const { min, max, step = field.type === 'int' ? 1 : 0.1 } = field.slider
     const decimals = String(step).split('.')[1]?.length ?? 0
     return (
-      <RangeField id={id} label={label} hint={hint} value={Number(value ?? min)} min={min} max={max} step={step}
-        format={(next) => next.toFixed(decimals)} onChange={onChange} />
+      <RangeField
+        id={id}
+        label={label}
+        hint={hint}
+        value={Number(value ?? min)}
+        min={min}
+        max={max}
+        step={step}
+        format={(next) => next.toFixed(decimals)}
+        onChange={onChange}
+      />
     )
   }
 
@@ -269,10 +335,24 @@ function FieldInput({ name, field, value, onChange, onValidity }: {
     return <ListField label={label} hint={hint} values={values} field={field} onChange={onChange} />
   }
   if (field.type === 'template_list' && isObject(field.templates) && Object.keys(field.templates).length) {
-    return <TemplateList id={id} label={label} hint={hint} templates={field.templates} values={values} onChange={onChange} onValidity={onValidity} />
+    return (
+      <TemplateList
+        id={id}
+        label={label}
+        hint={hint}
+        templates={field.templates}
+        values={values}
+        onChange={onChange}
+        onValidity={onValidity}
+      />
+    )
   }
   if (field.type === 'file') {
-    return <Field label={label} hint="此项需要文件，控制台暂不支持编辑。">{null}</Field>
+    return (
+      <Field label={label} hint="此项需要文件，控制台暂不支持编辑。">
+        {null}
+      </Field>
+    )
   }
 
   const options = field.options?.length && !field.secret ? field.options : undefined
@@ -281,8 +361,14 @@ function FieldInput({ name, field, value, onChange, onValidity }: {
     return (
       <Field label={label} htmlFor={id} hint={hint}>
         <Select id={id} value={selected < 0 ? '' : selected} onChange={(event) => onChange(options[Number(event.target.value)])}>
-          <option value="" disabled>请选择</option>
-          {options.map((option, index) => <option key={index} value={index}>{field.labels?.[index] ?? option}</option>)}
+          <option value="" disabled>
+            请选择
+          </option>
+          {options.map((option, index) => (
+            <option key={index} value={index}>
+              {field.labels?.[index] ?? option}
+            </option>
+          ))}
         </Select>
       </Field>
     )
@@ -294,36 +380,68 @@ function FieldInput({ name, field, value, onChange, onValidity }: {
 
   return (
     <Field
-      label={field.secret ? <span className="inline-flex items-center gap-1.5">{label}<LockKeyhole className="size-3.5" aria-hidden /></span> : label}
+      label={
+        field.secret ? (
+          <span className="inline-flex items-center gap-1.5">
+            {label}
+            <LockKeyhole className="size-3.5" aria-hidden />
+          </span>
+        ) : (
+          label
+        )
+      }
       htmlFor={id}
       hint={hint}
     >
       {!field.secret && (field.type === 'text' || field.editor_mode) ? (
-        <Textarea id={id} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)}
-          className={cn(field.editor_mode && 'font-mono text-[13px]')} />
+        <Textarea
+          id={id}
+          value={String(value ?? '')}
+          onChange={(event) => onChange(event.target.value)}
+          className={cn(field.editor_mode && 'font-mono text-[13px]')}
+        />
       ) : (
-        <Input id={id} type={field.secret ? 'password' : 'text'} autoComplete={field.secret ? 'off' : undefined}
-          spellCheck={!field.secret} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} />
+        <Input
+          id={id}
+          type={field.secret ? 'password' : 'text'}
+          autoComplete={field.secret ? 'off' : undefined}
+          spellCheck={!field.secret}
+          value={String(value ?? '')}
+          onChange={(event) => onChange(event.target.value)}
+        />
       )}
     </Field>
   )
 }
 
-export function SchemaForm({ schema, value, onChange, onValidity }: {
+export function SchemaForm({
+  schema,
+  value,
+  onChange,
+  onValidity,
+}: {
   schema: PluginSchema
   value: Obj
   onChange: (value: Obj) => void
   onValidity: SetValidity
 }) {
-  const fields = schemaFields(schema).filter(([, field]) => !field.invisible
-    && (!field.condition || Object.entries(field.condition).every(([key, expected]) => value[key] === expected)))
+  const fields = schemaFields(schema).filter(
+    ([, field]) =>
+      !field.invisible && (!field.condition || Object.entries(field.condition).every(([key, expected]) => value[key] === expected)),
+  )
   if (!fields.length) return <p className="text-sm text-ink-3">没有可编辑的设置。</p>
 
   return (
     <div className="grid gap-5">
       {fields.map(([name, field]) => (
-        <FieldInput key={name} name={name} field={field} value={value[name]}
-          onChange={(next) => onChange({ ...value, [name]: next })} onValidity={onValidity} />
+        <FieldInput
+          key={name}
+          name={name}
+          field={field}
+          value={value[name]}
+          onChange={(next) => onChange({ ...value, [name]: next })}
+          onValidity={onValidity}
+        />
       ))}
     </div>
   )

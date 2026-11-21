@@ -26,7 +26,10 @@ pub fn check_avatar(avatar: &str) -> ApiResult<()> {
     if avatar.len() > MAX_AVATAR_BYTES {
         return Err(ApiError::bad_request("头像图片过大，请小于 256KB"));
     }
-    if !(avatar.starts_with("data:image/") || avatar.starts_with("https://") || (avatar.starts_with('/') && !avatar.starts_with("//"))) {
+    if !(avatar.starts_with("data:image/")
+        || avatar.starts_with("https://")
+        || (avatar.starts_with('/') && !avatar.starts_with("//")))
+    {
         return Err(ApiError::bad_request("头像必须是图片 data URL 或 https 链接"));
     }
     Ok(())
@@ -41,26 +44,39 @@ pub async fn list(req: &Request, app: &App) -> ApiResult<Reply> {
 pub async fn bots_for_user(app: &App, user_id: &str) -> ApiResult<Vec<Value>> {
     let bots: Vec<BotRow> = app
         .db
-        .all(&format!("SELECT {BOT_COLS} FROM bots WHERE user_id = ?1 ORDER BY created_at"), args![user_id])
+        .all(
+            &format!("SELECT {BOT_COLS} FROM bots WHERE user_id = ?1 ORDER BY created_at"),
+            args![user_id],
+        )
         .await?;
     let cols = |c: &str| c.split(", ").map(|x| format!("t.{x}")).collect::<Vec<_>>().join(", ");
     let platforms: Vec<PlatformRow> = app
         .db
         .all(
-            &format!("SELECT {} FROM platforms t JOIN bots b ON b.id = t.bot_id WHERE b.user_id = ?1 ORDER BY t.created_at", cols(PLATFORM_COLS)),
+            &format!(
+                "SELECT {} FROM platforms t JOIN bots b ON b.id = t.bot_id WHERE b.user_id = ?1 ORDER BY t.created_at",
+                cols(PLATFORM_COLS)
+            ),
             args![user_id],
         )
         .await?;
     let plugins: Vec<PluginRow> = app
         .db
         .all(
-            &format!("SELECT {} FROM plugins t JOIN bots b ON b.id = t.bot_id WHERE b.user_id = ?1 ORDER BY t.created_at", cols(PLUGIN_COLS)),
+            &format!(
+                "SELECT {} FROM plugins t JOIN bots b ON b.id = t.bot_id WHERE b.user_id = ?1 ORDER BY t.created_at",
+                cols(PLUGIN_COLS)
+            ),
             args![user_id],
         )
         .await?;
     let mut items = Vec::new();
     for bot in &bots {
-        let views = platforms.iter().filter(|p| p.bot_id == bot.id).map(|p| app.platform_view(p)).collect::<ApiResult<Vec<_>>>()?;
+        let views = platforms
+            .iter()
+            .filter(|p| p.bot_id == bot.id)
+            .map(|p| app.platform_view(p))
+            .collect::<ApiResult<Vec<_>>>()?;
         let plugs: Vec<PluginRow> = plugins.iter().filter(|p| p.bot_id == bot.id).cloned().collect();
         items.push(bot_view(bot, views, &plugs));
     }
@@ -79,13 +95,23 @@ pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
     App::require_service(&user)?;
     let body: CreateReq = json_body(req).await?;
     let name = check_bot_name(&body.name)?;
-    let count = app.db.count("SELECT COUNT(*) AS n FROM bots WHERE user_id = ?1", args![user.id]).await?;
+    let count = app
+        .db
+        .count("SELECT COUNT(*) AS n FROM bots WHERE user_id = ?1", args![user.id])
+        .await?;
     if user.quota_bots >= 0 && count >= user.quota_bots {
         return Err(ApiError::quota(format!("最多可以创建 {} 只小鱼", user.quota_bots)));
     }
-    let key_id = body.key_id.as_deref().filter(|id| !id.is_empty())
+    let key_id = body
+        .key_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
         .ok_or_else(|| ApiError::bad_request("请选择模型 Key"))?;
-    let model = body.model.as_deref().map(str::trim).filter(|model| !model.is_empty())
+    let model = body
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
         .ok_or_else(|| ApiError::bad_request("请选择模型"))?;
     let settings = BotSettings::for_new_bot(&name, Some((key_id, model)));
     settings.validate().map_err(ApiError::bad_request)?;
@@ -149,7 +175,13 @@ pub async fn patch(req: &mut Request, app: &App, id: &str) -> ApiResult<Reply> {
     if let Some(patch) = &body.settings {
         settings = settings.apply_patch(patch).map_err(ApiError::bad_request)?;
         if let Some(kid) = &settings.llm.key_id {
-            let owned = app.db.count("SELECT COUNT(*) AS n FROM llm_keys WHERE id = ?1 AND user_id = ?2", args![kid, user.id]).await?;
+            let owned = app
+                .db
+                .count(
+                    "SELECT COUNT(*) AS n FROM llm_keys WHERE id = ?1 AND user_id = ?2",
+                    args![kid, user.id],
+                )
+                .await?;
             if owned == 0 {
                 return Err(ApiError::bad_request("所选的 API Key 不存在"));
             }
@@ -171,7 +203,11 @@ pub async fn lifecycle(req: &Request, app: &App, id: &str, action: &str) -> ApiR
     if action != "stop" {
         App::require_service(&user)?;
     }
-    let (running, status) = if action == "stop" { (0i64, "stopped") } else { (1i64, "starting") };
+    let (running, status) = if action == "stop" {
+        (0i64, "stopped")
+    } else {
+        (1i64, "starting")
+    };
     app.db
         .run(
             "UPDATE bots SET desired_running = ?2, status = ?3, status_detail = '', updated_at = ?4 WHERE id = ?1",
@@ -181,9 +217,15 @@ pub async fn lifecycle(req: &Request, app: &App, id: &str, action: &str) -> ApiR
     let pushed = app.push_bot(&bot.id).await?;
     if action == "restart" && pushed {
         let client = app.node_client(&bot.node_id).await?;
-        if let Err(e) = client.call(Method::Post, &format!("/v1/bots/{}/restart", bot.id), None, 8_000).await {
+        if let Err(e) = client
+            .call(Method::Post, &format!("/v1/bots/{}/restart", bot.id), None, 8_000)
+            .await
+        {
             app.db
-                .run("UPDATE bots SET status = 'error', status_detail = ?2 WHERE id = ?1", args![bot.id, e.detail()])
+                .run(
+                    "UPDATE bots SET status = 'error', status_detail = ?2 WHERE id = ?1",
+                    args![bot.id, e.detail()],
+                )
                 .await?;
         }
     }
@@ -207,10 +249,19 @@ pub async fn logs(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
 /// Proxies `GET /v1/bots/:id/logs` for `bot`, passing the `after` cursor of `req`.
 pub async fn proxy_logs(req: &Request, app: &App, bot: &BotRow) -> ApiResult<Reply> {
     let url = req.url()?;
-    let after = url.query_pairs().find(|(k, _)| k == "after").map(|(_, v)| v.into_owned()).unwrap_or_default();
-    let q: String = url::form_urlencoded::Serializer::new(String::new()).append_pair("after", &after).finish();
+    let after = url
+        .query_pairs()
+        .find(|(k, _)| k == "after")
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default();
+    let q: String = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("after", &after)
+        .finish();
     let client = app.node_client(&bot.node_id).await?;
-    match client.call(Method::Get, &format!("/v1/bots/{}/logs?{q}", bot.id), None, 8_000).await {
+    match client
+        .call(Method::Get, &format!("/v1/bots/{}/logs?{q}", bot.id), None, 8_000)
+        .await
+    {
         Ok(v) => Ok(Reply::json(json!({
             "items": v.get("items").cloned().unwrap_or_else(|| json!([])),
             "cursor": v.get("cursor").cloned().unwrap_or_else(|| json!(after)),

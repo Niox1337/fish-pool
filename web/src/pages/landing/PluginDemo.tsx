@@ -167,10 +167,19 @@ export default function PluginDemo() {
           ))}
         </div>
         <ul className="ls-legend">
-          <li><i className="ls-seg-core" />小鱼本体</li>
-          <li><i className="ls-seg-chat" />聊天记录</li>
+          <li>
+            <i className="ls-seg-core" />
+            小鱼本体
+          </li>
+          <li>
+            <i className="ls-seg-chat" />
+            聊天记录
+          </li>
           {shelved.map((r, i) => (
-            <li key={i}><i className={`ls-tone-${tone(r.name)}`} />{r.name}</li>
+            <li key={i}>
+              <i className={`ls-tone-${tone(r.name)}`} />
+              {r.name}
+            </li>
           ))}
         </ul>
       </div>

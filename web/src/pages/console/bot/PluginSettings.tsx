@@ -16,7 +16,12 @@ function readSettings(plugin: Plugin) {
   }
 }
 
-export function PluginSettings({ bot, plugin, onClose, returnFocus }: {
+export function PluginSettings({
+  bot,
+  plugin,
+  onClose,
+  returnFocus,
+}: {
   bot: Bot
   plugin: Plugin
   onClose: () => void
@@ -27,9 +32,7 @@ export function PluginSettings({ bot, plugin, onClose, returnFocus }: {
   const [invalid, setInvalid] = useState<Set<string>>(() => new Set())
   const [formVersion, setFormVersion] = useState(0)
   const [confirmClose, setConfirmClose] = useState(false)
-  const save = useBotMutation(bot.id, (config: Obj) =>
-    api.updatePlugin(bot.id, plugin.id, { config, config_revision: snapshot.revision }),
-  )
+  const save = useBotMutation(bot.id, (config: Obj) => api.updatePlugin(bot.id, plugin.id, { config, config_revision: snapshot.revision }))
   const dirty = invalid.size > 0 || JSON.stringify(value) !== JSON.stringify(snapshot.value)
   const stale = snapshot.revision !== plugin.config_revision
   const conflict = save.error instanceof ApiError && save.error.code === 'plugin_config_changed'
@@ -67,9 +70,7 @@ export function PluginSettings({ bot, plugin, onClose, returnFocus }: {
     save.reset()
   }
 
-  const description = !plugin.enabled ? '下次启用插件时生效。'
-    : bot.status === 'stopped' ? '下次启动小鱼时生效。'
-    : '保存后重载此插件。'
+  const description = !plugin.enabled ? '下次启用插件时生效。' : bot.status === 'stopped' ? '下次启动小鱼时生效。' : '保存后重载此插件。'
 
   return (
     <Sheet
@@ -77,7 +78,9 @@ export function PluginSettings({ bot, plugin, onClose, returnFocus }: {
       side="right"
       title={`${name} 设置`}
       description={description}
-      onOpenChange={(open) => { if (!open) requestClose() }}
+      onOpenChange={(open) => {
+        if (!open) requestClose()
+      }}
       returnFocus={returnFocus}
     >
       <form
@@ -103,23 +106,35 @@ export function PluginSettings({ bot, plugin, onClose, returnFocus }: {
           {save.error && !conflict && <ActionError error={save.error} />}
           {confirmClose ? (
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <p role="status" className="mr-auto text-sm text-ink">放弃未保存的修改？</p>
-              <Button variant="ghost" onClick={() => setConfirmClose(false)}>继续编辑</Button>
-              <Button variant="danger" onClick={onClose}>放弃修改</Button>
+              <p role="status" className="mr-auto text-sm text-ink">
+                放弃未保存的修改？
+              </p>
+              <Button variant="ghost" onClick={() => setConfirmClose(false)}>
+                继续编辑
+              </Button>
+              <Button variant="danger" onClick={onClose}>
+                放弃修改
+              </Button>
             </div>
           ) : (
             <>
               {(stale || conflict) && (
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p role="status" className="text-sm text-ink">重新载入最新设置会清除本次修改。</p>
-                  <Button size="sm" onClick={reload} disabled={!stale}>重新载入</Button>
+                  <p role="status" className="text-sm text-ink">
+                    重新载入最新设置会清除本次修改。
+                  </p>
+                  <Button size="sm" onClick={reload} disabled={!stale}>
+                    重新载入
+                  </Button>
                 </div>
               )}
               <div className="flex items-center justify-end gap-2">
                 <p role="status" className="mr-auto text-[13px] text-ink-3">
                   {invalid.size > 0 ? '请修正标出的设置项' : ''}
                 </p>
-                <Button variant="ghost" onClick={requestClose} disabled={save.isPending}>取消</Button>
+                <Button variant="ghost" onClick={requestClose} disabled={save.isPending}>
+                  取消
+                </Button>
                 <Button type="submit" variant="primary" loading={save.isPending} disabled={!dirty || invalid.size > 0 || stale || conflict}>
                   保存设置
                 </Button>

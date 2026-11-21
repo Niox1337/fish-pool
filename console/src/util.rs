@@ -103,7 +103,9 @@ pub fn valid_email(email: &str) -> bool {
     if email.len() > 254 || email.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return false;
     }
-    let Some((local, domain)) = email.split_once('@') else { return false };
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
     !local.is_empty()
         && !domain.contains('@')
         && domain.contains('.')
@@ -128,7 +130,10 @@ mod tests {
         assert!(a < b);
         assert!(a.chars().all(|c| CROCKFORD.contains(&(c as u8))));
         assert_eq!(ulid_from(0, [0; 10]), "0".repeat(26));
-        assert_eq!(ulid_from(0, [0xff; 10]), format!("{}{}", "0".repeat(10), "z".repeat(16)));
+        assert_eq!(
+            ulid_from(0, [0xff; 10]),
+            format!("{}{}", "0".repeat(10), "z".repeat(16))
+        );
     }
 
     #[test]

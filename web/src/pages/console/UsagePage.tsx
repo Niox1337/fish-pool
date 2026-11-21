@@ -9,10 +9,7 @@ export default function UsagePage() {
 
   return (
     <>
-      <PageHeader
-        title="资源用量"
-        description="每 30 秒刷新。"
-      />
+      <PageHeader title="资源用量" description="每 30 秒刷新。" />
       {usage.isLoading ? (
         <UsageSkeleton />
       ) : usage.error ? (

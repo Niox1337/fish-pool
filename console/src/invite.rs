@@ -25,7 +25,11 @@ pub fn generate() -> String {
 /// Canonical `FISH-XXXX-XXXX` form of user input, or None when it cannot be a code.
 /// Case, dashes and spaces are ignored, O reads as 0 and I or L read as 1.
 pub fn normalize(input: &str) -> Option<String> {
-    let compact: String = input.chars().filter(|c| *c != '-' && !c.is_whitespace()).collect::<String>().to_ascii_uppercase();
+    let compact: String = input
+        .chars()
+        .filter(|c| *c != '-' && !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
     let body = match compact.len() {
         12 => compact.strip_prefix(PREFIX).or_else(|| compact.strip_prefix("F1SH"))?,
         _ => compact.as_str(),
@@ -78,7 +82,12 @@ pub fn status_error(row: &InviteRow, now: i64) -> Option<ApiError> {
 }
 
 pub async fn find(app: &App, code: &str) -> ApiResult<Option<InviteRow>> {
-    app.db.first(&format!("SELECT {INVITE_COLS} FROM invite_codes WHERE code = ?1"), args![code]).await
+    app.db
+        .first(
+            &format!("SELECT {INVITE_COLS} FROM invite_codes WHERE code = ?1"),
+            args![code],
+        )
+        .await
 }
 
 /// Normalizes `input` and returns the invite when it can be redeemed now.
@@ -103,7 +112,10 @@ pub async fn failure(app: &App, code: &str, user_id: &str) -> ApiError {
     }
     let again = app
         .db
-        .count("SELECT COUNT(*) AS n FROM invite_redemptions WHERE code = ?1 AND user_id = ?2", args![code, user_id])
+        .count(
+            "SELECT COUNT(*) AS n FROM invite_redemptions WHERE code = ?1 AND user_id = ?2",
+            args![code, user_id],
+        )
         .await;
     if matches!(again, Ok(n) if n > 0) {
         return ApiError::new(400, "invite_used", "你已经使用过这个邀请码");

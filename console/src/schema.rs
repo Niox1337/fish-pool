@@ -42,7 +42,9 @@ pub fn defaults(schema: &Value) -> Value {
 
 /// Copies keys of `src` into `dst`. With `overwrite` existing keys are replaced, nested objects merge.
 pub fn merge_missing(dst: &mut Value, src: &Value, overwrite: bool) {
-    let (Some(d), Some(s)) = (dst.as_object_mut(), src.as_object()) else { return };
+    let (Some(d), Some(s)) = (dst.as_object_mut(), src.as_object()) else {
+        return;
+    };
     for (k, v) in s {
         match d.get_mut(k) {
             Some(existing) if existing.is_object() && v.is_object() => merge_missing(existing, v, overwrite),
@@ -90,8 +92,11 @@ fn check_field(path: &str, def: &Value, v: &Value) -> Result<(), String> {
     }
     if let ("template_list", Some(entries), Some(templates)) = (field_type(def), v.as_array(), def.get("templates")) {
         for (index, entry) in entries.iter().enumerate() {
-            if let Some(items) = entry.get("__template_key").and_then(Value::as_str)
-                .and_then(|key| templates.get(key)).and_then(|template| template.get("items"))
+            if let Some(items) = entry
+                .get("__template_key")
+                .and_then(Value::as_str)
+                .and_then(|key| templates.get(key))
+                .and_then(|template| template.get("items"))
             {
                 validate_at(&format!("{path}[{index}]"), items, entry)?;
             }
@@ -101,11 +106,19 @@ fn check_field(path: &str, def: &Value, v: &Value) -> Result<(), String> {
 }
 
 fn validate_at(prefix: &str, schema: &Value, config: &Value) -> Result<(), String> {
-    let Some(cfg) = config.as_object() else { return Err("配置必须是 JSON 对象".into()) };
-    let Some(fields) = schema.as_object() else { return Ok(()) };
+    let Some(cfg) = config.as_object() else {
+        return Err("配置必须是 JSON 对象".into());
+    };
+    let Some(fields) = schema.as_object() else {
+        return Ok(());
+    };
     for (k, v) in cfg {
         if let Some(def) = fields.get(k) {
-            let path = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+            let path = if prefix.is_empty() {
+                k.clone()
+            } else {
+                format!("{prefix}.{k}")
+            };
             check_field(&path, def, v)?;
         }
     }
@@ -190,10 +203,18 @@ mod tests {
         let schema = json!({"rules": {"type": "template_list", "templates": {
             "rule": {"items": {"count": {"type": "int"}}}
         }}});
-        assert!(validate(Some(&schema), &json!({"rules": [
-            {"__template_key": "rule", "count": 2}, {"__template_key": "removed", "extra": true}
-        ]})).is_ok());
-        let err = validate(Some(&schema), &json!({"rules": [{"__template_key": "rule", "count": "2"}]})).unwrap_err();
+        assert!(validate(
+            Some(&schema),
+            &json!({"rules": [
+                {"__template_key": "rule", "count": 2}, {"__template_key": "removed", "extra": true}
+            ]})
+        )
+        .is_ok());
+        let err = validate(
+            Some(&schema),
+            &json!({"rules": [{"__template_key": "rule", "count": "2"}]}),
+        )
+        .unwrap_err();
         assert!(err.contains("rules[0].count"));
     }
 }

@@ -141,7 +141,8 @@ export default function Landing() {
         </p>
         <img
           className="lp-plate lp-art"
-          src={illustration} data-plate="assets/plates/illustration.png"
+          src={illustration}
+          data-plate="assets/plates/illustration.png"
           alt="梗Wiki 的蓝发小老师在阅读角给四条大肥鱼小朋友讲绘本"
           fetchPriority="high"
         />
@@ -153,7 +154,7 @@ export default function Landing() {
         </h2>
         <span className="lp-divider" aria-hidden />
         <ol className="contents">
-          <li className="lp-step lp-step-1" data-reveal style={{ "--i": 0 } as CSSProperties}>
+          <li className="lp-step lp-step-1" data-reveal style={{ '--i': 0 } as CSSProperties}>
             <StarBadge n={1} className="lp-step-badge" />
             <QqPenguin className="lp-step-icon" />
             <span className="lp-step-text">
@@ -161,10 +162,10 @@ export default function Landing() {
               <small>（AppID 自动填好）</small>
             </span>
           </li>
-          <li className="lp-arrow lp-arrow-1" data-reveal style={{ "--i": 1 } as CSSProperties} aria-hidden>
+          <li className="lp-arrow lp-arrow-1" data-reveal style={{ '--i': 1 } as CSSProperties} aria-hidden>
             <ArrowRight strokeWidth={3} />
           </li>
-          <li className="lp-step lp-step-2" data-reveal style={{ "--i": 2 } as CSSProperties}>
+          <li className="lp-step lp-step-2" data-reveal style={{ '--i': 2 } as CSSProperties}>
             <StarBadge n={2} className="lp-step-badge" />
             <KeySolid className="lp-step-icon" />
             <span className="lp-step-text">
@@ -173,10 +174,10 @@ export default function Landing() {
               模型 Key
             </span>
           </li>
-          <li className="lp-arrow lp-arrow-2" data-reveal style={{ "--i": 3 } as CSSProperties} aria-hidden>
+          <li className="lp-arrow lp-arrow-2" data-reveal style={{ '--i': 3 } as CSSProperties} aria-hidden>
             <ArrowRight strokeWidth={3} />
           </li>
-          <li className="lp-step lp-step-3" data-reveal style={{ "--i": 4 } as CSSProperties}>
+          <li className="lp-step lp-step-3" data-reveal style={{ '--i': 4 } as CSSProperties}>
             <StarBadge n={3} className="lp-step-badge" />
             <CodeXml className="lp-step-icon" strokeWidth={2.4} />
             <span className="lp-step-text">

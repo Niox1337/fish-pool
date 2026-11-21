@@ -1,12 +1,12 @@
 //! Request context: env access, sessions, node selection and desired state pushes.
 
+use crate::args;
 use crate::crypto::{self, decode_key32};
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::models::*;
 use crate::node::{NodeClient, NodeError};
 use crate::util::{log_error, now_ms};
-use crate::args;
 use serde_json::{json, Value};
 use std::cell::Cell;
 use worker::{Env, Method, Request};
@@ -30,7 +30,8 @@ pub const BOT_COLS: &str = "id, user_id, name, avatar, node_id, status, status_d
 pub const SERVICE_EXPIRED_DETAIL: &str = "服务已到期，兑换新的邀请码后可以重新启动";
 
 pub const USER_COLS: &str = "id, email, password_hash, role, created_at, quota_memory_mb, quota_storage_mb, quota_bots, quota_plugins, last_login_at, service_until";
-pub const PLATFORM_COLS: &str = "id, bot_id, kind, display_name, app_id, secret_enc, extra_json, enabled, status, status_detail, created_at";
+pub const PLATFORM_COLS: &str =
+    "id, bot_id, kind, display_name, app_id, secret_enc, extra_json, enabled, status, status_detail, created_at";
 pub const PLUGIN_COLS: &str = "id, bot_id, repo_url, name, display_name, version, author, description, enabled, config_json, schema_json, status, status_detail, install_rev, commit_sha, created_at, updated_at";
 pub const KEY_COLS: &str = "id, user_id, name, base_url, model, api_key_enc, created_at";
 
@@ -43,7 +44,10 @@ pub fn cookie_value(header: &str, name: &str) -> Option<String> {
 }
 
 pub fn session_cookie(token: &str) -> String {
-    format!("{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}", SESSION_TTL_MS / 1000)
+    format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
+        SESSION_TTL_MS / 1000
+    )
 }
 
 pub fn clear_cookie() -> String {
@@ -60,7 +64,9 @@ impl App {
 
     /// Reads a plain var or secret as a string.
     pub fn var(&self, name: &str) -> Option<String> {
-        js_sys::Reflect::get(&self.env, &name.into()).ok().and_then(|v| v.as_string())
+        js_sys::Reflect::get(&self.env, &name.into())
+            .ok()
+            .and_then(|v| v.as_string())
     }
 
     pub fn data_key(&self) -> ApiResult<[u8; 32]> {
@@ -80,7 +86,16 @@ impl App {
 
     /// Secret of a node: `NODE_SECRET_<ID>` with non alphanumerics as `_`, else `NODE_SECRET`.
     pub fn node_secret(&self, node_id: &str) -> Option<[u8; 32]> {
-        let suffix: String = node_id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
+        let suffix: String = node_id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
         self.var(&format!("NODE_SECRET_{suffix}"))
             .or_else(|| self.var("NODE_SECRET"))
             .and_then(|s| decode_key32(&s))
@@ -101,7 +116,9 @@ impl App {
     }
 
     pub fn default_node_id(&self) -> String {
-        self.var("DEFAULT_NODE_ID").filter(|s| !s.is_empty()).unwrap_or_else(|| "node-1".into())
+        self.var("DEFAULT_NODE_ID")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "node-1".into())
     }
 
     /// Upserts the default node from `DEFAULT_NODE_URL` once per isolate.
@@ -138,7 +155,8 @@ impl App {
                 &[],
             )
             .await?;
-        pick.map(|p| p.id).ok_or_else(|| ApiError::new(503, "no_node", "暂无可用的运行节点，请联系管理员"))
+        pick.map(|p| p.id)
+            .ok_or_else(|| ApiError::new(503, "no_node", "暂无可用的运行节点，请联系管理员"))
     }
 
     pub async fn node_client(&self, node_id: &str) -> ApiResult<NodeClient> {
@@ -148,8 +166,14 @@ impl App {
             .first("SELECT id, base_url FROM nodes WHERE id = ?1", args![node_id])
             .await?
             .ok_or_else(|| ApiError::internal(format!("node {node_id} not found")))?;
-        let secret = self.node_secret(node_id).ok_or_else(|| ApiError::internal(format!("secret for node {node_id} missing")))?;
-        Ok(NodeClient { id: node.id, base_url: node.base_url, secret })
+        let secret = self
+            .node_secret(node_id)
+            .ok_or_else(|| ApiError::internal(format!("secret for node {node_id} missing")))?;
+        Ok(NodeClient {
+            id: node.id,
+            base_url: node.base_url,
+            secret,
+        })
     }
 
     // ---------- sessions ----------
@@ -177,13 +201,20 @@ impl App {
     }
 
     pub async fn mark_node_seen(&self, node_id: &str) -> ApiResult<()> {
-        self.db.run("UPDATE nodes SET last_seen_at = ?2 WHERE id = ?1", args![node_id, now_ms()]).await?;
+        self.db
+            .run(
+                "UPDATE nodes SET last_seen_at = ?2 WHERE id = ?1",
+                args![node_id, now_ms()],
+            )
+            .await?;
         Ok(())
     }
 
     pub async fn optional_user(&self, req: &Request) -> ApiResult<Option<UserRow>> {
         let header = req.headers().get("cookie").ok().flatten().unwrap_or_default();
-        let Some(token) = cookie_value(&header, SESSION_COOKIE).filter(|t| !t.is_empty()) else { return Ok(None) };
+        let Some(token) = cookie_value(&header, SESSION_COOKIE).filter(|t| !t.is_empty()) else {
+            return Ok(None);
+        };
         let hash = crypto::sha256_hex(token.as_bytes());
         self.db
             .first(
@@ -198,7 +229,10 @@ impl App {
 
     /// Creates a session and returns the Set-Cookie value.
     pub async fn create_session(&self, user_id: &str, user_agent: &str) -> ApiResult<String> {
-        let token = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, crate::util::random_bytes::<32>());
+        let token = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            crate::util::random_bytes::<32>(),
+        );
         let now = now_ms();
         let ua: String = user_agent.chars().take(300).collect();
         self.db
@@ -217,12 +251,20 @@ impl App {
 
     pub async fn rate_count(&self, bucket: &str, window_ms: i64) -> ApiResult<i64> {
         self.db
-            .count("SELECT COUNT(*) AS n FROM rate_events WHERE bucket = ?1 AND created_at > ?2", args![bucket, now_ms() - window_ms])
+            .count(
+                "SELECT COUNT(*) AS n FROM rate_events WHERE bucket = ?1 AND created_at > ?2",
+                args![bucket, now_ms() - window_ms],
+            )
             .await
     }
 
     pub async fn rate_hit(&self, bucket: &str) -> ApiResult<()> {
-        self.db.run("INSERT INTO rate_events (bucket, created_at) VALUES (?1, ?2)", args![bucket, now_ms()]).await?;
+        self.db
+            .run(
+                "INSERT INTO rate_events (bucket, created_at) VALUES (?1, ?2)",
+                args![bucket, now_ms()],
+            )
+            .await?;
         Ok(())
     }
 
@@ -237,24 +279,35 @@ impl App {
 
     pub async fn owned_bot(&self, user: &UserRow, bot_id: &str) -> ApiResult<BotRow> {
         self.db
-            .first(&format!("SELECT {BOT_COLS} FROM bots WHERE id = ?1 AND user_id = ?2"), args![bot_id, user.id])
+            .first(
+                &format!("SELECT {BOT_COLS} FROM bots WHERE id = ?1 AND user_id = ?2"),
+                args![bot_id, user.id],
+            )
             .await?
             .ok_or_else(|| ApiError::not_found("小鱼不存在"))
     }
 
     pub async fn bot_by_id(&self, bot_id: &str) -> ApiResult<Option<BotRow>> {
-        self.db.first(&format!("SELECT {BOT_COLS} FROM bots WHERE id = ?1"), args![bot_id]).await
+        self.db
+            .first(&format!("SELECT {BOT_COLS} FROM bots WHERE id = ?1"), args![bot_id])
+            .await
     }
 
     pub async fn bot_platforms(&self, bot_id: &str) -> ApiResult<Vec<PlatformRow>> {
         self.db
-            .all(&format!("SELECT {PLATFORM_COLS} FROM platforms WHERE bot_id = ?1 ORDER BY created_at"), args![bot_id])
+            .all(
+                &format!("SELECT {PLATFORM_COLS} FROM platforms WHERE bot_id = ?1 ORDER BY created_at"),
+                args![bot_id],
+            )
             .await
     }
 
     pub async fn bot_plugins(&self, bot_id: &str) -> ApiResult<Vec<PluginRow>> {
         self.db
-            .all(&format!("SELECT {PLUGIN_COLS} FROM plugins WHERE bot_id = ?1 ORDER BY created_at"), args![bot_id])
+            .all(
+                &format!("SELECT {PLUGIN_COLS} FROM plugins WHERE bot_id = ?1 ORDER BY created_at"),
+                args![bot_id],
+            )
             .await
     }
 
@@ -264,10 +317,16 @@ impl App {
     }
 
     pub async fn bot_json(&self, bot_id: &str) -> ApiResult<Value> {
-        let bot = self.bot_by_id(bot_id).await?.ok_or_else(|| ApiError::not_found("小鱼不存在"))?;
+        let bot = self
+            .bot_by_id(bot_id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("小鱼不存在"))?;
         let platforms = self.bot_platforms(bot_id).await?;
         let plugins = self.bot_plugins(bot_id).await?;
-        let views = platforms.iter().map(|p| self.platform_view(p)).collect::<ApiResult<Vec<_>>>()?;
+        let views = platforms
+            .iter()
+            .map(|p| self.platform_view(p))
+            .collect::<ApiResult<Vec<_>>>()?;
         Ok(bot_view(&bot, views, &plugins))
     }
 
@@ -277,7 +336,14 @@ impl App {
         let plugins = self.bot_plugins(&bot.id).await?;
         let settings = crate::settings::BotSettings::from_stored(&bot.settings_json);
         let key: Option<LlmKeyRow> = match settings.llm.key_id.as_deref() {
-            Some(kid) => self.db.first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"), args![kid, user.id]).await?,
+            Some(kid) => {
+                self.db
+                    .first(
+                        &format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"),
+                        args![kid, user.id],
+                    )
+                    .await?
+            }
             None => None,
         };
         let dec = self.decryptor()?;
@@ -291,12 +357,22 @@ impl App {
     /// Pushes the desired state of a bot. D1 records the outcome: on failure the bot is marked
     /// `error` with `needs_push = 1`, on success `needs_push` is cleared. Returns whether it succeeded.
     pub async fn push_bot(&self, bot_id: &str) -> ApiResult<bool> {
-        let Some(bot) = self.bot_by_id(bot_id).await? else { return Ok(false) };
+        let Some(bot) = self.bot_by_id(bot_id).await? else {
+            return Ok(false);
+        };
         let desired = self.desired_for(&bot).await?;
         let client = self.node_client(&bot.node_id).await?;
         let body = serde_json::to_value(&desired)?;
         let now = now_ms();
-        match client.call(Method::Put, &format!("/v1/bots/{}", bot.id), Some(&body), PUSH_TIMEOUT_MS).await {
+        match client
+            .call(
+                Method::Put,
+                &format!("/v1/bots/{}", bot.id),
+                Some(&body),
+                PUSH_TIMEOUT_MS,
+            )
+            .await
+        {
             Ok(_) => {
                 // A bot that was in error because of a failed push returns to its intended state.
                 let fallback = if desired.running { "starting" } else { "stopped" };
@@ -331,8 +407,19 @@ impl App {
             id: String,
         }
         let ids: Vec<Id> = match node_id {
-            Some(n) => self.db.all("SELECT id FROM bots WHERE needs_push = 1 AND node_id = ?1 LIMIT ?2", args![n, limit]).await?,
-            None => self.db.all("SELECT id FROM bots WHERE needs_push = 1 LIMIT ?1", args![limit]).await?,
+            Some(n) => {
+                self.db
+                    .all(
+                        "SELECT id FROM bots WHERE needs_push = 1 AND node_id = ?1 LIMIT ?2",
+                        args![n, limit],
+                    )
+                    .await?
+            }
+            None => {
+                self.db
+                    .all("SELECT id FROM bots WHERE needs_push = 1 LIMIT ?1", args![limit])
+                    .await?
+            }
         };
         let mut ok = 0;
         for id in ids {
@@ -346,13 +433,20 @@ impl App {
     /// Removes a deleted bot from its node, leaving a tombstone for later retries on failure.
     pub async fn delete_on_node(&self, bot_id: &str, node_id: &str) -> ApiResult<bool> {
         let client = self.node_client(node_id).await?;
-        match client.call(Method::Delete, &format!("/v1/bots/{bot_id}"), None, PUSH_TIMEOUT_MS).await {
+        match client
+            .call(Method::Delete, &format!("/v1/bots/{bot_id}"), None, PUSH_TIMEOUT_MS)
+            .await
+        {
             Ok(_) => {
-                self.db.run("DELETE FROM node_tombstones WHERE bot_id = ?1", args![bot_id]).await?;
+                self.db
+                    .run("DELETE FROM node_tombstones WHERE bot_id = ?1", args![bot_id])
+                    .await?;
                 Ok(true)
             }
             Err(e) if e.is_not_found() => {
-                self.db.run("DELETE FROM node_tombstones WHERE bot_id = ?1", args![bot_id]).await?;
+                self.db
+                    .run("DELETE FROM node_tombstones WHERE bot_id = ?1", args![bot_id])
+                    .await?;
                 Ok(true)
             }
             Err(e) => {
@@ -404,7 +498,10 @@ impl App {
         let bot_status = s(status, "status");
         if valid_bot_status(&bot_status) {
             stmts.push(self.db.stmt(
-                &format!("UPDATE bots SET status = ?2, status_detail = {} WHERE id = ?1 AND needs_push = 0", keep_expiry_detail("?2", "?3")),
+                &format!(
+                    "UPDATE bots SET status = ?2, status_detail = {} WHERE id = ?1 AND needs_push = 0",
+                    keep_expiry_detail("?2", "?3")
+                ),
                 args![bot_id, bot_status, s(status, "status_detail")],
             )?);
         }
@@ -438,7 +535,10 @@ pub fn valid_platform_status(s: &str) -> bool {
     matches!(s, "connected" | "connecting" | "error" | "disabled")
 }
 pub fn valid_plugin_status(s: &str) -> bool {
-    matches!(s, "installing" | "running" | "sleeping" | "stopped" | "error" | "over_quota")
+    matches!(
+        s,
+        "installing" | "running" | "sleeping" | "stopped" | "error" | "over_quota"
+    )
 }
 
 /// SQL expression for a new bot status_detail that keeps the expiry note while the bot
@@ -457,7 +557,10 @@ mod tests {
 
     #[test]
     fn cookies() {
-        assert_eq!(cookie_value("a=1; fish_session=tok; b=2", "fish_session").as_deref(), Some("tok"));
+        assert_eq!(
+            cookie_value("a=1; fish_session=tok; b=2", "fish_session").as_deref(),
+            Some("tok")
+        );
         assert_eq!(cookie_value("fish_session_x=1", "fish_session"), None);
         assert_eq!(cookie_value("", "fish_session"), None);
         let c = session_cookie("t");

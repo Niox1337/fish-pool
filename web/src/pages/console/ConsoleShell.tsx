@@ -47,10 +47,7 @@ function TabLink({ to, label, icon: Icon, end }: { to: string; label: string; ic
       to={to}
       end={end}
       className={({ isActive }) =>
-        cn(
-          'flex min-w-0 flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold',
-          isActive ? 'text-star' : 'text-white/75',
-        )
+        cn('flex min-w-0 flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold', isActive ? 'text-star' : 'text-white/75')
       }
     >
       <Icon className="size-5" aria-hidden />
@@ -92,12 +89,7 @@ export default function ConsoleShell() {
   }
 
   const left = daysLeft(me.service_until)
-  const serviceLine =
-    me.role === 'admin'
-      ? '管理员'
-      : me.service_active
-        ? `服务到 ${fmtDate(me.service_until)}`
-        : '服务已到期'
+  const serviceLine = me.role === 'admin' ? '管理员' : me.service_active ? `服务到 ${fmtDate(me.service_until)}` : '服务已到期'
 
   return (
     <div className="min-h-dvh bg-paper lg:grid lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -126,9 +118,7 @@ export default function ConsoleShell() {
           <p className="truncate text-sm font-semibold" title={me.email}>
             {me.email}
           </p>
-          <p className={cn('mt-0.5 text-[13px] tabular-nums', me.service_active ? 'text-white/65' : 'text-pink')}>
-            {serviceLine}
-          </p>
+          <p className={cn('mt-0.5 text-[13px] tabular-nums', me.service_active ? 'text-white/65' : 'text-pink')}>{serviceLine}</p>
           <button
             type="button"
             onClick={logout}
@@ -194,10 +184,7 @@ export default function ConsoleShell() {
         </main>
       </div>
 
-      <nav
-        aria-label="控制台"
-        className="fixed inset-x-0 bottom-0 z-30 flex bg-cobalt px-1 pb-[env(safe-area-inset-bottom)] lg:hidden"
-      >
+      <nav aria-label="控制台" className="fixed inset-x-0 bottom-0 z-30 flex bg-cobalt px-1 pb-[env(safe-area-inset-bottom)] lg:hidden">
         {(inAdmin ? admin : main).map((l) => (
           <TabLink key={l.to} {...l} />
         ))}

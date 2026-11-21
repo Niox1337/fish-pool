@@ -1,15 +1,15 @@
 //! `/api/*` routing.
 
 mod admin;
+pub mod archive;
 mod auth;
 mod bots;
-mod internal;
-pub mod archive;
-pub(crate) mod keys;
 mod credits;
+mod internal;
+pub(crate) mod keys;
+mod market;
 mod platforms;
 mod plugins;
-mod market;
 mod usage;
 
 use crate::app::App;
@@ -28,7 +28,11 @@ pub struct Reply {
 
 impl Reply {
     pub fn json(body: Value) -> Self {
-        Self { status: 200, body, cookies: vec![] }
+        Self {
+            status: 200,
+            body,
+            cookies: vec![],
+        }
     }
     pub fn with_cookie(mut self, cookie: String) -> Self {
         self.cookies.push(cookie);
@@ -48,12 +52,20 @@ pub async fn read_body(req: &mut Request) -> ApiResult<Vec<u8>> {
 
 pub async fn json_body<T: DeserializeOwned>(req: &mut Request) -> ApiResult<T> {
     let bytes = read_body(req).await?;
-    let slice: &[u8] = if bytes.iter().all(|b| b.is_ascii_whitespace()) { b"{}" } else { &bytes };
+    let slice: &[u8] = if bytes.iter().all(|b| b.is_ascii_whitespace()) {
+        b"{}"
+    } else {
+        &bytes
+    };
     serde_json::from_slice(slice).map_err(|e| ApiError::bad_request(format!("请求格式错误：{e}")))
 }
 
 pub fn client_ip(req: &Request) -> String {
-    req.headers().get("cf-connecting-ip").ok().flatten().unwrap_or_else(|| "unknown".into())
+    req.headers()
+        .get("cf-connecting-ip")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub fn user_agent(req: &Request) -> String {
@@ -67,7 +79,12 @@ fn is_mutating(m: &Method) -> bool {
 pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
     let method = req.method();
     let path = req.path();
-    let segs: Vec<String> = path.trim_start_matches("/api/").split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    let segs: Vec<String> = path
+        .trim_start_matches("/api/")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
     let s: Vec<&str> = segs.iter().map(String::as_str).collect();
 
     let internal = s.first() == Some(&"internal");
@@ -75,7 +92,11 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
     if is_mutating(&method) && !internal && !qq_callback {
         let csrf = req.headers().get("x-fish-csrf").ok().flatten();
         if csrf.as_deref() != Some("1") {
-            return Err(ApiError::new(403, "csrf_failed", "请求缺少安全校验头，请刷新页面后重试"));
+            return Err(ApiError::new(
+                403,
+                "csrf_failed",
+                "请求缺少安全校验头，请刷新页面后重试",
+            ));
         }
     }
 
@@ -105,12 +126,20 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Post, ["bots", id, action @ ("start" | "stop" | "restart")]) => bots::lifecycle(&req, app, id, action).await,
         (Get, ["bots", id, "logs"]) => bots::logs(&req, app, id).await,
 
-        (Post, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr"]) => platforms::qr_start(&req, app, id, kind).await,
-        (Get, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr", task]) => platforms::qr_poll(&req, app, id, kind, task).await,
+        (Post, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr"]) => {
+            platforms::qr_start(&req, app, id, kind).await
+        }
+        (Get, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr", task]) => {
+            platforms::qr_poll(&req, app, id, kind, task).await
+        }
         (Post, ["qq", "webhook", pid]) => platforms::qq_webhook(&mut req, app, pid).await,
         (Post, ["bots", id, "platforms", "qq", "manual"]) => platforms::qq_manual(&mut req, app, id).await,
-        (method @ (Get | Post), ["bots", id, "platforms", pid, "qq-panels"]) => platforms::qq_panels(&mut req, app, id, pid, method, None).await,
-        (method @ (Put | Delete), ["bots", id, "platforms", pid, "qq-panels", panel]) => platforms::qq_panels(&mut req, app, id, pid, method, Some(panel)).await,
+        (method @ (Get | Post), ["bots", id, "platforms", pid, "qq-panels"]) => {
+            platforms::qq_panels(&mut req, app, id, pid, method, None).await
+        }
+        (method @ (Put | Delete), ["bots", id, "platforms", pid, "qq-panels", panel]) => {
+            platforms::qq_panels(&mut req, app, id, pid, method, Some(panel)).await
+        }
         (Patch, ["bots", id, "platforms", pid]) => platforms::patch(&mut req, app, id, pid).await,
         (Delete, ["bots", id, "platforms", pid]) => platforms::delete(&req, app, id, pid).await,
 

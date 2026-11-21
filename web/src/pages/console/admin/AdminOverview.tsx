@@ -28,7 +28,14 @@ const n = (v: number) => v.toLocaleString('zh-CN')
 function Counts({ o }: { o: Overview }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <Block title="用户" aside={<Link to="/app/admin/users" className="text-[13px] font-semibold text-sky">全部用户</Link>}>
+      <Block
+        title="用户"
+        aside={
+          <Link to="/app/admin/users" className="text-[13px] font-semibold text-sky">
+            全部用户
+          </Link>
+        }
+      >
         <dl className="grid grid-cols-3 gap-x-3 gap-y-3">
           <Stat label="总数" value={n(o.users.total)} />
           <Stat label="7 天新增" value={n(o.users.new_7d)} />
@@ -78,8 +85,18 @@ function Counts({ o }: { o: Overview }) {
       </Block>
       <Block title="总用量">
         <div className="grid gap-4">
-          <FoodBar label="内存" compact capacity={o.usage.quota_memory_mb * MB} servings={[{ key: 'm', label: '全部用户', bytes: o.usage.memory_bytes }]} />
-          <FoodBar label="存储" compact capacity={o.usage.quota_storage_mb * MB} servings={[{ key: 's', label: '全部用户', bytes: o.usage.storage_bytes }]} />
+          <FoodBar
+            label="内存"
+            compact
+            capacity={o.usage.quota_memory_mb * MB}
+            servings={[{ key: 'm', label: '全部用户', bytes: o.usage.memory_bytes }]}
+          />
+          <FoodBar
+            label="存储"
+            compact
+            capacity={o.usage.quota_storage_mb * MB}
+            servings={[{ key: 's', label: '全部用户', bytes: o.usage.storage_bytes }]}
+          />
           <p className="text-[13px] text-ink-3">用量 / 全部用户额度</p>
         </div>
       </Block>
@@ -94,9 +111,13 @@ function PluginCpu({ cpu, nodeCount }: { cpu: Overview['plugin_cpu']; nodeCount:
   return (
     <section aria-labelledby="ov-plugin-cpu">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 id="ov-plugin-cpu" className="font-display text-lg font-black text-ink">插件 CPU 用量</h2>
+        <h2 id="ov-plugin-cpu" className="font-display text-lg font-black text-ink">
+          插件 CPU 用量
+        </h2>
         {cpu?.percent != null && (
-          <p className="text-sm text-ink-2">已上报节点合计 <strong className="tabular-nums text-ink">{cpu.percent.toFixed(1)}%</strong></p>
+          <p className="text-sm text-ink-2">
+            已上报节点合计 <strong className="tabular-nums text-ink">{cpu.percent.toFixed(1)}%</strong>
+          </p>
         )}
       </div>
       <p className="mt-1 text-sm text-ink-3">
@@ -113,7 +134,9 @@ function PluginCpu({ cpu, nodeCount }: { cpu: Overview['plugin_cpu']; nodeCount:
               <div className="min-w-0 flex-1">
                 <p className="break-words font-semibold text-ink">{item.label}</p>
                 <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-ink-3">
-                  <Link to={`/app/admin/users/${item.user_id}/usage`} className="break-all text-sky underline underline-offset-2">{item.bot_name}的用量</Link>
+                  <Link to={`/app/admin/users/${item.user_id}/usage`} className="break-all text-sky underline underline-offset-2">
+                    {item.bot_name}的用量
+                  </Link>
                   <span>{item.node_id}</span>
                   <span>{fmtAgo(item.sampled_at)}采样</span>
                 </p>
@@ -161,7 +184,10 @@ function Problems({ items }: { items: AdminProblem[] }) {
                     <span className="tabular-nums">{fmtAgo(p.updated_at)}</span>
                   </p>
                 </div>
-                <ChevronRight className="mt-1 size-4 shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5" aria-hidden />
+                <ChevronRight
+                  className="mt-1 size-4 shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5"
+                  aria-hidden
+                />
               </Link>
             </li>
           ))}
@@ -179,7 +205,10 @@ function MemUse({ node }: { node: AdminNode }) {
         {fmtBytes(node.memory_used_bytes)} / {fmtBytes(node.memory_total_bytes)}
       </span>
       <span className="h-1.5 w-full max-w-36 overflow-hidden rounded-full bg-paper-2" aria-hidden>
-        <span className={cn('block h-full rounded-full', p > 85 ? 'bg-bad' : p > 70 ? 'bg-star-2' : 'bg-cobalt')} style={{ width: `${p}%` }} />
+        <span
+          className={cn('block h-full rounded-full', p > 85 ? 'bg-bad' : p > 70 ? 'bg-star-2' : 'bg-cobalt')}
+          style={{ width: `${p}%` }}
+        />
       </span>
     </div>
   )
@@ -204,12 +233,24 @@ function Nodes({ nodes }: { nodes: AdminNode[] }) {
           <table className="hidden w-full overflow-hidden rounded-2xl border border-paper-3 bg-cream text-sm md:table">
             <thead>
               <tr className="border-b border-paper-3 text-left text-[13px] text-ink-3">
-                <th scope="col" className="px-4 py-2.5 font-semibold">节点</th>
-                <th scope="col" className="px-3 py-2.5 font-semibold">状态</th>
-                <th scope="col" className="px-3 py-2.5 font-semibold">版本</th>
-                <th scope="col" className="px-3 py-2.5 font-semibold">内存</th>
-                <th scope="col" className="px-3 py-2.5 text-right font-semibold">小鱼</th>
-                <th scope="col" className="px-4 py-2.5 text-right font-semibold">最后联系</th>
+                <th scope="col" className="px-4 py-2.5 font-semibold">
+                  节点
+                </th>
+                <th scope="col" className="px-3 py-2.5 font-semibold">
+                  状态
+                </th>
+                <th scope="col" className="px-3 py-2.5 font-semibold">
+                  版本
+                </th>
+                <th scope="col" className="px-3 py-2.5 font-semibold">
+                  内存
+                </th>
+                <th scope="col" className="px-3 py-2.5 text-right font-semibold">
+                  小鱼
+                </th>
+                <th scope="col" className="px-4 py-2.5 text-right font-semibold">
+                  最后联系
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -220,9 +261,13 @@ function Nodes({ nodes }: { nodes: AdminNode[] }) {
                     <span className="block font-mono text-[12px] text-ink-3">{nd.base_url}</span>
                     {nd.error && <span className="mt-1 block text-[13px] text-bad">{nd.error}</span>}
                   </th>
-                  <td className="px-3 py-3"><NodeState node={nd} /></td>
+                  <td className="px-3 py-3">
+                    <NodeState node={nd} />
+                  </td>
                   <td className="px-3 py-3 font-mono text-[13px] text-ink-2">{nd.version || '未知'}</td>
-                  <td className="px-3 py-3"><MemUse node={nd} /></td>
+                  <td className="px-3 py-3">
+                    <MemUse node={nd} />
+                  </td>
                   <td className="px-3 py-3 text-right tabular-nums text-ink">{nd.bots}</td>
                   <td className="px-4 py-3 text-right text-ink-2 tabular-nums">{fmtAgo(nd.last_seen)}</td>
                 </tr>
@@ -242,7 +287,9 @@ function Nodes({ nodes }: { nodes: AdminNode[] }) {
                 <dl className="mt-3 grid grid-cols-[1fr_auto_auto] items-end gap-x-4 text-[13px]">
                   <div>
                     <dt className="text-ink-3">内存</dt>
-                    <dd><MemUse node={nd} /></dd>
+                    <dd>
+                      <MemUse node={nd} />
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-ink-3">小鱼</dt>

@@ -82,9 +82,9 @@ export const api = {
   captcha: () => get<{ id: string; svg: string }>('/captcha'),
   sendCode: (b: { email: string; purpose: 'register' | 'reset'; captcha_id: string; captcha_answer: string; invite_code?: string }) =>
     post<{ ok: true; cooldown_s: number }>('/auth/email-code', b),
-  register: (b: { email: string; password: string; code: string; invite_code: string; agree: true }) => post<{ user: User }>('/auth/register', b),
-  login: (b: { email: string; password: string; captcha_id?: string; captcha_answer?: string }) =>
-    post<{ user: User }>('/auth/login', b),
+  register: (b: { email: string; password: string; code: string; invite_code: string; agree: true }) =>
+    post<{ user: User }>('/auth/register', b),
+  login: (b: { email: string; password: string; captcha_id?: string; captcha_answer?: string }) => post<{ user: User }>('/auth/login', b),
   logout: () => post<{ ok: true }>('/auth/logout'),
   reset: (b: { email: string; code: string; password: string }) => post<{ ok: true }>('/auth/reset', b),
   me: () => get<{ user: User }>('/me'),
@@ -116,9 +116,11 @@ export const api = {
   createQqPanel: (id: string, pid: string, scope: QqPanelScope, panel: QqPanel) =>
     post<{ panel_id: string }>(qqPanelsPath(id, pid), { scope, panel }),
   updateQqPanel: (id: string, pid: string, panelId: string, panel: QqPanel, expectedVersion?: number) =>
-    request<{ version: number }>('PUT', `${qqPanelsPath(id, pid)}/${encodeURIComponent(panelId)}`, { panel, expected_version: expectedVersion }),
-  deleteQqPanel: (id: string, pid: string, panelId: string) =>
-    del<{ ok: true }>(`${qqPanelsPath(id, pid)}/${encodeURIComponent(panelId)}`),
+    request<{ version: number }>('PUT', `${qqPanelsPath(id, pid)}/${encodeURIComponent(panelId)}`, {
+      panel,
+      expected_version: expectedVersion,
+    }),
+  deleteQqPanel: (id: string, pid: string, panelId: string) => del<{ ok: true }>(`${qqPanelsPath(id, pid)}/${encodeURIComponent(panelId)}`),
 
   pluginMarket: () => get<{ items: MarketPlugin[] }>('/plugins/market'),
   addPlugin: (id: string, plugin_id: string) => post<Plugin>(`/bots/${id}/plugins`, { plugin_id }),
@@ -151,7 +153,14 @@ export const api = {
     post<AdminCredits>(`/admin/users/${userId}/credits`, b),
   adminPatchCredit: (userId: string, creditId: string, b: { amount?: string; expires_at?: number | null }) =>
     patch<AdminCredits>(`/admin/users/${userId}/credits/${creditId}`, b),
-  adminCreateInvites: (b: { days: number; count: number; quota: Quota; max_uses?: number; note?: string; expires_at?: number | null; gateway_budget?: string }) =>
-    post<{ items: Invite[] }>('/admin/invites', b),
+  adminCreateInvites: (b: {
+    days: number
+    count: number
+    quota: Quota
+    max_uses?: number
+    note?: string
+    expires_at?: number | null
+    gateway_budget?: string
+  }) => post<{ items: Invite[] }>('/admin/invites', b),
   adminRevokeInvite: (code: string) => del<{ ok: true }>(`/admin/invites/${encodeURIComponent(code)}`),
 }

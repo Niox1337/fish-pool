@@ -135,7 +135,15 @@ def default_llm(message: dict) -> dict:
 class PluginProc:
     """Node side of one plugin process socket."""
 
-    def __init__(self, proc_id: str, pid: int, lines: Lines, writer: asyncio.StreamWriter, hello: dict, llm: Callable[[dict], dict]) -> None:
+    def __init__(
+        self,
+        proc_id: str,
+        pid: int,
+        lines: Lines,
+        writer: asyncio.StreamWriter,
+        hello: dict,
+        llm: Callable[[dict], dict],
+    ) -> None:
         self.proc_id = proc_id
         self.pid = pid
         self.lines = lines
@@ -171,7 +179,8 @@ class PluginProc:
             if remaining <= 0:
                 raise TimeoutError(f"no matching plugin message, backlog={self.lines.backlog}")
             m = await self.lines.next(
-                lambda m: m.get("op") in ("llm", "log", "send_to") or pred(m), remaining,
+                lambda m: m.get("op") in ("llm", "log", "send_to") or pred(m),
+                remaining,
             )
             await self._service(m)
             if pred(m):
@@ -254,7 +263,9 @@ class FakeNode:
             await self.control.write({"op": "kill", "proc_id": proc.proc_id})
         for proc in self.procs:
             try:
-                await self.control.lines.next(lambda m, p=proc: m.get("op") == "exited" and m.get("proc_id") == p.proc_id, 10)
+                await self.control.lines.next(
+                    lambda m, p=proc: m.get("op") == "exited" and m.get("proc_id") == p.proc_id, 10
+                )
             except (TimeoutError, EOFError):
                 pass
         await self.control.close()
@@ -263,8 +274,14 @@ class FakeNode:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     async def spawn_raw(
-        self, plugin: str, config: dict | None = None, plugin_dir: str | None = None,
-        *, wait_for_memory_limit: bool = False, share_key: str | None = None, data_dir: str | None = None,
+        self,
+        plugin: str,
+        config: dict | None = None,
+        plugin_dir: str | None = None,
+        *,
+        wait_for_memory_limit: bool = False,
+        share_key: str | None = None,
+        data_dir: str | None = None,
     ) -> tuple[str, dict, asyncio.Future]:
         """Sends spawn and returns the reply plus a future for the child connection."""
         assert self.control is not None
@@ -296,7 +313,9 @@ class FakeNode:
             spec["share_key"] = share_key
             spec["config_on_socket"] = True
         await self.control.write(spec)
-        reply = await self.control.lines.next(lambda m: m.get("proc_id") == proc_id and m.get("op") in ("spawned", "error"))
+        reply = await self.control.lines.next(
+            lambda m: m.get("proc_id") == proc_id and m.get("op") in ("spawned", "error")
+        )
         return proc_id, reply, conn
 
     async def group(self) -> GroupConn:
@@ -314,11 +333,22 @@ class FakeNode:
 
         srv = await asyncio.start_unix_server(on_conn, sock, limit=64 * 1024 * 1024)
         self.servers.append(srv)
-        await self.control.write({
-            "op": "spawn", "mode": "group", "proc_id": proc_id, "plugin_dir": workdir, "data_dir": workdir,
-            "plugin_name": "group", "bot_id": "bot1", "socket": sock, "wait_for_memory_limit": False,
-        })
-        reply = await self.control.lines.next(lambda m: m.get("proc_id") == proc_id and m.get("op") in ("spawned", "error"))
+        await self.control.write(
+            {
+                "op": "spawn",
+                "mode": "group",
+                "proc_id": proc_id,
+                "plugin_dir": workdir,
+                "data_dir": workdir,
+                "plugin_name": "group",
+                "bot_id": "bot1",
+                "socket": sock,
+                "wait_for_memory_limit": False,
+            }
+        )
+        reply = await self.control.lines.next(
+            lambda m: m.get("proc_id") == proc_id and m.get("op") in ("spawned", "error")
+        )
         assert reply["op"] == "spawned", reply
         reader, writer = await asyncio.wait_for(conn, TIMEOUT)
         lines = Lines(reader)
@@ -328,8 +358,14 @@ class FakeNode:
         return group
 
     async def spawn(
-        self, plugin: str, config: dict | None = None, llm: Callable[[dict], dict] = default_llm,
-        *, share_key: str | None = None, plugin_dir: str | None = None, data_dir: str | None = None,
+        self,
+        plugin: str,
+        config: dict | None = None,
+        llm: Callable[[dict], dict] = default_llm,
+        *,
+        share_key: str | None = None,
+        plugin_dir: str | None = None,
+        data_dir: str | None = None,
     ) -> PluginProc:
         proc_id, reply, conn = await self.spawn_raw(plugin, config, plugin_dir, share_key=share_key, data_dir=data_dir)
         assert reply["op"] == "spawned", reply
@@ -367,7 +403,9 @@ class GroupConn:
         self.writer.write(json.dumps(message).encode() + b"\n")
         await self.writer.drain()
 
-    async def load_raw(self, plugin: str, config: dict | None = None, plugin_dir: str | None = None, data_dir: str | None = None) -> tuple[str, Lines, asyncio.StreamWriter]:
+    async def load_raw(
+        self, plugin: str, config: dict | None = None, plugin_dir: str | None = None, data_dir: str | None = None
+    ) -> tuple[str, Lines, asyncio.StreamWriter]:
         """Sends load and the config line. Returns the slot proc_id and its socket."""
         proc_id = uuid.uuid4().hex[:8]
         sock = os.path.join(self.node.tmp, f"{proc_id}.sock")
@@ -379,20 +417,24 @@ class GroupConn:
 
         srv = await asyncio.start_unix_server(on_conn, sock, limit=64 * 1024 * 1024)
         self.node.servers.append(srv)
-        await self.write({
-            "op": "load",
-            "proc_id": proc_id,
-            "plugin_dir": plugin_dir or str(PLUGINS_DIR / plugin),
-            "plugin_name": plugin,
-            "data_dir": data_dir or os.path.join(self.node.tmp, proc_id, "data"),
-            "socket": sock,
-        })
+        await self.write(
+            {
+                "op": "load",
+                "proc_id": proc_id,
+                "plugin_dir": plugin_dir or str(PLUGINS_DIR / plugin),
+                "plugin_name": plugin,
+                "data_dir": data_dir or os.path.join(self.node.tmp, proc_id, "data"),
+                "socket": sock,
+            }
+        )
         reader, writer = await asyncio.wait_for(conn, TIMEOUT)
         writer.write(json.dumps({"op": "config", "config": config or {}}).encode() + b"\n")
         await writer.drain()
         return proc_id, Lines(reader), writer
 
-    async def load(self, plugin: str, config: dict | None = None, llm: Callable[[dict], dict] = default_llm, **kw: Any) -> PluginProc:
+    async def load(
+        self, plugin: str, config: dict | None = None, llm: Callable[[dict], dict] = default_llm, **kw: Any
+    ) -> PluginProc:
         proc_id, lines, writer = await self.load_raw(plugin, config, **kw)
         logs = []
         while True:

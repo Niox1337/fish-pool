@@ -18,7 +18,8 @@ const rules: { title: string; body: ReactNode }[] = [
     title: '自带模型 Key',
     body: (
       <>
-        小鱼说话用的是你自己的大模型 Key，任何兼容 OpenAI 接口的服务商都行，比如 DeepSeek、OpenAI、SiliconFlow、Moonshot、智谱。托管班不提供模型额度，模型费用由你和服务商之间结算。
+        小鱼说话用的是你自己的大模型 Key，任何兼容 OpenAI 接口的服务商都行，比如
+        DeepSeek、OpenAI、SiliconFlow、Moonshot、智谱。托管班不提供模型额度，模型费用由你和服务商之间结算。
       </>
     ),
   },
@@ -26,23 +27,23 @@ const rules: { title: string; body: ReactNode }[] = [
     title: '接入 QQ',
     body: (
       <>
-        用手机 QQ 扫码，就能创建一个 QQ 官方机器人并接到小鱼上，AppID 和密钥会自动保存。已经有 QQ 官方机器人的话，也可以手动填写 AppID 和 AppSecret。
+        用手机 QQ 扫码，就能创建一个 QQ 官方机器人并接到小鱼上，AppID 和密钥会自动保存。已经有 QQ 官方机器人的话，也可以手动填写 AppID 和
+        AppSecret。
       </>
     ),
   },
   {
     title: '接入微信',
     body: (
-      <>
-        用微信扫码绑定。微信这边只支持私聊，不能拉进群聊。对方给小鱼发消息后的 24 小时内小鱼才能回复，超过 24 小时需要对方再发一条消息。
-      </>
+      <>用微信扫码绑定。微信这边只支持私聊，不能拉进群聊。对方给小鱼发消息后的 24 小时内小鱼才能回复，超过 24 小时需要对方再发一条消息。</>
     ),
   },
   {
     title: '插件兼容',
     body: (
       <>
-        可以从 AstrBot 插件市场一键安装插件，支持的是插件接口里有文档说明的一部分。插件用到暂不支持的功能时会被停下，状态里会写明是哪个功能，其他插件和小鱼本身不受影响。
+        可以从 AstrBot
+        插件市场一键安装插件，支持的是插件接口里有文档说明的一部分。插件用到暂不支持的功能时会被停下，状态里会写明是哪个功能，其他插件和小鱼本身不受影响。
       </>
     ),
   },
@@ -56,11 +57,7 @@ const rules: { title: string; body: ReactNode }[] = [
   },
   {
     title: '密钥加密保存',
-    body: (
-      <>
-        模型 Key 和 QQ、微信的平台密钥都用 AES-256-GCM 加密后保存，页面上只显示最后几位，管理员也看不到完整内容。
-      </>
-    ),
+    body: <>模型 Key 和 QQ、微信的平台密钥都用 AES-256-GCM 加密后保存，页面上只显示最后几位，管理员也看不到完整内容。</>,
   },
 ]
 
@@ -86,7 +83,10 @@ export default function AboutPage() {
             <span className="font-display text-lg font-black">大肥鱼托管班</span>
           </Link>
           <nav aria-label="页面" className="ml-auto flex items-center gap-1 text-sm font-semibold">
-            <Link to="/" className="hidden rounded-lg px-3 py-1.5 text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white sm:inline-flex">
+            <Link
+              to="/"
+              className="hidden rounded-lg px-3 py-1.5 text-white/80 transition-colors duration-150 hover:bg-white/10 hover:text-white sm:inline-flex"
+            >
               首页
             </Link>
             <Link
@@ -101,7 +101,8 @@ export default function AboutPage() {
           <div className="min-w-0 flex-1">
             <h1 className="font-display text-3xl font-black sm:text-4xl">关于托管班</h1>
             <p className="mt-3 max-w-[56ch] text-[15px] leading-relaxed text-white/80 sm:text-base">
-              大肥鱼托管班帮你托管 QQ 和微信聊天机器人。每个机器人是一条小鱼，托管班给它分好座位、看着它运行，你只需要扫码接入、选好人设和模型、装上想要的插件。
+              大肥鱼托管班帮你托管 QQ
+              和微信聊天机器人。每个机器人是一条小鱼，托管班给它分好座位、看着它运行，你只需要扫码接入、选好人设和模型、装上想要的插件。
             </p>
           </div>
           <Pupil mood="portrait" size={112} className="hidden shrink-0 sm:inline-block" />
@@ -133,7 +134,12 @@ export default function AboutPage() {
           </h2>
           <p className="mt-4 text-[15px] leading-relaxed text-ink-2">
             托管班用 AstrBot 本体运行插件，插件宿主随 AstrBot 以 AGPL-3.0 开源，源码见{' '}
-            <a href="https://github.com/Niox1337/fish-pool/tree/main/sidecar" target="_blank" rel="noreferrer" className="text-sky underline underline-offset-2">
+            <a
+              href="https://github.com/Niox1337/fish-pool/tree/main/sidecar"
+              target="_blank"
+              rel="noreferrer"
+              className="text-sky underline underline-offset-2"
+            >
               项目仓库的 sidecar 目录
             </a>
             。托管班和 AstrBot 项目没有隶属或合作关系。

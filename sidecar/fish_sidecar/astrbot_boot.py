@@ -55,7 +55,14 @@ class InlineConsole:
         return None
 
     def get_status(self) -> dict:
-        return {"capacity": 0, "queued_records": 0, "unfinished_records": 0, "dropped_records": self.dropped, "closed": False, "writer_alive": False}
+        return {
+            "capacity": 0,
+            "queued_records": 0,
+            "unfinished_records": 0,
+            "dropped_records": self.dropped,
+            "closed": False,
+            "writer_alive": False,
+        }
 
 
 class InertScheduler:
@@ -322,7 +329,9 @@ def install_log_sink() -> None:
 
     LogManager.GetLogger("astrbot")
     loguru_logger.remove()
-    loguru_logger.add(_loguru_sink, level="DEBUG", format="{message}", filter=lambda r: not r["extra"].get("is_trace", False))
+    loguru_logger.add(
+        _loguru_sink, level="DEBUG", format="{message}", filter=lambda r: not r["extra"].get("is_trace", False)
+    )
     root = logging.getLogger()
     for handler in list(root.handlers):
         if getattr(handler, LogManager._LOGGER_HANDLER_FLAG, False):

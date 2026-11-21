@@ -424,7 +424,8 @@ impl Installer {
     /// The install of this spec for the current interpreter, when the bot's plugin directory records one.
     pub fn installed(&self, spec: &PluginSpec, plugin_dir: &Path) -> Option<Installed> {
         let m = read_marker(plugin_dir)?;
-        (m == self.marker(spec, &m.shared) && self.shared_complete(&m.shared)).then(|| self.layout(plugin_dir, &m.shared))
+        (m == self.marker(spec, &m.shared) && self.shared_complete(&m.shared))
+            .then(|| self.layout(plugin_dir, &m.shared))
     }
 
     pub fn is_installed(&self, spec: &PluginSpec, plugin_dir: &Path) -> bool {
@@ -457,10 +458,20 @@ impl Installer {
         let repo = parse_repo(&spec.repo_url)?;
         logs.info(source, format!("下载插件 {}/{}", repo.owner, repo.name));
         let urls = zip_urls(&repo, &spec.commit);
-        let Downloaded { bytes, source: via } =
-            download_zip(&self.http, self.archive_proxy.as_ref(), self.codeload_base.as_deref(), &urls).await?;
-        logs.info(source, format!("插件{}下载完成 ({} KB)", via.label(), bytes.len() / 1024));
-        let staging = self.shared_dir.join(format!(".staging-{}", hex::encode(rand::random::<[u8; 8]>())));
+        let Downloaded { bytes, source: via } = download_zip(
+            &self.http,
+            self.archive_proxy.as_ref(),
+            self.codeload_base.as_deref(),
+            &urls,
+        )
+        .await?;
+        logs.info(
+            source,
+            format!("插件{}下载完成 ({} KB)", via.label(), bytes.len() / 1024),
+        );
+        let staging = self
+            .shared_dir
+            .join(format!(".staging-{}", hex::encode(rand::random::<[u8; 8]>())));
         let result = self.place(spec, &bytes, &staging, logs, source).await;
         if staging.exists() {
             let _ = std::fs::remove_dir_all(&staging);
@@ -510,10 +521,17 @@ impl Installer {
         }
         logs.info(source, "解析依赖版本");
         let mut cmd = tokio::process::Command::new(&self.uv);
-        cmd.arg("venv").arg("--system-site-packages").arg("--python").arg(&self.python).arg(venv);
+        cmd.arg("venv")
+            .arg("--system-site-packages")
+            .arg("--python")
+            .arg(&self.python)
+            .arg(venv);
         self.run_quiet(cmd, logs, source, Duration::from_secs(120)).await?;
         let mut cmd = tokio::process::Command::new(&self.uv);
-        cmd.args(["pip", "install", "--dry-run", "--python"]).arg(venv.join("bin").join("python")).arg("-r").arg(&req);
+        cmd.args(["pip", "install", "--dry-run", "--python"])
+            .arg(venv.join("bin").join("python"))
+            .arg("-r")
+            .arg(&req);
         let lines = self.run_quiet(cmd, logs, source, Duration::from_secs(300)).await?;
         Ok(dry_run_changes(&lines))
     }
@@ -745,12 +763,22 @@ mod tests {
         let legacy = r#"{"repo_url":"https://github.com/o/demo","version":"1","name":"demo","python":"3.13"}"#;
         std::fs::write(plugin_dir.join(MARKER), legacy).unwrap();
         let current = test_installer(dir.path(), "3.13");
-        assert!(!current.is_installed(&spec, &plugin_dir), "installs without a shared install are rebuilt");
+        assert!(
+            !current.is_installed(&spec, &plugin_dir),
+            "installs without a shared install are rebuilt"
+        );
 
         let key = share_key("demo", &source_id("", b"zip"), "", "3.13");
         assert!(key.starts_with("demo-") && key.ends_with("-py3.13"));
-        std::fs::write(plugin_dir.join(MARKER), serde_json::to_vec(&current.marker(&spec, &key)).unwrap()).unwrap();
-        assert!(!current.is_installed(&spec, &plugin_dir), "the shared install is missing");
+        std::fs::write(
+            plugin_dir.join(MARKER),
+            serde_json::to_vec(&current.marker(&spec, &key)).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !current.is_installed(&spec, &plugin_dir),
+            "the shared install is missing"
+        );
         fake_shared(&current, &key);
         let inst = current.installed(&spec, &plugin_dir).unwrap();
         assert_eq!(inst.src, current.shared_dir.join(&key).join("src"));
@@ -759,7 +787,10 @@ mod tests {
         assert!(inst.site_packages.unwrap().ends_with("site-packages"));
         assert!(!test_installer(dir.path(), "3.11").is_installed(&spec, &plugin_dir));
         std::fs::remove_file(current.shared_dir.join(&key).join(SHARED_MARKER)).unwrap();
-        assert!(!current.is_installed(&spec, &plugin_dir), "an unfinished build is not installed");
+        assert!(
+            !current.is_installed(&spec, &plugin_dir),
+            "an unfinished build is not installed"
+        );
     }
 
     #[test]
@@ -768,30 +799,59 @@ mod tests {
         let plugin_dir = dir.path().join("p");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         let installer = test_installer(dir.path(), "3.13");
-        let spec = PluginSpec { commit: "a".repeat(40), install_rev: 1, ..demo_spec() };
-        std::fs::write(plugin_dir.join(MARKER), serde_json::to_vec(&installer.marker(&spec, "k")).unwrap()).unwrap();
+        let spec = PluginSpec {
+            commit: "a".repeat(40),
+            install_rev: 1,
+            ..demo_spec()
+        };
+        std::fs::write(
+            plugin_dir.join(MARKER),
+            serde_json::to_vec(&installer.marker(&spec, "k")).unwrap(),
+        )
+        .unwrap();
         fake_shared(&installer, "k");
         assert!(installer.is_installed(&spec, &plugin_dir));
         for other in [
-            PluginSpec { commit: "b".repeat(40), ..spec.clone() },
-            PluginSpec { install_rev: 2, ..spec.clone() },
+            PluginSpec {
+                commit: "b".repeat(40),
+                ..spec.clone()
+            },
+            PluginSpec {
+                install_rev: 2,
+                ..spec.clone()
+            },
         ] {
             assert!(spec.needs_reinstall(&other));
             assert!(!installer.is_installed(&other, &plugin_dir));
         }
-        assert!(!spec.needs_reinstall(&PluginSpec { config: serde_json::json!({"a": 1}), ..spec.clone() }));
+        assert!(!spec.needs_reinstall(&PluginSpec {
+            config: serde_json::json!({"a": 1}),
+            ..spec.clone()
+        }));
     }
 
     #[test]
     fn share_key_separates_sources_and_dependency_sets() {
         let commit = "0123456789abcdef0123456789abcdef01234567";
-        assert_eq!(source_id(commit, b"x"), source_id(&commit.to_uppercase(), b"y"), "a pinned commit ignores archive bytes");
+        assert_eq!(
+            source_id(commit, b"x"),
+            source_id(&commit.to_uppercase(), b"y"),
+            "a pinned commit ignores archive bytes"
+        );
         assert_ne!(source_id("", b"x"), source_id("", b"y"));
-        assert_ne!(source_id("main", b"x"), source_id("main", b"y"), "only full commit ids pin");
+        assert_ne!(
+            source_id("main", b"x"),
+            source_id("main", b"y"),
+            "only full commit ids pin"
+        );
         let src = source_id(commit, b"");
         let base = share_key("demo", &src, "+ a==1", "3.13");
         assert_eq!(base, share_key("demo", &src, "+ a==1", "3.13"));
-        assert_ne!(base, share_key("demo", &src, "+ a==2", "3.13"), "newer dependencies get their own install");
+        assert_ne!(
+            base,
+            share_key("demo", &src, "+ a==2", "3.13"),
+            "newer dependencies get their own install"
+        );
         assert_ne!(base, share_key("demo", &source_id("", b"z"), "+ a==1", "3.13"));
         assert_ne!(base, share_key("demo", &src, "+ a==1", "3.14"));
     }
@@ -816,9 +876,16 @@ mod tests {
 
     #[test]
     fn pinned_commit_downloads_only_that_commit() {
-        let repo = Repo { owner: "a".into(), name: "b".into(), branch: Some("dev".into()) };
+        let repo = Repo {
+            owner: "a".into(),
+            name: "b".into(),
+            branch: Some("dev".into()),
+        };
         let commit = "0123456789ABCDEF0123456789abcdef01234567";
-        assert_eq!(zip_urls(&repo, commit), vec![format!("https://codeload.github.com/a/b/zip/{}", commit.to_lowercase())]);
+        assert_eq!(
+            zip_urls(&repo, commit),
+            vec![format!("https://codeload.github.com/a/b/zip/{}", commit.to_lowercase())]
+        );
         assert_eq!(zip_urls(&repo, "").len(), 2);
         assert_eq!(zip_urls(&repo, "short").len(), 2);
     }
@@ -829,10 +896,18 @@ mod tests {
         let installer = test_installer(dir.path(), "3.13");
         let tenants = dir.path().join("tenants");
         let spec = demo_spec();
-        for (bot, key) in [("b1", "demo-a-py3.13"), ("b2", "demo-a-py3.13"), ("b3", "demo-b-py3.13")] {
+        for (bot, key) in [
+            ("b1", "demo-a-py3.13"),
+            ("b2", "demo-a-py3.13"),
+            ("b3", "demo-b-py3.13"),
+        ] {
             let plugin_dir = tenants.join("u").join(bot).join("plugins/demo");
             std::fs::create_dir_all(&plugin_dir).unwrap();
-            std::fs::write(plugin_dir.join(MARKER), serde_json::to_vec(&installer.marker(&spec, key)).unwrap()).unwrap();
+            std::fs::write(
+                plugin_dir.join(MARKER),
+                serde_json::to_vec(&installer.marker(&spec, key)).unwrap(),
+            )
+            .unwrap();
         }
         for key in ["demo-a-py3.13", "demo-b-py3.13", "demo-old-py3.13"] {
             fake_shared(&installer, key);
@@ -867,7 +942,9 @@ mod tests {
             async move {
                 let path = req.uri().path().to_string();
                 let signed = req.headers().contains_key(crate::sign::HEADER_SIG);
-                log.lock().unwrap().push(format!("{}{path}", if signed { "signed:" } else { "" }));
+                log.lock()
+                    .unwrap()
+                    .push(format!("{}{path}", if signed { "signed:" } else { "" }));
                 let (code, body) = respond(&path);
                 (axum::http::StatusCode::from_u16(code).unwrap(), body).into_response()
             }
@@ -888,7 +965,14 @@ mod tests {
     }
 
     fn urls() -> Vec<String> {
-        zip_urls(&Repo { owner: "a".into(), name: "b".into(), branch: None }, "")
+        zip_urls(
+            &Repo {
+                owner: "a".into(),
+                name: "b".into(),
+                branch: None,
+            },
+            "",
+        )
     }
 
     async fn run(proxy: Option<&str>, direct: &str) -> Result<Downloaded> {
@@ -913,7 +997,11 @@ mod tests {
     #[tokio::test]
     async fn proxy_not_found_moves_to_next_ref_without_direct() {
         let (proxy, proxy_hits) = serve(|p| {
-            if p.ends_with("/HEAD") { (404, vec![]) } else { (200, b"main".to_vec()) }
+            if p.ends_with("/HEAD") {
+                (404, vec![])
+            } else {
+                (200, b"main".to_vec())
+            }
         })
         .await;
         let (direct, direct_hits) = serve(|_| (200, b"direct".to_vec())).await;
@@ -962,7 +1050,10 @@ mod tests {
         );
         let r = parse_repo("https://github.com/a/b/tree/dev").unwrap();
         assert_eq!(r.branch.as_deref(), Some("dev"));
-        assert_eq!(zip_urls(&r, "")[0], "https://codeload.github.com/a/b/zip/refs/heads/dev");
+        assert_eq!(
+            zip_urls(&r, "")[0],
+            "https://codeload.github.com/a/b/zip/refs/heads/dev"
+        );
         assert!(parse_repo("https://gitlab.com/a/b").is_err());
         assert!(parse_repo("https://github.com/a").is_err());
         assert!(parse_repo("https://github.com/../b").is_err());

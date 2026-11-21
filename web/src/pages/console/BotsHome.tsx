@@ -40,7 +40,11 @@ function CreateBot({ reason, first }: { reason?: string; first?: boolean }) {
   const draft = { name, key_id: selected?.id ?? '', model: chosenModel }
   const provider = selected && providerForEndpoint(selected.base_url)
   const addKey = (
-    <Link to="/app/keys" state={{ newBot: draft }} className="inline-flex min-h-10 items-center gap-1 rounded-lg px-2 text-sm font-semibold text-sky underline-offset-2 hover:underline">
+    <Link
+      to="/app/keys"
+      state={{ newBot: draft }}
+      className="inline-flex min-h-10 items-center gap-1 rounded-lg px-2 text-sm font-semibold text-sky underline-offset-2 hover:underline"
+    >
       <Plus className="size-4" aria-hidden /> 添加 Key
     </Link>
   )
@@ -65,10 +69,23 @@ function CreateBot({ reason, first }: { reason?: string; first?: boolean }) {
 
   return (
     <form onSubmit={submit} className="grid min-w-0 gap-4">
-      <Field label={first ? '给第一条小鱼起个名字' : '新小鱼的名字'} htmlFor={nameId} error={nameTooLong ? '名字最多 32 个字符' : undefined}>
-        <Input id={nameId} value={name} onChange={(e) => setName(e.target.value)} placeholder="大肥鱼" aria-invalid={nameTooLong || undefined} disabled={disabled} />
+      <Field
+        label={first ? '给第一条小鱼起个名字' : '新小鱼的名字'}
+        htmlFor={nameId}
+        error={nameTooLong ? '名字最多 32 个字符' : undefined}
+      >
+        <Input
+          id={nameId}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="大肥鱼"
+          aria-invalid={nameTooLong || undefined}
+          disabled={disabled}
+        />
       </Field>
-      {keysQuery.isPending ? <Skeleton className="h-16" /> : keysQuery.error ? (
+      {keysQuery.isPending ? (
+        <Skeleton className="h-16" />
+      ) : keysQuery.error ? (
         <ErrorNote error={keysQuery.error} onRetry={() => keysQuery.refetch()} />
       ) : saved.length === 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-paper-3 px-3.5 py-1.5">
@@ -78,26 +95,51 @@ function CreateBot({ reason, first }: { reason?: string; first?: boolean }) {
       ) : (
         <div className="grid min-w-0 items-end gap-4 md:grid-cols-2">
           <Field label="模型 Key" htmlFor={keyFieldId} aside={!disabled && addKey}>
-            <Select id={keyFieldId} value={selected?.id ?? ''} disabled={disabled} onChange={(event) => {
-              setKeyId(event.target.value)
-              setModel(null)
-              setError('')
-            }} required>
-              <option value="" disabled>选择已保存的 Key</option>
-              {saved.map((key) => <option key={key.id} value={key.id}>{key.name}</option>)}
+            <Select
+              id={keyFieldId}
+              value={selected?.id ?? ''}
+              disabled={disabled}
+              onChange={(event) => {
+                setKeyId(event.target.value)
+                setModel(null)
+                setError('')
+              }}
+              required
+            >
+              <option value="" disabled>
+                选择已保存的 Key
+              </option>
+              {saved.map((key) => (
+                <option key={key.id} value={key.id}>
+                  {key.name}
+                </option>
+              ))}
             </Select>
           </Field>
           {selected ? (
-            <ModelField key={selected.id} id={modelId} value={chosenModel} onChange={setModel}
-              models={[selected.model, ...(provider?.models ?? [])]} disabled={disabled} error={modelTooLong ? '模型名最多 100 个字符' : undefined} />
+            <ModelField
+              key={selected.id}
+              id={modelId}
+              value={chosenModel}
+              onChange={setModel}
+              models={[selected.model, ...(provider?.models ?? [])]}
+              disabled={disabled}
+              error={modelTooLong ? '模型名最多 100 个字符' : undefined}
+            />
           ) : (
             <Field label="模型名" htmlFor={modelId}>
-              <Select id={modelId} disabled><option>先选择模型 Key</option></Select>
+              <Select id={modelId} disabled>
+                <option>先选择模型 Key</option>
+              </Select>
             </Field>
           )}
         </div>
       )}
-      {error && <p role="alert" className="text-sm text-bad">{error}</p>}
+      {error && (
+        <p role="alert" className="text-sm text-bad">
+          {error}
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-end gap-2">
         {reason && <p className="mr-auto text-[13px] text-ink-3">{reason}</p>}
         <Button type="submit" variant="primary" loading={busy} disabled={!canCreate}>
@@ -124,9 +166,7 @@ function BotRow({ bot }: { bot: Bot }) {
             <h2 className="truncate font-display text-lg font-black text-ink">{bot.name}</h2>
             <BotStatusPill status={bot.status} />
           </div>
-          {bot.status_detail && bot.status !== 'running' && (
-            <p className="mt-1 line-clamp-1 text-[13px] text-ink-2">{bot.status_detail}</p>
-          )}
+          {bot.status_detail && bot.status !== 'running' && <p className="mt-1 line-clamp-1 text-[13px] text-ink-2">{bot.status_detail}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
             {bot.platforms.length === 0 ? (
               <span className="text-warn">还没接入 QQ 或微信</span>
@@ -155,11 +195,7 @@ export default function BotsHome() {
   const quota = me?.quota.bots ?? null
   const full = quota != null && list.length >= quota
   const expired = me ? !me.service_active : false
-  const reason = expired
-    ? '服务已到期，兑换邀请码后才能收新的小鱼。'
-    : full
-      ? `你的名额是 ${quota} 条小鱼，已经满了。`
-      : undefined
+  const reason = expired ? '服务已到期，兑换邀请码后才能收新的小鱼。' : full ? `你的名额是 ${quota} 条小鱼，已经满了。` : undefined
 
   return (
     <>
@@ -210,7 +246,11 @@ export default function BotsHome() {
             <FoodBar
               label="内存"
               capacity={usage.data.quota.memory_mb * 1024 * 1024}
-              servings={usage.data.sources.map((s) => ({ key: `${s.bot_id}-${s.kind}-${s.plugin_id}`, label: s.label, bytes: s.memory_bytes }))}
+              servings={usage.data.sources.map((s) => ({
+                key: `${s.bot_id}-${s.kind}-${s.plugin_id}`,
+                label: s.label,
+                bytes: s.memory_bytes,
+              }))}
               compact
             />
           </div>

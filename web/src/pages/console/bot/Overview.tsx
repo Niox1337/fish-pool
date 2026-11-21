@@ -72,20 +72,14 @@ function Todos({ bot }: { bot: Bot }) {
   return (
     <ul className="mb-6 grid gap-3" aria-label="还差的步骤">
       {noPlatform && (
-        <Todo
-          icon={<Link2 className="size-5" aria-hidden />}
-          title="还没接入 QQ 或微信"
-        >
+        <Todo icon={<Link2 className="size-5" aria-hidden />} title="还没接入 QQ 或微信">
           <ButtonLink to={`${base}/connect`} primary>
             去接入
           </ButtonLink>
         </Todo>
       )}
       {noKey && (
-        <Todo
-          icon={<KeyRound className="size-5" aria-hidden />}
-          title="还没选模型 Key"
-        >
+        <Todo icon={<KeyRound className="size-5" aria-hidden />} title="还没选模型 Key">
           {haveKeys || llmKeys.isLoading ? (
             <ButtonLink to={`${base}/persona`} primary>
               去选 Key
@@ -251,11 +245,7 @@ function DeleteBot({ bot }: { bot: Bot }) {
         open={open}
         onOpenChange={setOpen}
         title={`删除 ${bot.name}？`}
-        body={
-          <p>
-            小鱼将停止运行。接入凭证、人设、插件和聊天记录将永久删除。
-          </p>
-        }
+        body={<p>小鱼将停止运行。接入凭证、人设、插件和聊天记录将永久删除。</p>}
         confirmLabel="确认删除"
         loading={busy}
         onConfirm={remove}

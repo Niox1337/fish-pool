@@ -19,8 +19,13 @@ type Errors = Partial<Record<'provider' | 'name' | 'base_url' | 'model' | 'api_k
 function ProviderPlatformLink({ provider }: { provider: ModelProvider }) {
   if (!provider.platform_url) return null
   return (
-    <a href={provider.platform_url} target="_blank" rel="noreferrer" title={`${provider.name} 官方平台`}
-      className="inline-flex min-w-0 items-center gap-1 text-[13px] font-semibold text-sky underline-offset-2 hover:underline">
+    <a
+      href={provider.platform_url}
+      target="_blank"
+      rel="noreferrer"
+      title={`${provider.name} 官方平台`}
+      className="inline-flex min-w-0 items-center gap-1 text-[13px] font-semibold text-sky underline-offset-2 hover:underline"
+    >
       <span className="wrap-anywhere">{new URL(provider.platform_url).hostname}</span>
       <ExternalLink className="size-3.5 shrink-0" aria-hidden />
     </a>
@@ -72,7 +77,12 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
     if (Object.keys(next).length) return
     setBusy(true)
     try {
-      const k = await api.addLlmKey({ name: name.trim(), base_url: baseUrl.trim().replace(/\/+$/, ''), model: model.trim(), api_key: apiKey.trim() })
+      const k = await api.addLlmKey({
+        name: name.trim(),
+        base_url: baseUrl.trim().replace(/\/+$/, ''),
+        model: model.trim(),
+        api_key: apiKey.trim(),
+      })
       qc.setQueryData<LlmKey[]>(keys.llmKeys, (old) => [...(old ?? []).filter((item) => item.id !== k.id), k])
       qc.invalidateQueries({ queryKey: keys.llmKeys })
       toast.success(`${k.name} 已保存`)
@@ -87,18 +97,54 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
   }
 
   return (
-    <form id={id} aria-labelledby={`${id}-title`} onSubmit={submit} noValidate className="grid gap-4 rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
-      <h2 id={`${id}-title`} className="text-lg font-semibold text-ink">添加 Key</h2>
-      <Field label="服务商" htmlFor={ids.provider} error={errors.provider} aside={preset && <ProviderPlatformLink provider={preset} />} hint={
-        ['openai', 'google', 'anthropic'].includes(provider) ? '中国大陆未列入此接口的支持地区。' : undefined
-      }>
-        <Select id={ids.provider} value={provider} onChange={(e) => pick(e.target.value)} autoFocus={!!onCancel} disabled={busy} aria-invalid={!!errors.provider} required>
-          <option value="" disabled>选择服务商</option>
-          {modelProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+    <form
+      id={id}
+      aria-labelledby={`${id}-title`}
+      onSubmit={submit}
+      noValidate
+      className="grid gap-4 rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6"
+    >
+      <h2 id={`${id}-title`} className="text-lg font-semibold text-ink">
+        添加 Key
+      </h2>
+      <Field
+        label="服务商"
+        htmlFor={ids.provider}
+        error={errors.provider}
+        aside={preset && <ProviderPlatformLink provider={preset} />}
+        hint={['openai', 'google', 'anthropic'].includes(provider) ? '中国大陆未列入此接口的支持地区。' : undefined}
+      >
+        <Select
+          id={ids.provider}
+          value={provider}
+          onChange={(e) => pick(e.target.value)}
+          autoFocus={!!onCancel}
+          disabled={busy}
+          aria-invalid={!!errors.provider}
+          required
+        >
+          <option value="" disabled>
+            选择服务商
+          </option>
+          {modelProviders.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
           <option value="custom">自定义 OpenAI 兼容接口</option>
         </Select>
       </Field>
-      {provider && <ModelField key={provider} id={ids.model} value={model} onChange={setModel} models={preset?.models} error={errors.model} disabled={busy} />}
+      {provider && (
+        <ModelField
+          key={provider}
+          id={ids.model}
+          value={model}
+          onChange={setModel}
+          models={preset?.models}
+          error={errors.model}
+          disabled={busy}
+        />
+      )}
       {preset && (
         <button
           type="button"
@@ -113,7 +159,14 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
       )}
       <div id={`${id}-connection`} hidden={!connectionOpen} className={cn(connectionOpen && 'grid gap-4 border-t border-paper-3 pt-4')}>
         <Field label="名称" htmlFor={ids.name} error={errors.name}>
-          <Input id={ids.name} value={name} onChange={(e) => setName(e.target.value)} maxLength={40} aria-invalid={!!errors.name} disabled={busy} />
+          <Input
+            id={ids.name}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={40}
+            aria-invalid={!!errors.name}
+            disabled={busy}
+          />
         </Field>
         <Field label="接口地址" htmlFor={ids.base} error={errors.base_url}>
           <Input
@@ -153,7 +206,11 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
         <Button type="submit" variant="primary" loading={busy}>
           {busy ? '正在验证' : '验证并保存'}
         </Button>
-        {onCancel && <Button variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>}
+        {onCancel && (
+          <Button variant="ghost" disabled={busy} onClick={onCancel}>
+            取消
+          </Button>
+        )}
       </div>
     </form>
   )
@@ -162,13 +219,19 @@ function AddKeyForm({ id, onSaved, onCancel }: { id: string; onSaved: (key: LlmK
 function KeyBalanceLine({ id }: { id: string }) {
   const q = useKeyBalance(id)
   if (q.isLoading) return <span className="text-ink-3">正在查询余额</span>
-  if (q.error || !q.data) return <span className="text-ink-3" title={q.error instanceof Error ? q.error.message : undefined}>余额暂时查不到</span>
+  if (q.error || !q.data)
+    return (
+      <span className="text-ink-3" title={q.error instanceof Error ? q.error.message : undefined}>
+        余额暂时查不到
+      </span>
+    )
   const b = q.data
   const expired = isPast(b.expires_at)
   const next = b.credits?.[0]?.expires_at
   return (
     <span className={cn('tabular-nums', b.disabled || expired ? 'text-bad' : 'text-ink-2')}>
-      余额 {b.available} 元{b.disabled ? ' · 已停用' : expired ? ' · 已过期' : next ? ` · 最早一笔 ${fmtDate(new Date(next).getTime())} 过期` : ''}
+      余额 {b.available} 元
+      {b.disabled ? ' · 已停用' : expired ? ' · 已过期' : next ? ` · 最早一笔 ${fmtDate(new Date(next).getTime())} 过期` : ''}
     </span>
   )
 }
@@ -210,10 +273,16 @@ function KeyRow({ k, usedBy }: { k: LlmKey; usedBy: string[] }) {
             </span>
           )}
         </p>
-        {k.has_balance && <p className="mt-1 text-sm"><KeyBalanceLine id={k.id} /></p>}
+        {k.has_balance && (
+          <p className="mt-1 text-sm">
+            <KeyBalanceLine id={k.id} />
+          </p>
+        )}
         {usedBy.length > 0 && <p className="mt-1 break-words text-sm text-ink-3">使用中 · {usedBy.join('、')}</p>}
         <details className="mt-1 text-sm text-ink-3">
-          <summary aria-label={`${k.name} 的详情`} className="w-fit cursor-pointer rounded-md py-1 font-semibold text-ink-2 hover:text-sky">详情</summary>
+          <summary aria-label={`${k.name} 的详情`} className="w-fit cursor-pointer rounded-md py-1 font-semibold text-ink-2 hover:text-sky">
+            详情
+          </summary>
           <p className="break-all">{k.base_url}</p>
           <p className="mt-0.5 tabular-nums">{fmtDate(k.created_at)} 添加</p>
         </details>
@@ -227,9 +296,7 @@ function KeyRow({ k, usedBy }: { k: LlmKey; usedBy: string[] }) {
         title={`删除 ${k.name}？`}
         body={
           usedBy.length > 0 ? (
-            <>
-              {usedBy.join('、')} 正在使用。删除后，需在「机器人设置」中换一个 Key 才能继续回复。
-            </>
+            <>{usedBy.join('、')} 正在使用。删除后，需在「机器人设置」中换一个 Key 才能继续回复。</>
           ) : (
             '删除后如需使用，要重新添加。'
           )
@@ -269,24 +336,31 @@ export default function KeysPage() {
       <PageHeader
         title="模型 Key"
         description={newBot ? '保存后返回创建小鱼。' : '创建小鱼或调整机器人设置时可以选择。'}
-        actions={!list.isLoading && !showForm && (
-          <Button ref={addButton} variant="primary" onClick={() => setAdding(true)}>
-            <Plus aria-hidden />
-            添加 Key
-          </Button>
-        )}
+        actions={
+          !list.isLoading &&
+          !showForm && (
+            <Button ref={addButton} variant="primary" onClick={() => setAdding(true)}>
+              <Plus aria-hidden />
+              添加 Key
+            </Button>
+          )
+        }
       />
       <div className="grid gap-5">
         {showForm && (
-          <AddKeyForm id={formId}
+          <AddKeyForm
+            id={formId}
             onSaved={newBot ? (key) => returnToBot({ ...newBot, key_id: key.id, model: key.model }) : closeForm}
-            onCancel={newBot ? () => returnToBot(newBot) : adding && !empty ? closeForm : undefined} />
+            onCancel={newBot ? () => returnToBot(newBot) : adding && !empty ? closeForm : undefined}
+          />
         )}
         {list.isLoading && <Skeleton className="h-24" />}
         {list.error && <ErrorNote error={list.error} onRetry={() => list.refetch()} />}
         {items.length > 0 && (
           <section aria-labelledby="keys-list">
-            <h2 id="keys-list" className="text-base font-semibold text-ink">已保存</h2>
+            <h2 id="keys-list" className="text-base font-semibold text-ink">
+              已保存
+            </h2>
             <ul className="mt-1 divide-y divide-paper-3 border-y border-paper-3">
               {items.map((k) => (
                 <KeyRow key={k.id} k={k} usedBy={(bots.data ?? []).filter((b) => b.settings.llm.key_id === k.id).map((b) => b.name)} />

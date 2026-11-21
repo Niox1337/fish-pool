@@ -43,7 +43,10 @@ pub async fn send(
     let ctrl = AbortController::default();
     let signal = ctrl.signal();
     let work = async move {
-        let mut resp = Fetch::Request(req).send_with_signal(&signal).await.map_err(|e| e.to_string())?;
+        let mut resp = Fetch::Request(req)
+            .send_with_signal(&signal)
+            .await
+            .map_err(|e| e.to_string())?;
         let status = resp.status_code();
         let body = resp.bytes().await.map_err(|e| e.to_string())?;
         Ok::<_, String>(HttpResponse { status, body })

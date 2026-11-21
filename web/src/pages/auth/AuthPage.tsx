@@ -18,7 +18,10 @@ const titles: Record<Mode, { h: string; sub: string }> = {
 }
 
 function normInvite(raw: string): string {
-  const s = raw.toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/^FISH/, '')
+  const s = raw
+    .toUpperCase()
+    .replace(/[^0-9A-Z]/g, '')
+    .replace(/^FISH/, '')
   const body = s.slice(0, 8)
   if (!body) return raw.toUpperCase().startsWith('F') ? raw.toUpperCase().slice(0, 5) : ''
   return `FISH-${body.slice(0, 4)}${body.length > 4 ? '-' + body.slice(4) : ''}`
@@ -81,7 +84,10 @@ function Captcha({
           ) : (
             <span className="block h-full w-full animate-pulse bg-paper-2" />
           )}
-          <RefreshCw className="absolute right-1 bottom-1 size-3.5 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+          <RefreshCw
+            className="absolute right-1 bottom-1 size-3.5 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100"
+            aria-hidden
+          />
         </button>
       </div>
     </Field>
@@ -133,8 +139,13 @@ export default function AuthPage({ mode }: { mode: Mode }) {
 
   function fail(e: unknown) {
     if (e instanceof ApiError) {
-      const field =
-        e.code.startsWith('invite') ? 'invite' : e.code.startsWith('captcha') ? 'captcha' : e.code.startsWith('code') ? 'code' : undefined
+      const field = e.code.startsWith('invite')
+        ? 'invite'
+        : e.code.startsWith('captcha')
+          ? 'captcha'
+          : e.code.startsWith('code')
+            ? 'code'
+            : undefined
       if (e.code === 'captcha_required') setNeedCaptcha(true)
       if (field === 'captcha' || e.code === 'captcha_required') {
         setCaptcha('')
@@ -233,12 +244,7 @@ export default function AuthPage({ mode }: { mode: Mode }) {
 
           <form onSubmit={submit} className="grid gap-4" noValidate>
             {mode === 'register' && (
-              <Field
-                label="邀请码"
-                htmlFor="invite"
-                error={errFor('invite')}
-                hint="邀请码包含一段托管服务时长。"
-              >
+              <Field label="邀请码" htmlFor="invite" error={errFor('invite')} hint="邀请码包含一段托管服务时长。">
                 <Input
                   id="invite"
                   value={invite}
@@ -295,12 +301,21 @@ export default function AuthPage({ mode }: { mode: Mode }) {
             {needCaptcha && (
               <div>
                 <Captcha value={captcha} onChange={setCaptcha} onId={setCaptchaId} bump={captchaBump} />
-                {errFor('captcha') && <p role="alert" className="mt-1.5 text-[13px] text-bad">{errFor('captcha')}</p>}
+                {errFor('captcha') && (
+                  <p role="alert" className="mt-1.5 text-[13px] text-bad">
+                    {errFor('captcha')}
+                  </p>
+                )}
               </div>
             )}
 
             {mode !== 'login' && (
-              <Field label="邮箱验证码" htmlFor="code" error={errFor('code')} hint={sent ? `验证码已发到 ${email}，几分钟内有效。` : undefined}>
+              <Field
+                label="邮箱验证码"
+                htmlFor="code"
+                error={errFor('code')}
+                hint={sent ? `验证码已发到 ${email}，几分钟内有效。` : undefined}
+              >
                 <div className="flex gap-2">
                   <Input
                     id="code"
@@ -343,12 +358,19 @@ export default function AuthPage({ mode }: { mode: Mode }) {
                   className="mt-1 size-4 shrink-0 accent-cobalt"
                 />
                 <span>
-                  我已阅读<Link to="/about#rules" className="mx-0.5 text-sky underline underline-offset-2">托管须知</Link>，
-                  自己的模型 Key 由我自己负责。
+                  我已阅读
+                  <Link to="/about#rules" className="mx-0.5 text-sky underline underline-offset-2">
+                    托管须知
+                  </Link>
+                  ， 自己的模型 Key 由我自己负责。
                 </span>
               </label>
             )}
-            {errFor('agree') && <p role="alert" className="-mt-2 text-[13px] text-bad">{errFor('agree')}</p>}
+            {errFor('agree') && (
+              <p role="alert" className="-mt-2 text-[13px] text-bad">
+                {errFor('agree')}
+              </p>
+            )}
 
             {error && !error.field && (
               <p role="alert" className="rounded-xl bg-bad-soft px-3.5 py-2.5 text-sm text-bad">
@@ -364,11 +386,17 @@ export default function AuthPage({ mode }: { mode: Mode }) {
           <p className="mt-6 text-center text-sm text-ink-2">
             {mode === 'login' ? (
               <>
-                还没有账号？<Link to="/register" className="font-semibold text-sky">用邀请码注册</Link>
+                还没有账号？
+                <Link to="/register" className="font-semibold text-sky">
+                  用邀请码注册
+                </Link>
               </>
             ) : (
               <>
-                已有账号？<Link to="/login" className="font-semibold text-sky">登录</Link>
+                已有账号？
+                <Link to="/login" className="font-semibold text-sky">
+                  登录
+                </Link>
               </>
             )}
           </p>

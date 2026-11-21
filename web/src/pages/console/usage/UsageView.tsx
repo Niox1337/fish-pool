@@ -110,7 +110,17 @@ function Breakdown({ groups }: { groups: Group[] }) {
 
 type Point = Usage['history'][number]
 
-function ChartTip({ active, payload, field, label }: { active?: boolean; payload?: { payload: Point }[]; field: 'memory_bytes' | 'storage_bytes'; label: string }) {
+function ChartTip({
+  active,
+  payload,
+  field,
+  label,
+}: {
+  active?: boolean
+  payload?: { payload: Point }[]
+  field: 'memory_bytes' | 'storage_bytes'
+  label: string
+}) {
   const p = payload?.[0]?.payload
   if (!active || !p) return null
   return (
@@ -173,7 +183,9 @@ function HistoryChart({
             />
             <Tooltip
               cursor={{ stroke: 'var(--color-ink-3)', strokeDasharray: '3 3' }}
-              content={(props) => <ChartTip active={props.active} payload={props.payload as unknown as { payload: Point }[]} field={field} label={label} />}
+              content={(props) => (
+                <ChartTip active={props.active} payload={props.payload as unknown as { payload: Point }[]} field={field} label={label} />
+              )}
             />
             {showQuota && (
               <ReferenceLine
@@ -223,7 +235,11 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
           <FoodBar label="存储" capacity={storeQuota} servings={servings('storage_bytes')} />
           {bots && quota && (
             <dl className="grid grid-cols-2 gap-4 border-t border-paper-3 pt-4 sm:max-w-md">
-              <Stat label="小鱼" value={`${bots.length} / ${quota.bots ?? '不限'}`} tone={quota.bots != null && bots.length > quota.bots ? 'bad' : undefined} />
+              <Stat
+                label="小鱼"
+                value={`${bots.length} / ${quota.bots ?? '不限'}`}
+                tone={quota.bots != null && bots.length > quota.bots ? 'bad' : undefined}
+              />
               <Stat
                 label="插件（所有小鱼合计）"
                 value={`${pluginCount} / ${quota.plugins ?? '不限'}`}
@@ -242,9 +258,7 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
           谁吃了多少
         </h2>
         {groups.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">
-            暂无用量。启动小鱼后查看明细。
-          </p>
+          <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">暂无用量。启动小鱼后查看明细。</p>
         ) : (
           <Breakdown groups={groups} />
         )}
@@ -254,10 +268,9 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
         <h2 id="usage-history" className="font-display text-lg font-black text-ink">
           过去 24 小时
         </h2>
-        {usage.history.length === 0 || (usage.sources.length === 0 && usage.history.every((h) => h.memory_bytes === 0 && h.storage_bytes === 0)) ? (
-          <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">
-            暂无记录。小鱼运行后每 5 分钟采样。
-          </p>
+        {usage.history.length === 0 ||
+        (usage.sources.length === 0 && usage.history.every((h) => h.memory_bytes === 0 && h.storage_bytes === 0)) ? (
+          <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-[15px] text-ink-2">暂无记录。小鱼运行后每 5 分钟采样。</p>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
             <HistoryChart data={usage.history} field="memory_bytes" label="内存" quotaBytes={memQuota} color="var(--color-cobalt)" />

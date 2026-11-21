@@ -35,7 +35,10 @@ function UsageCell({ u, labelled }: { u: AdminUser; labelled?: boolean }) {
     <span className="tabular-nums">
       {labelled && <span className="text-ink-3">内存 </span>}
       <span className={cn('text-ink', over && 'font-semibold text-bad')}>{fmtBytes(u.memory_bytes)}</span>
-      <span className="text-ink-3">{labelled ? '，存储 ' : ' / '}{fmtBytes(u.storage_bytes)}</span>
+      <span className="text-ink-3">
+        {labelled ? '，存储 ' : ' / '}
+        {fmtBytes(u.storage_bytes)}
+      </span>
     </span>
   )
 }
@@ -54,7 +57,7 @@ export default function AdminUsers() {
 
   const extra = more && more.q === q ? more : null
   const items = [...(first.data?.items ?? []), ...(extra?.items ?? [])]
-  const cursor = extra ? extra.cursor : first.data?.cursor ?? null
+  const cursor = extra ? extra.cursor : (first.data?.cursor ?? null)
   const stale = first.isFetching && first.isPlaceholderData
 
   async function loadMore() {
@@ -103,16 +106,29 @@ export default function AdminUsers() {
           <table className="hidden w-full table-fixed overflow-hidden rounded-2xl border border-paper-3 bg-cream text-sm lg:table">
             <thead>
               <tr className="border-b border-paper-3 text-left text-[13px] text-ink-3">
-                <th scope="col" className="w-[27%] px-4 py-2.5 font-semibold">邮箱</th>
-                <th scope="col" className="w-[13%] px-3 py-2.5 font-semibold">服务</th>
-                <th scope="col" className="px-3 py-2.5 font-semibold">小鱼</th>
-                <th scope="col" className="w-[22%] px-3 py-2.5 font-semibold">内存 / 存储</th>
-                <th scope="col" className="w-[14%] px-4 py-2.5 text-right font-semibold">最近登录</th>
+                <th scope="col" className="w-[27%] px-4 py-2.5 font-semibold">
+                  邮箱
+                </th>
+                <th scope="col" className="w-[13%] px-3 py-2.5 font-semibold">
+                  服务
+                </th>
+                <th scope="col" className="px-3 py-2.5 font-semibold">
+                  小鱼
+                </th>
+                <th scope="col" className="w-[22%] px-3 py-2.5 font-semibold">
+                  内存 / 存储
+                </th>
+                <th scope="col" className="w-[14%] px-4 py-2.5 text-right font-semibold">
+                  最近登录
+                </th>
               </tr>
             </thead>
             <tbody>
               {items.map((u) => (
-                <tr key={u.id} className="group relative border-b border-paper-3/70 transition-colors duration-150 last:border-b-0 hover:bg-white">
+                <tr
+                  key={u.id}
+                  className="group relative border-b border-paper-3/70 transition-colors duration-150 last:border-b-0 hover:bg-white"
+                >
                   <th scope="row" className="px-4 py-3 text-left font-normal">
                     <Link
                       to={`/app/admin/users/${u.id}`}
@@ -123,10 +139,18 @@ export default function AdminUsers() {
                     </Link>
                     <RoleTag u={u} />
                   </th>
-                  <td className="px-3 py-3"><ServiceStatus user={u} compact /></td>
-                  <td className="px-3 py-3"><BotsCell u={u} /></td>
-                  <td className="px-3 py-3 whitespace-nowrap"><UsageCell u={u} /></td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap text-ink-2 tabular-nums">{u.last_login_at ? fmtAgo(u.last_login_at) : '从未登录'}</td>
+                  <td className="px-3 py-3">
+                    <ServiceStatus user={u} compact />
+                  </td>
+                  <td className="px-3 py-3">
+                    <BotsCell u={u} />
+                  </td>
+                  <td className="px-3 py-3 whitespace-nowrap">
+                    <UsageCell u={u} />
+                  </td>
+                  <td className="px-4 py-3 text-right whitespace-nowrap text-ink-2 tabular-nums">
+                    {u.last_login_at ? fmtAgo(u.last_login_at) : '从未登录'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -135,7 +159,10 @@ export default function AdminUsers() {
           <ul className="divide-y divide-paper-3 overflow-hidden rounded-2xl border border-paper-3 bg-cream lg:hidden">
             {items.map((u) => (
               <li key={u.id}>
-                <Link to={`/app/admin/users/${u.id}`} className="flex items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-white">
+                <Link
+                  to={`/app/admin/users/${u.id}`}
+                  className="flex items-center gap-3 px-4 py-3 transition-colors duration-150 hover:bg-white"
+                >
                   <div className="min-w-0 flex-1 text-[13px]">
                     <div className="flex flex-wrap items-center gap-x-2">
                       <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{u.email}</span>

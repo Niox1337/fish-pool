@@ -124,7 +124,9 @@ def build_event(data: dict[str, Any], event_id: str | None = None) -> FishMessag
         session = MessageSession.from_str(umo)
     except Exception:
         session = MessageSession(platform, msg.type, msg.session_id)
-    meta = PlatformMetadata(name=PLATFORM_ADAPTER_NAMES.get(platform, platform), description="fish", id=session.platform_name)
+    meta = PlatformMetadata(
+        name=PLATFORM_ADAPTER_NAMES.get(platform, platform), description="fish", id=session.platform_name
+    )
     event = FishMessageEvent(text, msg, meta, session.session_id)
     event.session = session
     event.is_at_or_wake_command = woken
@@ -173,7 +175,9 @@ class FishProvider(Provider):
         self.model_name = PROVIDER_ID
 
     def meta(self) -> ProviderMeta:
-        return ProviderMeta(id=PROVIDER_ID, model=self.model_name, type=PROVIDER_ID, provider_type=ProviderType.CHAT_COMPLETION)
+        return ProviderMeta(
+            id=PROVIDER_ID, model=self.model_name, type=PROVIDER_ID, provider_type=ProviderType.CHAT_COMPLETION
+        )
 
     def get_current_key(self) -> str:
         return ""
@@ -215,7 +219,8 @@ class FishProvider(Provider):
             for result in results:
                 messages.extend(result.to_openai_messages())
         definitions = [
-            tools.tool_schema(tool) for tool in (func_tool.tools if func_tool else [])
+            tools.tool_schema(tool)
+            for tool in (func_tool.tools if func_tool else [])
             if tool.active and not isinstance(tool, HandoffTool)
         ]
         reply = await runtime.get_runtime().llm(
@@ -258,10 +263,14 @@ class FishProviderManager:
         self.acm = config
         self.curr_provider_inst = self.provider
 
-    def get_using_provider(self, provider_type: ProviderType = ProviderType.CHAT_COMPLETION, umo: str | None = None) -> Any:
+    def get_using_provider(
+        self, provider_type: ProviderType = ProviderType.CHAT_COMPLETION, umo: str | None = None
+    ) -> Any:
         return self.provider if provider_type == ProviderType.CHAT_COMPLETION else None
 
-    async def get_using_provider_async(self, provider_type: ProviderType = ProviderType.CHAT_COMPLETION, umo: str | None = None) -> Any:
+    async def get_using_provider_async(
+        self, provider_type: ProviderType = ProviderType.CHAT_COMPLETION, umo: str | None = None
+    ) -> Any:
         return self.get_using_provider(provider_type, umo)
 
     async def get_provider_by_id(self, provider_id: str) -> Any:

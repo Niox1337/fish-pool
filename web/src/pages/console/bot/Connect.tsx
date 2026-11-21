@@ -104,7 +104,12 @@ function QrFlow({ botId, kind, again }: { botId: string; kind: Kind; again: bool
             {name}已接入
           </p>
         )}
-        <Button variant={again || phase === 'created' ? 'secondary' : 'primary'} onClick={start} loading={phase === 'starting'} className="justify-self-start">
+        <Button
+          variant={again || phase === 'created' ? 'secondary' : 'primary'}
+          onClick={start}
+          loading={phase === 'starting'}
+          className="justify-self-start"
+        >
           <QrCode aria-hidden />
           {again || phase === 'created' ? '再扫一个' : `生成${mid}二维码`}
         </Button>
@@ -123,7 +128,11 @@ function QrFlow({ botId, kind, again }: { botId: string; kind: Kind; again: bool
             marginSize={0}
             fgColor="#1b2163"
             title={`${name}扫码用的二维码`}
-            className={cn('block transition-[opacity,filter] duration-200', dim && 'opacity-25 blur-[2px]', phase === 'scanned' && 'opacity-20')}
+            className={cn(
+              'block transition-[opacity,filter] duration-200',
+              dim && 'opacity-25 blur-[2px]',
+              phase === 'scanned' && 'opacity-20',
+            )}
           />
         ) : (
           <div className="size-[176px]" />
@@ -154,9 +163,7 @@ function QrFlow({ botId, kind, again }: { botId: string; kind: Kind; again: bool
             <p className="mt-1">按手机上的提示确认。</p>
           </>
         )}
-        {phase === 'scanned' && (
-          <p className="font-semibold text-ok">等待手机确认</p>
-        )}
+        {phase === 'scanned' && <p className="font-semibold text-ok">等待手机确认</p>}
         {phase === 'starting' && <p className="font-semibold text-ink">正在生成新的二维码…</p>}
         {phase === 'expired' && (
           <>
@@ -281,7 +288,8 @@ function QqConnection({ bot, p }: { bot: Bot; p: Platform }) {
     update.mutate(
       { mode: next },
       {
-        onSuccess: () => toast.success(next === 'webhook' ? '已改为 Webhook，填好回调地址后就能收到消息' : '已改为 WebSocket，正在重新连接'),
+        onSuccess: () =>
+          toast.success(next === 'webhook' ? '已改为 Webhook，填好回调地址后就能收到消息' : '已改为 WebSocket，正在重新连接'),
         onError: (e) => showError(e),
       },
     )
@@ -318,7 +326,9 @@ function QqConnection({ bot, p }: { bot: Bot; p: Platform }) {
         <div className="mt-3 rounded-xl border border-paper-3 bg-paper/60 p-4">
           <p className="text-[13px] font-semibold text-ink-2">回调地址</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <code className="min-w-0 flex-1 basis-60 break-all rounded-lg bg-white px-3 py-2 font-mono text-[13px] text-ink">{callback}</code>
+            <code className="min-w-0 flex-1 basis-60 break-all rounded-lg bg-white px-3 py-2 font-mono text-[13px] text-ink">
+              {callback}
+            </code>
             <Button size="sm" variant="secondary" onClick={() => copyText(callback, '回调地址')}>
               <Copy aria-hidden />
               复制
@@ -327,7 +337,12 @@ function QqConnection({ bot, p }: { bot: Bot; p: Platform }) {
           <ol className="mt-4 grid list-decimal gap-1.5 pl-5 text-[13px] leading-relaxed text-ink-2 marker:font-semibold marker:text-ink-3">
             <li>
               打开{' '}
-              <a href="https://q.qq.com/qqbot/#/developer/webhook-setting" target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-semibold text-sky hover:underline">
+              <a
+                href="https://q.qq.com/qqbot/#/developer/webhook-setting"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-0.5 font-semibold text-sky hover:underline"
+              >
                 QQ 开放平台的回调配置
                 <ExternalLink className="size-3" aria-hidden />
               </a>
@@ -389,7 +404,10 @@ function PlatformRow({ bot, p }: { bot: Bot; p: Platform }) {
             onCheckedChange={(v) =>
               update.mutate(
                 { enabled: v },
-                { onSuccess: () => toast.success(v ? `${label} 已打开` : `${label} 已关闭，小鱼暂时不会在这里回话`), onError: (e) => showError(e) },
+                {
+                  onSuccess: () => toast.success(v ? `${label} 已打开` : `${label} 已关闭，小鱼暂时不会在这里回话`),
+                  onError: (e) => showError(e),
+                },
               )
             }
           />
@@ -450,9 +468,7 @@ export default function Connect({ bot }: { bot: Bot }) {
           <span className="ml-2 text-sm font-semibold text-ink-3 tabular-nums">{bot.platforms.length}</span>
         </h2>
         {bot.platforms.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-sm leading-relaxed text-ink-2">
-            暂未接入平台。
-          </p>
+          <p className="rounded-2xl border border-dashed border-paper-3 p-5 text-sm leading-relaxed text-ink-2">暂未接入平台。</p>
         ) : (
           <ul className="divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream p-5">
             {bot.platforms.map((p) => (

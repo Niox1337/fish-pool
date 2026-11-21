@@ -57,7 +57,9 @@ export default function LandingSections() {
 
       <section data-reveal id="plugins" className="ls-book" aria-labelledby="ls-plugins">
         <div className="ls-page">
-          <h2 id="ls-plugins" className="ls-title">点一下，装上新本领</h2>
+          <h2 id="ls-plugins" className="ls-title">
+            点一下，装上新本领
+          </h2>
           <p className="ls-body">
             小鱼的插件页里就是 AstrBot 插件市场，搜到喜欢的插件点一下安装。托管班会装好依赖、启动插件，并把安装过程写进日志。
           </p>
@@ -72,14 +74,14 @@ export default function LandingSections() {
           <h2 id="ls-invite" className="ls-note-title">
             开通托管需要邀请码
           </h2>
-          <p className="ls-body">
-            每个邀请码都带有服务天数。到期时小鱼会停止运行，设置和插件会保留。兑换新的邀请码后即可继续托管。
-          </p>
+          <p className="ls-body">每个邀请码都带有服务天数。到期时小鱼会停止运行，设置和插件会保留。兑换新的邀请码后即可继续托管。</p>
         </div>
       </section>
 
       <section id="faq" className="ls-faq" aria-labelledby="ls-faq-title">
-        <h2 id="ls-faq-title" className="ls-section-title">常见问题</h2>
+        <h2 id="ls-faq-title" className="ls-section-title">
+          常见问题
+        </h2>
         <div className="ls-faq-list">
           {FAQ.map((item) => (
             <details key={item.q} className="ls-faq-item">
@@ -97,7 +99,9 @@ export default function LandingSections() {
 
       <section data-loop className="ls-end" aria-labelledby="ls-end-title">
         <Pupil mood="wave" size={144} />
-        <h2 id="ls-end-title" className="ls-end-title">准备好了就带小鱼来</h2>
+        <h2 id="ls-end-title" className="ls-end-title">
+          准备好了就带小鱼来
+        </h2>
         <Link to="/register" className="ls-end-cta">
           开始托管
           <ArrowRight aria-hidden strokeWidth={3} />

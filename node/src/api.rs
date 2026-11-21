@@ -61,8 +61,14 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/v1/bots/{bot_id}/logs", get(bot_logs))
         .route("/v1/bots/{bot_id}/plugins/{plugin_id}/reload", post(reload_plugin))
         .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-webhook", post(qq_webhook))
-        .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels", get(qq_panels::list).post(qq_panels::create))
-        .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels/{panel_id}", put(qq_panels::update).delete(qq_panels::delete))
+        .route(
+            "/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels",
+            get(qq_panels::list).post(qq_panels::create),
+        )
+        .route(
+            "/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels/{panel_id}",
+            put(qq_panels::update).delete(qq_panels::delete),
+        )
         .route("/v1/usage", get(usage))
         .route("/v1/usage/summary", get(usage_summary))
         .route("/v1/system", get(system))
@@ -161,7 +167,8 @@ async fn restart_bot(State(node): State<Arc<Node>>, Path(bot_id): Path<String>) 
 
 async fn reload_plugin(State(node): State<Arc<Node>>, Path((bot_id, plugin_id)): Path<(String, String)>) -> ApiResult {
     let bot = node.get(&bot_id).ok_or_else(ApiError::not_found)?;
-    bot.reload_plugin(&plugin_id).await
+    bot.reload_plugin(&plugin_id)
+        .await
         .map_err(|error| ApiError::new(StatusCode::CONFLICT, "plugin_reload_unavailable", error))?;
     Ok(Json(json!({"ok": true})))
 }

@@ -33,9 +33,11 @@ function typeDefault(f: SchemaField): unknown {
 export function withDefaults(schema: PluginSchema, value: Obj): Obj {
   return {
     ...value,
-    ...Object.fromEntries(schemaFields(schema).map(([name, field]) => {
-      const stored = Object.hasOwn(value, name) ? value[name] : typeDefault(field)
-      return [name, field.type === 'object' && isObject(stored) ? withDefaults(field.items ?? {}, stored) : stored]
-    })),
+    ...Object.fromEntries(
+      schemaFields(schema).map(([name, field]) => {
+        const stored = Object.hasOwn(value, name) ? value[name] : typeDefault(field)
+        return [name, field.type === 'object' && isObject(stored) ? withDefaults(field.items ?? {}, stored) : stored]
+      }),
+    ),
   }
 }

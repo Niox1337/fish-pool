@@ -52,10 +52,15 @@ pub async fn usage_for(app: &App, user: &UserRow) -> ApiResult<Value> {
         id: String,
         node_id: String,
     }
-    let bots: Vec<B> = app.db.all("SELECT id, node_id FROM bots WHERE user_id = ?1", args![user.id]).await?;
+    let bots: Vec<B> = app
+        .db
+        .all("SELECT id, node_id FROM bots WHERE user_id = ?1", args![user.id])
+        .await?;
     let bot_ids: HashSet<String> = bots.iter().map(|b| b.id.clone()).collect();
     let nodes: HashSet<String> = bots.iter().map(|b| b.node_id.clone()).collect();
-    let q: String = url::form_urlencoded::Serializer::new(String::new()).append_pair("user_id", &user.id).finish();
+    let q: String = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("user_id", &user.id)
+        .finish();
     let mut reports = Vec::new();
     for node in nodes {
         let client = app.node_client(&node).await?;
@@ -91,7 +96,10 @@ mod tests {
         assert_eq!(v["memory_bytes"], 150);
         assert_eq!(v["storage_bytes"], 30);
         assert_eq!(v["sources"].as_array().unwrap().len(), 2);
-        assert_eq!(v["history"][0], json!({"ts": 1, "memory_bytes": 10, "storage_bytes": 10}));
+        assert_eq!(
+            v["history"][0],
+            json!({"ts": 1, "memory_bytes": 10, "storage_bytes": 10})
+        );
         assert_eq!(v["quota"]["memory_mb"], 256);
         let empty = merge_usage(&fixtures::user(), &[], &HashSet::new());
         assert_eq!(empty["memory_bytes"], 0);

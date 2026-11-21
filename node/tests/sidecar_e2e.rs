@@ -149,7 +149,11 @@ async fn real_sidecar_commands_wake_prefix_and_load_failure() {
         Err(e) => e,
     };
     let load = err.downcast_ref::<LoadError>().expect("load error");
-    assert!(load.0.contains("ImportError") && load.0.contains("astrbot.core.pipeline"), "{}", load.0);
+    assert!(
+        load.0.contains("ImportError") && load.0.contains("astrbot.core.pipeline"),
+        "{}",
+        load.0
+    );
     assert!(load.0.contains("astrbot.core.pipeline"), "{}", load.0);
 
     sidecar.shutdown().await;
@@ -228,10 +232,7 @@ async fn real_sidecar_load_failure_sets_status_without_restart_loop() {
     loop {
         let (b, g) = (plugin_status(&node, "pb"), plugin_status(&node, "pc"));
         if b["status"] == "error" && g["status"] == "running" {
-            assert!(
-                b["status_detail"].as_str().unwrap().contains("ImportError"),
-                "{b}"
-            );
+            assert!(b["status_detail"].as_str().unwrap().contains("ImportError"), "{b}");
             assert_eq!(g["version"], "1.2.3");
             break;
         }
@@ -262,7 +263,10 @@ async fn wait_status(node: &Arc<Node>, id: &str, wanted: &[&str], secs: u64) {
         if s["status"].as_str().is_some_and(|status| wanted.contains(&status)) {
             return;
         }
-        assert!(tokio::time::Instant::now() < deadline, "{id} did not reach {wanted:?}: {s}");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{id} did not reach {wanted:?}: {s}"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -407,7 +411,10 @@ async fn light_plugins_share_a_group_process_and_others_run_alone() {
     };
     assert_eq!(pids[0], pids[1]);
     assert_ne!(pids[0], pids[2]);
-    assert!(plugin_status(&node, "pc")["status_detail"].as_str().unwrap().contains("共用"));
+    assert!(plugin_status(&node, "pc")["status_detail"]
+        .as_str()
+        .unwrap()
+        .contains("共用"));
     assert_eq!(plugin_status(&node, "pg")["status_detail"], "");
     let (items, _) = bot.logs.read_after(None, 1000);
     assert!(

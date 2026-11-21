@@ -296,7 +296,13 @@ impl QqConn {
         self.api_at(&self.api_base, method, path, body).await
     }
 
-    pub(crate) async fn api_at(&self, base: &str, method: reqwest::Method, path: &str, body: Option<&Value>) -> Result<Value> {
+    pub(crate) async fn api_at(
+        &self,
+        base: &str,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value> {
         let token = self.access_token().await?;
         let mut req = self
             .http
@@ -650,8 +656,12 @@ pub mod webhook {
     /// Verifies `X-Signature-Ed25519` over `timestamp || body`.
     pub fn verify(secret: &str, timestamp: &str, sig_hex: &str, body: &[u8]) -> bool {
         let Some(key) = signing_key(secret) else { return false };
-        let Ok(raw) = hex::decode(sig_hex.trim()) else { return false };
-        let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else { return false };
+        let Ok(raw) = hex::decode(sig_hex.trim()) else {
+            return false;
+        };
+        let Ok(arr) = <[u8; 64]>::try_from(raw.as_slice()) else {
+            return false;
+        };
         if arr[63] & 224 != 0 {
             return false;
         }
@@ -773,7 +783,6 @@ impl QqConn {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -860,7 +869,13 @@ mod tests {
 
     fn webhook_conn() -> QqConn {
         let logs = Arc::new(LogBuffer::new("b", 10));
-        let mut c = QqConn::new("p1", "1024", "naOC0ocQE3shWLAfffVLB1rhYPG7", reqwest::Client::new(), logs);
+        let mut c = QqConn::new(
+            "p1",
+            "1024",
+            "naOC0ocQE3shWLAfffVLB1rhYPG7",
+            reqwest::Client::new(),
+            logs,
+        );
         c.webhook = true;
         c
     }
@@ -869,7 +884,12 @@ mod tests {
         use ed25519_dalek::Signer;
         let key = webhook::signing_key(secret).unwrap();
         let sig = key.sign(format!("{ts}{body}").as_bytes());
-        WebhookDelivery { timestamp: ts.into(), signature: hex::encode(sig.to_bytes()), app_id: "1024".into(), body: body.into() }
+        WebhookDelivery {
+            timestamp: ts.into(),
+            signature: hex::encode(sig.to_bytes()),
+            app_id: "1024".into(),
+            body: body.into(),
+        }
     }
 
     #[test]
@@ -889,14 +909,23 @@ mod tests {
         assert!(webhook::verify(secret, "1725442341", &w.signature, b"{\"op\":0}"));
         assert!(!webhook::verify(secret, "1725442342", &w.signature, b"{\"op\":0}"));
         assert!(!webhook::verify(secret, "1725442341", &w.signature, b"{\"op\":1}"));
-        assert!(!webhook::verify("other-secret", "1725442341", &w.signature, b"{\"op\":0}"));
+        assert!(!webhook::verify(
+            "other-secret",
+            "1725442341",
+            &w.signature,
+            b"{\"op\":0}"
+        ));
         assert!(!webhook::verify(secret, "1725442341", "zz", b"{\"op\":0}"));
     }
 
     #[test]
     fn webhook_validation_answer() {
         let secret = "naOC0ocQE3shWLAfffVLB1rhYPG7";
-        let v = webhook::validation_answer(secret, &json!({"plain_token": "Arq0D5A61EgUu4OxUvOp", "event_ts": "1725442341"})).unwrap();
+        let v = webhook::validation_answer(
+            secret,
+            &json!({"plain_token": "Arq0D5A61EgUu4OxUvOp", "event_ts": "1725442341"}),
+        )
+        .unwrap();
         assert_eq!(v["plain_token"], "Arq0D5A61EgUu4OxUvOp");
         assert_eq!(
             v["signature"],
@@ -930,12 +959,23 @@ mod tests {
         assert_eq!(seen.lock().unwrap().as_slice(), ["connected"]);
 
         let body = r#"{"id":"ev1","op":0,"t":"C2C_MESSAGE_CREATE","d":{"id":"m1","content":"hi","author":{"user_openid":"u1"}}}"#;
-        let unsigned = WebhookDelivery { timestamp: String::new(), signature: String::new(), app_id: "1024".into(), body: body.into() };
-        assert!(matches!(c.handle_webhook(&unsigned, &tx, &status), WebhookReply::Unauthorized(_)));
+        let unsigned = WebhookDelivery {
+            timestamp: String::new(),
+            signature: String::new(),
+            app_id: "1024".into(),
+            body: body.into(),
+        };
+        assert!(matches!(
+            c.handle_webhook(&unsigned, &tx, &status),
+            WebhookReply::Unauthorized(_)
+        ));
 
         let mut forged = signed("naOC0ocQE3shWLAfffVLB1rhYPG7", "1725442341", body);
         forged.body = body.replace("hi", "bye");
-        assert!(matches!(c.handle_webhook(&forged, &tx, &status), WebhookReply::Unauthorized(_)));
+        assert!(matches!(
+            c.handle_webhook(&forged, &tx, &status),
+            WebhookReply::Unauthorized(_)
+        ));
 
         let ok = signed("naOC0ocQE3shWLAfffVLB1rhYPG7", "1725442341", body);
         assert_eq!(c.handle_webhook(&ok, &tx, &status), WebhookReply::Ok(json!({"op": 12})));
@@ -946,10 +986,16 @@ mod tests {
 
         let mut wrong_app = signed("naOC0ocQE3shWLAfffVLB1rhYPG7", "1725442341", body);
         wrong_app.app_id = "999".into();
-        assert!(matches!(c.handle_webhook(&wrong_app, &tx, &status), WebhookReply::Unauthorized(_)));
+        assert!(matches!(
+            c.handle_webhook(&wrong_app, &tx, &status),
+            WebhookReply::Unauthorized(_)
+        ));
 
         let mut ws = webhook_conn();
         ws.webhook = false;
-        assert!(matches!(ws.handle_webhook(&ok, &tx, &status), WebhookReply::BadRequest(_)));
+        assert!(matches!(
+            ws.handle_webhook(&ok, &tx, &status),
+            WebhookReply::BadRequest(_)
+        ));
     }
 }

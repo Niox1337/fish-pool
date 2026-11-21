@@ -106,9 +106,7 @@ function RedeemForm({ me }: { me: User }) {
         <Ticket className="size-5 text-pink-ink" aria-hidden />
         兑换邀请码
       </h2>
-      <p className="mt-1 text-sm leading-relaxed text-ink-2">
-        未到期时从到期日续期，已到期时从今天算起。
-      </p>
+      <p className="mt-1 text-sm leading-relaxed text-ink-2">未到期时从到期日续期，已到期时从今天算起。</p>
       <form onSubmit={submit} noValidate className="mt-4">
         <Field label="邀请码" htmlFor="redeem" error={error}>
           <div className="flex gap-2">
@@ -192,8 +190,7 @@ function EventCredit() {
           {credits.map((c, i) => (
             <li key={`c${i}`} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2.5">
               <span className="font-semibold text-ink tabular-nums">
-                {c.available} 元
-                <span className="ml-2 text-[13px] font-normal text-ink-3">共 {c.amount} 元</span>
+                {c.available} 元<span className="ml-2 text-[13px] font-normal text-ink-3">共 {c.amount} 元</span>
               </span>
               <span className="text-[13px] text-ink-2 tabular-nums">{creditExpiry(c.expires_at)}</span>
             </li>
@@ -312,8 +309,16 @@ export default function AccountPage() {
             <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-4">
               <Stat label="内存" value={fmtMb(me.quota.memory_mb)} />
               <Stat label="存储" value={fmtMb(me.quota.storage_mb)} />
-              <Stat label="小鱼" value={me.quota.bots == null ? '不限' : `${me.quota.bots} 只`} sub={botCount != null ? `已托管 ${botCount} 只` : undefined} />
-              <Stat label="插件" value={me.quota.plugins == null ? '不限' : `${me.quota.plugins} 个`} sub={pluginCount != null ? `已装 ${pluginCount} 个` : undefined} />
+              <Stat
+                label="小鱼"
+                value={me.quota.bots == null ? '不限' : `${me.quota.bots} 只`}
+                sub={botCount != null ? `已托管 ${botCount} 只` : undefined}
+              />
+              <Stat
+                label="插件"
+                value={me.quota.plugins == null ? '不限' : `${me.quota.plugins} 个`}
+                sub={pluginCount != null ? `已装 ${pluginCount} 个` : undefined}
+              />
             </dl>
             <p className="mt-4 text-[13px] text-ink-3">调整额度请联系管理员。</p>
           </section>

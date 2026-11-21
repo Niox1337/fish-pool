@@ -82,7 +82,11 @@ impl Db {
     }
 
     /// Like [`Db::all`], also returning the D1 result metadata (duration, database size).
-    pub async fn all_meta<T: DeserializeOwned>(&self, sql: &str, args: &[JsValue]) -> ApiResult<(Vec<T>, Option<worker::D1ResultMeta>)> {
+    pub async fn all_meta<T: DeserializeOwned>(
+        &self,
+        sql: &str,
+        args: &[JsValue],
+    ) -> ApiResult<(Vec<T>, Option<worker::D1ResultMeta>)> {
         let res = self.stmt(sql, args)?.all().await.map_err(db_err)?;
         let meta = res.meta().ok().flatten();
         Ok((res.results::<T>().map_err(db_err)?, meta))
@@ -91,7 +95,13 @@ impl Db {
     /// Runs a statement and returns the number of changed rows.
     pub async fn run(&self, sql: &str, args: &[JsValue]) -> ApiResult<i64> {
         let res = self.stmt(sql, args)?.run().await.map_err(db_err)?;
-        Ok(res.meta().ok().flatten().and_then(|m| m.changes).map(|c| c as i64).unwrap_or(0))
+        Ok(res
+            .meta()
+            .ok()
+            .flatten()
+            .and_then(|m| m.changes)
+            .map(|c| c as i64)
+            .unwrap_or(0))
     }
 
     /// Runs `SELECT COUNT(*) AS n ...` style queries.
@@ -107,7 +117,14 @@ impl Db {
         let results = self.0.batch(stmts).await.map_err(db_err)?;
         Ok(results
             .iter()
-            .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).map(|c| c as i64).unwrap_or(0))
+            .map(|r| {
+                r.meta()
+                    .ok()
+                    .flatten()
+                    .and_then(|m| m.changes)
+                    .map(|c| c as i64)
+                    .unwrap_or(0)
+            })
             .collect())
     }
 }

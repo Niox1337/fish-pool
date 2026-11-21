@@ -7,7 +7,10 @@ import { cn } from '@/lib/cn'
 
 export function ActionError({ error, onDismiss }: { error: unknown; onDismiss?: () => void }) {
   return (
-    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl border border-bad/25 bg-bad-soft px-4 py-3 text-sm text-bad">
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl border border-bad/25 bg-bad-soft px-4 py-3 text-sm text-bad"
+    >
       <span className="min-w-0 flex-1">{errMsg(error)}</span>
       {isExpired(error) && (
         <Link to="/app/account#redeem" className="font-semibold underline underline-offset-2">
@@ -73,7 +76,10 @@ export function ChipsInput({
   return (
     <div className="flex min-h-11 flex-wrap items-center gap-1.5 rounded-xl border border-paper-3 bg-white px-2 py-1.5 transition-[border-color,box-shadow] duration-150 focus-within:border-sky focus-within:shadow-[0_0_0_3px_rgb(47_91_216/0.18)] hover:border-ink-3/45">
       {value.map((v) => (
-        <span key={v} className="inline-flex max-w-full items-center gap-1 rounded-lg bg-sky-soft py-0.5 pr-1 pl-2 text-[13px] font-semibold text-sky">
+        <span
+          key={v}
+          className="inline-flex max-w-full items-center gap-1 rounded-lg bg-sky-soft py-0.5 pr-1 pl-2 text-[13px] font-semibold text-sky"
+        >
           <span className="truncate">{v}</span>
           <button
             type="button"

@@ -74,7 +74,10 @@ impl Trouble {
 
     /// Whether the same request with other options cannot succeed.
     pub fn is_account_problem(self) -> bool {
-        matches!(self, Trouble::NoKey | Trouble::Balance | Trouble::BadKey | Trouble::ModelMissing)
+        matches!(
+            self,
+            Trouble::NoKey | Trouble::Balance | Trouble::BadKey | Trouble::ModelMissing
+        )
     }
 }
 
@@ -88,13 +91,29 @@ pub fn trouble(e: &anyhow::Error) -> Option<Trouble> {
     let has = |words: &[&str]| words.iter().any(|w| text.contains(w));
     let status = api.status.map(|s| s.as_u16());
     if status == Some(402)
-        || has(&["insufficient_quota", "insufficient_balance", "insufficient balance", "insufficient_user_quota",
-                 "exceeded your current quota", "credit balance is too low", "余额不足", "欠费", "arrearage"])
+        || has(&[
+            "insufficient_quota",
+            "insufficient_balance",
+            "insufficient balance",
+            "insufficient_user_quota",
+            "exceeded your current quota",
+            "credit balance is too low",
+            "余额不足",
+            "欠费",
+            "arrearage",
+        ])
     {
         return Some(Trouble::Balance);
     }
     if status == Some(401)
-        || has(&["invalid_api_key", "invalid api key", "incorrect api key", "key_disabled", "key_expired", "authentication_error"])
+        || has(&[
+            "invalid_api_key",
+            "invalid api key",
+            "incorrect api key",
+            "key_disabled",
+            "key_expired",
+            "authentication_error",
+        ])
     {
         return Some(Trouble::BadKey);
     }
@@ -107,7 +126,12 @@ pub fn trouble(e: &anyhow::Error) -> Option<Trouble> {
     if status.is_some_and(|s| s >= 500) {
         return Some(Trouble::Unreachable);
     }
-    if has(&["content_filter", "content exists risk", "data_inspection_failed", "content_policy"]) {
+    if has(&[
+        "content_filter",
+        "content exists risk",
+        "data_inspection_failed",
+        "content_policy",
+    ]) {
         return Some(Trouble::Refused);
     }
     None
@@ -179,18 +203,25 @@ pub struct ChatReply {
 
 impl ChatReply {
     pub fn plugin_result(self, req_id: &str) -> Value {
-        let mut result = json!({"op": "llm_result", "req_id": req_id, "text": self.text, "tool_calls": self.tool_calls});
+        let mut result =
+            json!({"op": "llm_result", "req_id": req_id, "text": self.text, "tool_calls": self.tool_calls});
         if let Some(raw) = self.raw {
-            if let Some(thinking) = raw.as_array().and_then(|blocks| blocks.iter().find(|b| b["type"] == "thinking")) {
+            if let Some(thinking) = raw
+                .as_array()
+                .and_then(|blocks| blocks.iter().find(|b| b["type"] == "thinking"))
+            {
                 result["reasoning_content"] = thinking["thinking"].clone();
                 result["reasoning_signature"] = thinking["signature"].clone();
             } else {
                 if let Some(reasoning) = raw.get("reasoning_content") {
                     result["reasoning_content"] = reasoning.clone();
                 }
-                let extra = raw["tool_calls"].as_array().into_iter().flatten().filter_map(|call| {
-                    Some((call["id"].as_str()?.to_string(), call.get("extra_content")?.clone()))
-                }).collect::<serde_json::Map<String, Value>>();
+                let extra = raw["tool_calls"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|call| Some((call["id"].as_str()?.to_string(), call.get("extra_content")?.clone())))
+                    .collect::<serde_json::Map<String, Value>>();
                 if !extra.is_empty() {
                     result["tools_call_extra_content"] = Value::Object(extra);
                 }
@@ -233,62 +264,94 @@ fn claude_image(url: &str) -> Value {
 /// Converts AstrBot's OpenAI-style message history, including tool calls and their results.
 pub fn plugin_contexts(spec: &LlmSpec, contexts: &[Value]) -> Vec<ChatMessage> {
     let claude = spec.base_url.trim_end_matches('/') == CLAUDE_BASE_URL;
-    contexts.iter().filter_map(|message| {
-        let role = message["role"].as_str()?;
-        let content = &message["content"];
-        let parts: Vec<Value> = match content {
-            Value::Array(parts) => parts.iter().filter_map(|part| match part["type"].as_str()? {
-                "text" => Some(json!({"type": "text", "text": part["text"].as_str()?})),
-                "image_url" if role == "user" => {
-                    let url = part["image_url"]["url"].as_str()?;
-                    Some(if claude { claude_image(url) } else { json!({"type": "image_url", "image_url": {"url": url}}) })
-                }
-                _ => None,
-            }).collect(),
-            Value::String(text) if !text.is_empty() => vec![json!({"type": "text", "text": text})],
-            _ => vec![],
-        };
-        let text = parts.iter().filter_map(|p| p["text"].as_str()).collect::<String>();
-        if role == "tool" {
-            return Some(ChatMessage::tool_result(message["tool_call_id"].as_str()?, text));
-        }
-        if !matches!(role, "system" | "user" | "assistant") {
-            return None;
-        }
-        let calls = message["tool_calls"].as_array().filter(|calls| role == "assistant" && !calls.is_empty());
-        let think = content.as_array().and_then(|parts| parts.iter().find(|part| part["type"] == "think"));
-        if claude {
-            if let Some(calls) = calls {
-                let mut blocks = parts;
-                if let Some((reasoning, signature)) = think.and_then(|part| Some((part["think"].as_str()?, part["encrypted"].as_str()?))) {
-                    blocks.insert(0, json!({"type": "thinking", "thinking": reasoning, "signature": signature}));
-                }
-                for call in calls {
-                    let args = call["function"]["arguments"].as_str().and_then(|s| serde_json::from_str::<Value>(s).ok())?;
-                    blocks.push(json!({
-                        "type": "tool_use", "id": call["id"].as_str()?,
-                        "name": call["function"]["name"].as_str()?, "input": args,
-                    }));
-                }
-                return Some(ChatMessage::assistant_raw(Value::Array(blocks)));
+    contexts
+        .iter()
+        .filter_map(|message| {
+            let role = message["role"].as_str()?;
+            let content = &message["content"];
+            let parts: Vec<Value> = match content {
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|part| match part["type"].as_str()? {
+                        "text" => Some(json!({"type": "text", "text": part["text"].as_str()?})),
+                        "image_url" if role == "user" => {
+                            let url = part["image_url"]["url"].as_str()?;
+                            Some(if claude {
+                                claude_image(url)
+                            } else {
+                                json!({"type": "image_url", "image_url": {"url": url}})
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                Value::String(text) if !text.is_empty() => vec![json!({"type": "text", "text": text})],
+                _ => vec![],
+            };
+            let text = parts.iter().filter_map(|p| p["text"].as_str()).collect::<String>();
+            if role == "tool" {
+                return Some(ChatMessage::tool_result(message["tool_call_id"].as_str()?, text));
             }
-        } else if let Some(calls) = calls {
-            let content = if text.is_empty() { Value::Null } else { Value::String(text) };
-            let mut raw = json!({"role": "assistant", "content": content, "tool_calls": calls});
-            if let Some(reasoning) = think.and_then(|part| part["think"].as_str()).or_else(|| message["reasoning_content"].as_str()) {
-                raw["reasoning_content"] = json!(reasoning);
+            if !matches!(role, "system" | "user" | "assistant") {
+                return None;
             }
-            if let Some(details) = message.get("reasoning_details") {
-                raw["reasoning_details"] = details.clone();
+            let calls = message["tool_calls"]
+                .as_array()
+                .filter(|calls| role == "assistant" && !calls.is_empty());
+            let think = content
+                .as_array()
+                .and_then(|parts| parts.iter().find(|part| part["type"] == "think"));
+            if claude {
+                if let Some(calls) = calls {
+                    let mut blocks = parts;
+                    if let Some((reasoning, signature)) =
+                        think.and_then(|part| Some((part["think"].as_str()?, part["encrypted"].as_str()?)))
+                    {
+                        blocks.insert(
+                            0,
+                            json!({"type": "thinking", "thinking": reasoning, "signature": signature}),
+                        );
+                    }
+                    for call in calls {
+                        let args = call["function"]["arguments"]
+                            .as_str()
+                            .and_then(|s| serde_json::from_str::<Value>(s).ok())?;
+                        blocks.push(json!({
+                            "type": "tool_use", "id": call["id"].as_str()?,
+                            "name": call["function"]["name"].as_str()?, "input": args,
+                        }));
+                    }
+                    return Some(ChatMessage::assistant_raw(Value::Array(blocks)));
+                }
+            } else if let Some(calls) = calls {
+                let content = if text.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(text)
+                };
+                let mut raw = json!({"role": "assistant", "content": content, "tool_calls": calls});
+                if let Some(reasoning) = think
+                    .and_then(|part| part["think"].as_str())
+                    .or_else(|| message["reasoning_content"].as_str())
+                {
+                    raw["reasoning_content"] = json!(reasoning);
+                }
+                if let Some(details) = message.get("reasoning_details") {
+                    raw["reasoning_details"] = details.clone();
+                }
+                return Some(ChatMessage::assistant_raw(raw));
             }
-            return Some(ChatMessage::assistant_raw(raw));
-        }
-        let mut result = ChatMessage::new(role, text);
-        if role == "user" && parts.iter().any(|part| part["type"] != "text") {
-            result.raw = Some(if claude { Value::Array(parts) } else { json!({"role": role, "content": parts}) });
-        }
-        Some(result)
-    }).collect()
+            let mut result = ChatMessage::new(role, text);
+            if role == "user" && parts.iter().any(|part| part["type"] != "text") {
+                result.raw = Some(if claude {
+                    Value::Array(parts)
+                } else {
+                    json!({"role": role, "content": parts})
+                });
+            }
+            Some(result)
+        })
+        .collect()
 }
 
 /// Claude messages. Consecutive tool results become one user turn of `tool_result` blocks.
@@ -301,8 +364,14 @@ fn claude_messages(messages: &[ChatMessage]) -> Vec<Value> {
             let block = json!({"type": "tool_result", "tool_use_id": id, "content": m.content});
             let merged = out.last_mut().and_then(|last| {
                 let is_results = last["role"] == "user"
-                    && last["content"].as_array().is_some_and(|c| c.iter().all(|b| b["type"] == "tool_result"));
-                if is_results { last["content"].as_array_mut() } else { None }
+                    && last["content"]
+                        .as_array()
+                        .is_some_and(|c| c.iter().all(|b| b["type"] == "tool_result"));
+                if is_results {
+                    last["content"].as_array_mut()
+                } else {
+                    None
+                }
             });
             match merged {
                 Some(blocks) => blocks.push(block),
@@ -320,7 +389,10 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
     let base_url = req.spec.base_url.trim_end_matches('/');
     let claude = base_url == CLAUDE_BASE_URL;
     let n = req.messages.len();
-    let plain_tail = req.messages.last().is_some_and(|m| m.role == "user" && m.raw.is_none() && m.tool_call_id.is_none());
+    let plain_tail = req
+        .messages
+        .last()
+        .is_some_and(|m| m.role == "user" && m.raw.is_none() && m.tool_call_id.is_none());
     let mut messages: Vec<Value> = if claude {
         claude_messages(&req.messages)
     } else {
@@ -353,7 +425,9 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
                 body["tool_choice"] = json!({"type": "none"});
             }
         }
-        let system: Vec<_> = req.messages.iter()
+        let system: Vec<_> = req
+            .messages
+            .iter()
             .filter(|message| message.role == "system" && !message.content.is_empty())
             .map(|message| json!({"type": "text", "text": message.content}))
             .collect();
@@ -409,7 +483,10 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
             body["temperature"] = json!(req.temperature.min(1.9));
             "max_completion_tokens"
         }
-        ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-1-lite-260915" | "doubao-seed-2-0-mini-260428" | "doubao-seed-2-1-pro-260915") => {
+        (
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "doubao-seed-2-1-lite-260915" | "doubao-seed-2-0-mini-260428" | "doubao-seed-2-1-pro-260915",
+        ) => {
             body["thinking"] = json!({"type": "disabled"});
             "max_completion_tokens"
         }
@@ -418,7 +495,10 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
             body["temperature"] = json!(req.temperature.min(1.5));
             "max_completion_tokens"
         }
-        ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-4-hydrogen" | "gemini-4-neon" | "gemini-4-carbon") => {
+        (
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "gemini-4-hydrogen" | "gemini-4-neon" | "gemini-4-carbon",
+        ) => {
             body["reasoning_effort"] = json!("low");
             "max_tokens"
         }
@@ -455,21 +535,31 @@ pub fn build_body(req: &ChatRequest<'_>) -> Value {
 
 /// Request URL for `path`, using the gateway endpoint when one is set.
 fn request_url(spec: &LlmSpec, path: &str) -> String {
-    let base = if spec.endpoint.is_empty() { &spec.base_url } else { &spec.endpoint };
+    let base = if spec.endpoint.is_empty() {
+        &spec.base_url
+    } else {
+        &spec.endpoint
+    };
     format!("{}/{path}", base.trim_end_matches('/'))
 }
 
 fn is_dashscope_beijing(base: &str) -> bool {
     base == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        || base.strip_prefix("https://")
+        || base
+            .strip_prefix("https://")
             .and_then(|url| url.strip_suffix(".cn-beijing.maas.aliyuncs.com/compatible-mode/v1"))
-            .is_some_and(|workspace| !workspace.is_empty() && workspace.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+            .is_some_and(|workspace| {
+                !workspace.is_empty() && workspace.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
 }
 
 fn parse_claude_response(v: &Value) -> Result<ChatReply> {
-    let blocks = v.get("content").and_then(Value::as_array)
+    let blocks = v
+        .get("content")
+        .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("Claude 响应缺少 content"))?;
-    let text: String = blocks.iter()
+    let text: String = blocks
+        .iter()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .collect();
@@ -483,7 +573,11 @@ fn parse_claude_response(v: &Value) -> Result<ChatReply> {
         })
         .collect();
     let raw = (!tool_calls.is_empty()).then(|| Value::Array(blocks.clone()));
-    Ok(ChatReply { text: text.trim().to_owned(), tool_calls, raw })
+    Ok(ChatReply {
+        text: text.trim().to_owned(),
+        tool_calls,
+        raw,
+    })
 }
 
 /// Fields of an OpenAI compatible assistant message that are sent back with tool results.
@@ -492,10 +586,21 @@ const ASSISTANT_ECHO_FIELDS: [&str; 4] = ["content", "tool_calls", "reasoning_co
 /// Extracts the assistant text and tool calls from a chat completion response.
 pub fn parse_response(v: &Value) -> Result<ChatReply> {
     if let Some(err) = v.get("error") {
-        let message = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error").to_string();
-        return Err(ApiError { status: None, code: error_code(err), message }.into());
+        let message = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error")
+            .to_string();
+        return Err(ApiError {
+            status: None,
+            code: error_code(err),
+            message,
+        }
+        .into());
     }
-    let message = v.pointer("/choices/0/message").ok_or_else(|| anyhow!("LLM 响应缺少 choices"))?;
+    let message = v
+        .pointer("/choices/0/message")
+        .ok_or_else(|| anyhow!("LLM 响应缺少 choices"))?;
     let text = match message.get("content").unwrap_or(&Value::Null) {
         Value::String(s) => s.clone(),
         Value::Array(parts) => parts
@@ -522,7 +627,11 @@ pub fn parse_response(v: &Value) -> Result<ChatReply> {
                     };
                     ToolCall {
                         id: c.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
-                        name: c.pointer("/function/name").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        name: c
+                            .pointer("/function/name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                         arguments,
                     }
                 })
@@ -538,7 +647,11 @@ pub fn parse_response(v: &Value) -> Result<ChatReply> {
         }
         out
     });
-    Ok(ChatReply { text: strip_think(&text).trim().to_string(), tool_calls, raw })
+    Ok(ChatReply {
+        text: strip_think(&text).trim().to_string(),
+        tool_calls,
+        raw,
+    })
 }
 
 /// Removes a leading `<think>...</think>` reasoning block that some models emit inline.
@@ -589,10 +702,7 @@ pub async fn chat_reply(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<
             .header("cf-aig-authorization", format!("Bearer {}", req.spec.gateway_token))
             .header("cf-aig-collect-log", "false");
     }
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| RequestFailed(e.to_string()))?;
+    let resp = request.send().await.map_err(|e| RequestFailed(e.to_string()))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     let v: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
@@ -603,9 +713,18 @@ pub async fn chat_reply(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<
             .map(str::to_string)
             .unwrap_or_else(|| text.chars().take(300).collect());
         let code = v.get("error").map(error_code).unwrap_or_default();
-        return Err(ApiError { status: Some(status), code, message }.into());
+        return Err(ApiError {
+            status: Some(status),
+            code,
+            message,
+        }
+        .into());
     }
-    if claude { parse_claude_response(&v) } else { parse_response(&v) }
+    if claude {
+        parse_claude_response(&v)
+    } else {
+        parse_response(&v)
+    }
 }
 
 #[cfg(test)]
@@ -624,23 +743,72 @@ mod tests {
 
     #[test]
     fn classifies_known_llm_failures() {
-        let gw = |status, code: &str, message: &str| api(status, json!({"error": {"message": message, "type": code, "code": code}}));
-        assert_eq!(trouble(&gw(402, "insufficient_quota", "API Key 余额不足")), Some(Trouble::Balance));
-        assert_eq!(trouble(&gw(429, "insufficient_quota", "You exceeded your current quota")), Some(Trouble::Balance));
-        assert_eq!(trouble(&api(400, json!({"type": "error", "error": {"type": "invalid_request_error", "message": "Your credit balance is too low to access the Anthropic API."}}))), Some(Trouble::Balance));
-        assert_eq!(trouble(&gw(401, "invalid_api_key", "API Key 无效")), Some(Trouble::BadKey));
-        assert_eq!(trouble(&gw(403, "key_expired", "这个 API Key 已过期")), Some(Trouble::BadKey));
-        assert_eq!(trouble(&gw(404, "model_not_found", "网关没有开放模型 x")), Some(Trouble::ModelMissing));
-        assert_eq!(trouble(&gw(400, "invalid_request_error", "The model `gpt-x` does not exist")), Some(Trouble::ModelMissing));
-        assert_eq!(trouble(&gw(429, "rate_limit_exceeded", "请求太频繁，请稍后再试")), Some(Trouble::Busy));
-        assert_eq!(trouble(&gw(503, "upstream_error", "网关暂时不可用")), Some(Trouble::Unreachable));
-        assert_eq!(trouble(&gw(400, "invalid_request_error", "Content Exists Risk")), Some(Trouble::Refused));
-        assert_eq!(trouble(&gw(400, "invalid_request_error", "max_tokens is too large")), None);
-        assert_eq!(trouble(&RequestFailed("timeout".into()).into()), Some(Trouble::Unreachable));
+        let gw = |status, code: &str, message: &str| {
+            api(
+                status,
+                json!({"error": {"message": message, "type": code, "code": code}}),
+            )
+        };
+        assert_eq!(
+            trouble(&gw(402, "insufficient_quota", "API Key 余额不足")),
+            Some(Trouble::Balance)
+        );
+        assert_eq!(
+            trouble(&gw(429, "insufficient_quota", "You exceeded your current quota")),
+            Some(Trouble::Balance)
+        );
+        assert_eq!(
+            trouble(&api(
+                400,
+                json!({"type": "error", "error": {"type": "invalid_request_error", "message": "Your credit balance is too low to access the Anthropic API."}})
+            )),
+            Some(Trouble::Balance)
+        );
+        assert_eq!(
+            trouble(&gw(401, "invalid_api_key", "API Key 无效")),
+            Some(Trouble::BadKey)
+        );
+        assert_eq!(
+            trouble(&gw(403, "key_expired", "这个 API Key 已过期")),
+            Some(Trouble::BadKey)
+        );
+        assert_eq!(
+            trouble(&gw(404, "model_not_found", "网关没有开放模型 x")),
+            Some(Trouble::ModelMissing)
+        );
+        assert_eq!(
+            trouble(&gw(400, "invalid_request_error", "The model `gpt-x` does not exist")),
+            Some(Trouble::ModelMissing)
+        );
+        assert_eq!(
+            trouble(&gw(429, "rate_limit_exceeded", "请求太频繁，请稍后再试")),
+            Some(Trouble::Busy)
+        );
+        assert_eq!(
+            trouble(&gw(503, "upstream_error", "网关暂时不可用")),
+            Some(Trouble::Unreachable)
+        );
+        assert_eq!(
+            trouble(&gw(400, "invalid_request_error", "Content Exists Risk")),
+            Some(Trouble::Refused)
+        );
+        assert_eq!(
+            trouble(&gw(400, "invalid_request_error", "max_tokens is too large")),
+            None
+        );
+        assert_eq!(
+            trouble(&RequestFailed("timeout".into()).into()),
+            Some(Trouble::Unreachable)
+        );
         assert_eq!(trouble(&anyhow!("LLM 响应缺少 choices")), None);
-        let in_body = parse_response(&json!({"error": {"message": "Insufficient Balance", "code": "invalid_request_error"}})).unwrap_err();
+        let in_body =
+            parse_response(&json!({"error": {"message": "Insufficient Balance", "code": "invalid_request_error"}}))
+                .unwrap_err();
         assert_eq!(trouble(&in_body), Some(Trouble::Balance));
-        assert_eq!(gw(402, "insufficient_quota", "API Key 余额不足").to_string(), "LLM 返回 402 Payment Required: API Key 余额不足");
+        assert_eq!(
+            gw(402, "insufficient_quota", "API Key 余额不足").to_string(),
+            "LLM 返回 402 Payment Required: API Key 余额不足"
+        );
     }
 
     #[test]
@@ -670,7 +838,12 @@ mod tests {
     #[test]
     fn documented_chat_parameters_are_scoped_to_the_official_endpoints() {
         let body = |base_url: &str, model: &str| {
-            let spec = LlmSpec { base_url: base_url.into(), model: model.into(), api_key: "k".into(), ..Default::default() };
+            let spec = LlmSpec {
+                base_url: base_url.into(),
+                model: model.into(),
+                api_key: "k".into(),
+                ..Default::default()
+            };
             build_body(&ChatRequest {
                 spec: &spec,
                 model,
@@ -707,11 +880,17 @@ mod tests {
         assert_eq!(gateway["temperature"], 1.25);
         assert!(gateway.get("reasoning_effort").is_none());
 
-        let qwen = body("https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "qwen3.8-flash");
+        let qwen = body(
+            "https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-flash",
+        );
         assert_eq!(qwen["max_completion_tokens"], 1024);
         assert_eq!(qwen["enable_thinking"], false);
 
-        let doubao = body("https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-1-lite-260915");
+        let doubao = body(
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "doubao-seed-2-1-lite-260915",
+        );
         assert_eq!(doubao["max_completion_tokens"], 1024);
         assert_eq!(doubao["thinking"]["type"], "disabled");
 
@@ -719,7 +898,10 @@ mod tests {
         assert_eq!(mimo["max_completion_tokens"], 1024);
         assert_eq!(mimo["reasoning_effort"], "none");
 
-        let gemini = body("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-4-hydrogen");
+        let gemini = body(
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "gemini-4-hydrogen",
+        );
         assert_eq!(gemini["max_tokens"], 1024);
         assert_eq!(gemini["reasoning_effort"], "low");
 
@@ -773,11 +955,14 @@ mod tests {
             tool_choice_none: false,
         });
         assert_eq!(body["system"], json!([{"type": "text", "text": "guide"}]));
-        assert_eq!(body["messages"], json!([{"role": "user", "content": [
-            {"type": "text", "text": "hello"},
-            {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}},
-        ]}]));
+        assert_eq!(
+            body["messages"],
+            json!([{"role": "user", "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}},
+            ]}])
+        );
         assert_eq!(body["thinking"]["type"], "between_tools");
         assert_eq!(body["max_tokens"], 1024);
         assert!(body.get("temperature").is_none());
@@ -798,9 +983,15 @@ mod tests {
             api_key: "k".into(),
             ..Default::default()
         };
-        assert_eq!(request_url(&spec, "chat/completions"), "https://api.openai.com/v1/chat/completions");
+        assert_eq!(
+            request_url(&spec, "chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
         spec.endpoint = "https://gateway.ai.cloudflare.com/v1/acc/fish/openai".into();
-        assert_eq!(request_url(&spec, "chat/completions"), "https://gateway.ai.cloudflare.com/v1/acc/fish/openai/chat/completions");
+        assert_eq!(
+            request_url(&spec, "chat/completions"),
+            "https://gateway.ai.cloudflare.com/v1/acc/fish/openai/chat/completions"
+        );
         let body = build_body(&ChatRequest {
             spec: &spec,
             model: "gpt-6-luna",
@@ -843,7 +1034,12 @@ mod tests {
 
     #[test]
     fn openai_tool_round_trip() {
-        let spec = LlmSpec { base_url: "https://example.com/v1".into(), model: "m".into(), api_key: "k".into(), ..Default::default() };
+        let spec = LlmSpec {
+            base_url: "https://example.com/v1".into(),
+            model: "m".into(),
+            api_key: "k".into(),
+            ..Default::default()
+        };
         let response = json!({"choices": [{"message": {
             "role": "assistant",
             "content": null,
@@ -853,7 +1049,14 @@ mod tests {
         }}]});
         let reply = parse_response(&response).unwrap();
         assert_eq!(reply.text, "");
-        assert_eq!(reply.tool_calls, vec![ToolCall { id: "c1".into(), name: "lookup".into(), arguments: json!({"q": "梗"}) }]);
+        assert_eq!(
+            reply.tool_calls,
+            vec![ToolCall {
+                id: "c1".into(),
+                name: "lookup".into(),
+                arguments: json!({"q": "梗"})
+            }]
+        );
         let raw = reply.raw.clone().unwrap();
         assert!(raw.get("refusal").is_none());
         assert_eq!(raw["reasoning_content"], "think");
@@ -865,31 +1068,53 @@ mod tests {
             ChatMessage::tool_result("c1", "result"),
         ];
         let body = tool_request(&spec, messages.clone(), false);
-        assert_eq!(body["tools"][0], json!({"type": "function", "function": {"name": "lookup", "description": "Looks up", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}}}));
+        assert_eq!(
+            body["tools"][0],
+            json!({"type": "function", "function": {"name": "lookup", "description": "Looks up", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}}})
+        );
         assert!(body.get("tool_choice").is_none());
         assert_eq!(body["messages"][2], raw);
-        assert_eq!(body["messages"][3], json!({"role": "tool", "tool_call_id": "c1", "content": "result"}));
+        assert_eq!(
+            body["messages"][3],
+            json!({"role": "tool", "tool_call_id": "c1", "content": "result"})
+        );
         assert_eq!(tool_request(&spec, messages, true)["tool_choice"], "none");
         let mut plugin_turn = raw.clone();
         plugin_turn["content"] = json!([{"type": "think", "think": "think", "encrypted": null}]);
         plugin_turn.as_object_mut().unwrap().remove("reasoning_content");
-        let replay = plugin_contexts(&spec, &[
-            json!({"role": "user", "content": [{"type": "text", "text": "hi"}]}),
-            plugin_turn,
-            json!({"role": "tool", "tool_call_id": "c1", "content": [{"type": "text", "text": "result"}]}),
-        ]);
-        assert_eq!(tool_request(&spec, replay, false)["messages"].as_array().unwrap().as_slice(),
-                   &body["messages"].as_array().unwrap()[1..]);
+        let replay = plugin_contexts(
+            &spec,
+            &[
+                json!({"role": "user", "content": [{"type": "text", "text": "hi"}]}),
+                plugin_turn,
+                json!({"role": "tool", "tool_call_id": "c1", "content": [{"type": "text", "text": "result"}]}),
+            ],
+        );
+        assert_eq!(
+            tool_request(&spec, replay, false)["messages"]
+                .as_array()
+                .unwrap()
+                .as_slice(),
+            &body["messages"].as_array().unwrap()[1..]
+        );
         let result = reply.plugin_result("r");
         assert_eq!(result["reasoning_content"], "think");
-        assert_eq!(result["tool_calls"][0], json!({"id": "c1", "name": "lookup", "arguments": {"q": "梗"}}));
+        assert_eq!(
+            result["tool_calls"][0],
+            json!({"id": "c1", "name": "lookup", "arguments": {"q": "梗"}})
+        );
         let plain = parse_response(&json!({"choices": [{"message": {"content": "done"}}]})).unwrap();
         assert!(plain.tool_calls.is_empty() && plain.raw.is_none());
     }
 
     #[test]
     fn claude_tool_round_trip() {
-        let spec = LlmSpec { base_url: CLAUDE_BASE_URL.into(), model: "claude-sonnet-5-5".into(), api_key: "k".into(), ..Default::default() };
+        let spec = LlmSpec {
+            base_url: CLAUDE_BASE_URL.into(),
+            model: "claude-sonnet-5-5".into(),
+            api_key: "k".into(),
+            ..Default::default()
+        };
         let blocks = json!([
             {"type": "thinking", "thinking": "x", "signature": "sig"},
             {"type": "tool_use", "id": "t1", "name": "lookup", "input": {"q": "a"}},
@@ -908,27 +1133,32 @@ mod tests {
         let body = tool_request(&spec, messages, true);
         assert_eq!(body["tools"][0]["input_schema"]["properties"]["q"]["type"], "string");
         assert_eq!(body["tool_choice"], json!({"type": "none"}));
-        assert_eq!(body["messages"], json!([
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": blocks},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "t1", "content": "ra"},
-                {"type": "tool_result", "tool_use_id": "t2", "content": "rb"},
-            ]},
-        ]));
+        assert_eq!(
+            body["messages"],
+            json!([
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": blocks},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "ra"},
+                    {"type": "tool_result", "tool_use_id": "t2", "content": "rb"},
+                ]},
+            ])
+        );
         let result = reply.plugin_result("r");
         let calls: Vec<_> = result["tool_calls"].as_array().unwrap().iter().map(|c| {
             json!({"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"].to_string()}})
         }).collect();
-        let replay = plugin_contexts(&spec, &[
-            json!({"role": "user", "content": "hi"}),
-            json!({"role": "assistant", "tool_calls": calls, "content": [
-                {"type": "think", "think": result["reasoning_content"], "encrypted": result["reasoning_signature"]},
-            ]}),
-            json!({"role": "tool", "tool_call_id": "t1", "content": "ra"}),
-            json!({"role": "tool", "tool_call_id": "t2", "content": "rb"}),
-        ]);
+        let replay = plugin_contexts(
+            &spec,
+            &[
+                json!({"role": "user", "content": "hi"}),
+                json!({"role": "assistant", "tool_calls": calls, "content": [
+                    {"type": "think", "think": result["reasoning_content"], "encrypted": result["reasoning_signature"]},
+                ]}),
+                json!({"role": "tool", "tool_call_id": "t1", "content": "ra"}),
+                json!({"role": "tool", "tool_call_id": "t2", "content": "rb"}),
+            ],
+        );
         assert_eq!(tool_request(&spec, replay, true)["messages"], body["messages"]);
     }
-
 }

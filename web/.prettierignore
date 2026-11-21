@@ -1,0 +1,8 @@
+dist
+node_modules
+package-lock.json
+bun.lock
+public
+.impeccable
+src/assets
+src/pages/landing/comp-layout.css

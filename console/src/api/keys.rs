@@ -22,7 +22,8 @@ const CLAUDE_API_VERSION: &str = "2026-10-21";
 pub fn normalize_base_url(input: &str, allow_http: bool) -> Option<String> {
     let u = url::Url::parse(input.trim()).ok()?;
     let scheme_ok = u.scheme() == "https" || (allow_http && u.scheme() == "http");
-    if !scheme_ok || u.host_str().is_none() || u.query().is_some() || u.fragment().is_some() || !u.username().is_empty() {
+    if !scheme_ok || u.host_str().is_none() || u.query().is_some() || u.fragment().is_some() || !u.username().is_empty()
+    {
         return None;
     }
     Some(u.as_str().trim_end_matches('/').to_string())
@@ -50,7 +51,10 @@ pub async fn list(req: &Request, app: &App) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;
     let rows: Vec<LlmKeyRow> = app
         .db
-        .all(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE user_id = ?1 ORDER BY created_at"), args![user.id])
+        .all(
+            &format!("SELECT {KEY_COLS} FROM llm_keys WHERE user_id = ?1 ORDER BY created_at"),
+            args![user.id],
+        )
         .await?;
     let dec = app.decryptor()?;
     let gateway = app.ai_gateway();
@@ -81,7 +85,10 @@ pub async fn balance(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;
     let row: LlmKeyRow = app
         .db
-        .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"), args![id, user.id])
+        .first(
+            &format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"),
+            args![id, user.id],
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
     let gw = app.gengwiki();
@@ -89,7 +96,10 @@ pub async fn balance(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
         return Err(ApiError::bad_request("只有活动获取的 Key 可以查询余额"));
     }
     let key = (app.decryptor()?)(&row.api_key_enc).ok_or_else(|| ApiError::internal("key cannot be decrypted"))?;
-    let b = gw.balance(&key).await.map_err(|e| ApiError::new(502, "upstream_error", format!("余额查询失败：{e}")))?;
+    let b = gw
+        .balance(&key)
+        .await
+        .map_err(|e| ApiError::new(502, "upstream_error", format!("余额查询失败：{e}")))?;
     Ok(Reply::json(serde_json::to_value(b)?))
 }
 
@@ -106,7 +116,9 @@ fn model_list_url(base_url: &str) -> String {
         let is_beijing_workspace = origin
             .strip_prefix("https://")
             .and_then(|host| host.strip_suffix(".cn-beijing.maas.aliyuncs.com"))
-            .is_some_and(|workspace| !workspace.is_empty() && workspace.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+            .is_some_and(|workspace| {
+                !workspace.is_empty() && workspace.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            });
         if origin == "https://dashscope.aliyuncs.com" || is_beijing_workspace {
             return format!("{origin}/api/v1/models");
         }
@@ -126,7 +138,13 @@ async fn validate_upstream(base_url: &str, api_key: &str) -> ApiResult<()> {
     let invalid = |m: String| ApiError::new(400, "llm_key_invalid", format!("API Key 校验失败：{m}"));
     let resp = http::send(Method::Get, &model_list_url(base_url), &headers, None, 8_000)
         .await
-        .map_err(|e| invalid(if e == "timeout" { "请求超时（8 秒）".into() } else { format!("无法连接到服务：{e}") }))?;
+        .map_err(|e| {
+            invalid(if e == "timeout" {
+                "请求超时（8 秒）".into()
+            } else {
+                format!("无法连接到服务：{e}")
+            })
+        })?;
     if !resp.ok() {
         return Err(invalid(upstream_message(resp.status, &resp.text())));
     }
@@ -141,7 +159,9 @@ pub async fn rotate_gateway(req: &Request, app: &App) -> ApiResult<Reply> {
         return Err(ApiError::rate_limited("刷新太频繁，请一小时后再试"));
     }
     app.rate_hit(&bucket).await?;
-    let id = crate::gengwiki::rotate_key(app, &user.id).await?.ok_or_else(|| ApiError::not_found("还没有活动额度"))?;
+    let id = crate::gengwiki::rotate_key(app, &user.id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("还没有活动额度"))?;
     let row: LlmKeyRow = app
         .db
         .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1"), args![id])
@@ -166,14 +186,26 @@ pub async fn gateway(req: &Request, app: &App) -> ApiResult<Reply> {
         .db
         .all("SELECT amount_fen, expires_at FROM gateway_credits WHERE user_id = ?1 AND remote_id IS NULL ORDER BY created_at", args![user.id])
         .await?;
-    let pending: Vec<Value> = pending.iter().map(|p| json!({"amount": crate::gengwiki::yuan(p.amount_fen), "expires_at": p.expires_at})).collect();
+    let pending: Vec<Value> = pending
+        .iter()
+        .map(|p| json!({"amount": crate::gengwiki::yuan(p.amount_fen), "expires_at": p.expires_at}))
+        .collect();
     let account = crate::gengwiki::account(app, &user.id).await?;
     let row: Option<LlmKeyRow> = match &account {
-        Some(a) => app.db.first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"), args![a.llm_key_id, user.id]).await?,
+        Some(a) => {
+            app.db
+                .first(
+                    &format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1 AND user_id = ?2"),
+                    args![a.llm_key_id, user.id],
+                )
+                .await?
+        }
         None => None,
     };
     let Some(row) = row else {
-        return Ok(Reply::json(json!({"account": account.is_some(), "key": null, "balance": null, "pending": pending})));
+        return Ok(Reply::json(
+            json!({"account": account.is_some(), "key": null, "balance": null, "pending": pending}),
+        ));
     };
     let plaintext = (app.decryptor()?)(&row.api_key_enc);
     let mut view = key_view(&row, plaintext.as_deref(), app.ai_gateway().as_ref(), &gw);
@@ -185,7 +217,9 @@ pub async fn gateway(req: &Request, app: &App) -> ApiResult<Reply> {
         },
         None => (None, Some("Key 无法解密".to_string())),
     };
-    Ok(Reply::json(json!({"account": true, "key": view, "balance": balance, "balance_error": error, "pending": pending})))
+    Ok(Reply::json(
+        json!({"account": true, "key": view, "balance": balance, "balance_error": error, "pending": pending}),
+    ))
 }
 
 pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
@@ -203,8 +237,14 @@ pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
     if api_key.is_empty() || api_key.len() > 500 {
         return Err(ApiError::bad_request("API Key 长度无效"));
     }
-    let base_url = normalize_base_url(&body.base_url, app.dev).ok_or_else(|| ApiError::bad_request("接口地址必须是有效的 https 地址"))?;
-    if app.db.count("SELECT COUNT(*) AS n FROM llm_keys WHERE user_id = ?1", args![user.id]).await? >= MAX_KEYS {
+    let base_url = normalize_base_url(&body.base_url, app.dev)
+        .ok_or_else(|| ApiError::bad_request("接口地址必须是有效的 https 地址"))?;
+    if app
+        .db
+        .count("SELECT COUNT(*) AS n FROM llm_keys WHERE user_id = ?1", args![user.id])
+        .await?
+        >= MAX_KEYS
+    {
         return Err(ApiError::quota(format!("最多保存 {MAX_KEYS} 个 API Key")));
     }
     validate_upstream(&base_url, api_key).await?;
@@ -220,12 +260,23 @@ pub async fn create(req: &mut Request, app: &App) -> ApiResult<Reply> {
         .first(&format!("SELECT {KEY_COLS} FROM llm_keys WHERE id = ?1"), args![id])
         .await?
         .ok_or_else(|| ApiError::internal("inserted key missing"))?;
-    Ok(Reply::json(key_view(&row, Some(api_key), app.ai_gateway().as_ref(), &app.gengwiki())))
+    Ok(Reply::json(key_view(
+        &row,
+        Some(api_key),
+        app.ai_gateway().as_ref(),
+        &app.gengwiki(),
+    )))
 }
 
 pub async fn delete(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;
-    let n = app.db.run("DELETE FROM llm_keys WHERE id = ?1 AND user_id = ?2", args![id, user.id]).await?;
+    let n = app
+        .db
+        .run(
+            "DELETE FROM llm_keys WHERE id = ?1 AND user_id = ?2",
+            args![id, user.id],
+        )
+        .await?;
     if n == 0 {
         return Err(ApiError::not_found("API Key 不存在"));
     }
@@ -234,7 +285,10 @@ pub async fn delete(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
         id: String,
         settings_json: String,
     }
-    let bots: Vec<B> = app.db.all("SELECT id, settings_json FROM bots WHERE user_id = ?1", args![user.id]).await?;
+    let bots: Vec<B> = app
+        .db
+        .all("SELECT id, settings_json FROM bots WHERE user_id = ?1", args![user.id])
+        .await?;
     for b in bots {
         if BotSettings::from_stored(&b.settings_json).llm.key_id.as_deref() == Some(id) {
             app.push_bot(&b.id).await?;
@@ -249,11 +303,23 @@ mod tests {
 
     #[test]
     fn base_urls() {
-        assert_eq!(normalize_base_url("https://api.deepseek.com/v1/", false).as_deref(), Some("https://api.deepseek.com/v1"));
-        assert_eq!(normalize_base_url(" https://open.bigmodel.cn/api/paas/v4 ", false).as_deref(), Some("https://open.bigmodel.cn/api/paas/v4"));
-        assert_eq!(normalize_base_url("https://api.openai.com", false).as_deref(), Some("https://api.openai.com"));
+        assert_eq!(
+            normalize_base_url("https://api.deepseek.com/v1/", false).as_deref(),
+            Some("https://api.deepseek.com/v1")
+        );
+        assert_eq!(
+            normalize_base_url(" https://open.bigmodel.cn/api/paas/v4 ", false).as_deref(),
+            Some("https://open.bigmodel.cn/api/paas/v4")
+        );
+        assert_eq!(
+            normalize_base_url("https://api.openai.com", false).as_deref(),
+            Some("https://api.openai.com")
+        );
         assert!(normalize_base_url("http://x.com/v1", false).is_none());
-        assert_eq!(normalize_base_url("http://127.0.0.1:8701/v1", true).as_deref(), Some("http://127.0.0.1:8701/v1"));
+        assert_eq!(
+            normalize_base_url("http://127.0.0.1:8701/v1", true).as_deref(),
+            Some("http://127.0.0.1:8701/v1")
+        );
         assert!(normalize_base_url("https://x.com/v1?a=1", false).is_none());
         assert!(normalize_base_url("https://u:p@x.com/v1", false).is_none());
         assert!(normalize_base_url("ftp://x.com", true).is_none());
@@ -262,7 +328,10 @@ mod tests {
 
     #[test]
     fn upstream_messages() {
-        assert_eq!(upstream_message(401, r#"{"error":{"message":"Invalid key"}}"#), "HTTP 401：Invalid key");
+        assert_eq!(
+            upstream_message(401, r#"{"error":{"message":"Invalid key"}}"#),
+            "HTTP 401：Invalid key"
+        );
         assert_eq!(upstream_message(403, r#"{"message":"denied"}"#), "HTTP 403：denied");
         assert_eq!(upstream_message(400, r#"{"error":"bad"}"#), "HTTP 400：bad");
         assert_eq!(upstream_message(500, ""), "HTTP 500");
@@ -271,9 +340,18 @@ mod tests {
 
     #[test]
     fn model_list_uses_dashscope_native_path_only_on_official_beijing_hosts() {
-        assert_eq!(model_list_url("https://dashscope.aliyuncs.com/compatible-mode/v1"), "https://dashscope.aliyuncs.com/api/v1/models");
-        assert_eq!(model_list_url("https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"), "https://llm-demo.cn-beijing.maas.aliyuncs.com/api/v1/models");
-        assert_eq!(model_list_url("https://example.com/compatible-mode/v1"), "https://example.com/compatible-mode/v1/models");
+        assert_eq!(
+            model_list_url("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "https://dashscope.aliyuncs.com/api/v1/models"
+        );
+        assert_eq!(
+            model_list_url("https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"),
+            "https://llm-demo.cn-beijing.maas.aliyuncs.com/api/v1/models"
+        );
+        assert_eq!(
+            model_list_url("https://example.com/compatible-mode/v1"),
+            "https://example.com/compatible-mode/v1/models"
+        );
         assert_eq!(model_list_url(CLAUDE_BASE_URL), "https://api.anthropic.com/v1/models");
     }
 }

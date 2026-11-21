@@ -93,11 +93,12 @@ class ManagersPlugin(Star):
         await cron.delete_job(job.job_id)
         yield event.plain_result("cron completed")
 
-
     @filter.command("cron_once")
     async def cron_once(self, event: AstrMessageEvent):
         job = await self.context.cron_manager.add_active_job(
-            name="fish reminder", cron_expression=None, run_once=True,
+            name="fish reminder",
+            cron_expression=None,
+            run_once=True,
             run_at=datetime.now(timezone.utc) + timedelta(seconds=5),
             payload={"session": event.unified_msg_origin, "note": "Send a fish reminder."},
         )

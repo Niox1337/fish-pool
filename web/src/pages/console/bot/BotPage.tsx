@@ -44,7 +44,8 @@ function Header({ bot }: { bot: Bot }) {
 
   function run(a: 'start' | 'stop' | 'restart') {
     action.mutate(a, {
-      onSuccess: () => toast.success(a === 'stop' ? `${bot.name} 下课睡觉了` : a === 'start' ? `${bot.name} 正在入座` : `${bot.name} 正在重新入座`),
+      onSuccess: () =>
+        toast.success(a === 'stop' ? `${bot.name} 下课睡觉了` : a === 'start' ? `${bot.name} 正在入座` : `${bot.name} 正在重新入座`),
     })
   }
 
@@ -116,9 +117,7 @@ function Tabs({ botId, dirty }: { botId: string; dirty: boolean }) {
             >
               <t.icon className="size-4" aria-hidden />
               {t.label}
-              {t.key === 'persona' && dirty && (
-                <span className="size-2 rounded-full bg-pink-ink" role="img" aria-label="有没保存的修改" />
-              )}
+              {t.key === 'persona' && dirty && <span className="size-2 rounded-full bg-pink-ink" role="img" aria-label="有没保存的修改" />}
             </NavLink>
           </li>
         ))}
@@ -198,7 +197,8 @@ function BotView() {
   }
 
   const b = bot.data
-  const settingsTab = 'min-h-10 cursor-pointer rounded-lg px-3 text-sm font-semibold text-ink-2 hover:bg-paper-2 data-[state=active]:bg-sky-soft data-[state=active]:text-cobalt'
+  const settingsTab =
+    'min-h-10 cursor-pointer rounded-lg px-3 text-sm font-semibold text-ink-2 hover:bg-paper-2 data-[state=active]:bg-sky-soft data-[state=active]:text-cobalt'
 
   return (
     <>
@@ -210,11 +210,19 @@ function BotView() {
       {active === 'persona' && (
         <SettingsTabs.Root defaultValue="ai" activationMode="manual">
           <SettingsTabs.List aria-label="机器人设置分类" className="mb-4 flex flex-wrap gap-2">
-            <SettingsTabs.Trigger value="ai" className={settingsTab}>AI 与回复{dirty && <span className="sr-only">，有未保存的修改</span>}</SettingsTabs.Trigger>
-            <SettingsTabs.Trigger value="qq" className={settingsTab}>QQ 指令面板</SettingsTabs.Trigger>
+            <SettingsTabs.Trigger value="ai" className={settingsTab}>
+              AI 与回复{dirty && <span className="sr-only">，有未保存的修改</span>}
+            </SettingsTabs.Trigger>
+            <SettingsTabs.Trigger value="qq" className={settingsTab}>
+              QQ 指令面板
+            </SettingsTabs.Trigger>
           </SettingsTabs.List>
-          <SettingsTabs.Content value="ai"><Persona bot={b} draft={draft} setDraft={setDraft} /></SettingsTabs.Content>
-          <SettingsTabs.Content value="qq"><QqPanels bot={b} /></SettingsTabs.Content>
+          <SettingsTabs.Content value="ai">
+            <Persona bot={b} draft={draft} setDraft={setDraft} />
+          </SettingsTabs.Content>
+          <SettingsTabs.Content value="qq">
+            <QqPanels bot={b} />
+          </SettingsTabs.Content>
         </SettingsTabs.Root>
       )}
       {active === 'plugins' && <Plugins bot={b} />}

@@ -60,13 +60,21 @@ pub fn map_qr_status(kind: &str, status: &str) -> &'static str {
 
 async fn platform_by_id(app: &App, bot_id: &str, pid: &str) -> ApiResult<PlatformRow> {
     app.db
-        .first(&format!("SELECT {PLATFORM_COLS} FROM platforms WHERE id = ?1 AND bot_id = ?2"), args![pid, bot_id])
+        .first(
+            &format!("SELECT {PLATFORM_COLS} FROM platforms WHERE id = ?1 AND bot_id = ?2"),
+            args![pid, bot_id],
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("平台不存在"))
 }
 
 pub async fn qq_panels(
-    req: &mut Request, app: &App, bot_id: &str, pid: &str, method: Method, panel_id: Option<&str>,
+    req: &mut Request,
+    app: &App,
+    bot_id: &str,
+    pid: &str,
+    method: Method,
+    panel_id: Option<&str>,
 ) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;
     let bot = app.owned_bot(&user, bot_id).await?;
@@ -87,13 +95,21 @@ pub async fn qq_panels(
         path.push_str(id);
     }
     if method == Method::Get {
-        let scope = req.url()?.query_pairs().find(|(name, _)| name == "scope").map(|(_, value)| value.into_owned());
+        let scope = req
+            .url()?
+            .query_pairs()
+            .find(|(name, _)| name == "scope")
+            .map(|(_, value)| value.into_owned());
         match scope.as_deref() {
             Some(scope @ ("c2c" | "group")) => path.push_str(&format!("?scope={scope}")),
             _ => return Err(ApiError::bad_request("请选择单聊或群聊场景")),
         }
     }
-    let body = if matches!(method, Method::Post | Method::Put) { Some(json_body::<Value>(req).await?) } else { None };
+    let body = if matches!(method, Method::Post | Method::Put) {
+        Some(json_body::<Value>(req).await?)
+    } else {
+        None
+    };
     let client = app.node_client(&bot.node_id).await?;
     match client.call(method, &path, body.as_ref(), 60_000).await {
         Ok(value) => Ok(Reply::json(value)),
@@ -123,7 +139,10 @@ async fn upsert_platform(
     }
     let existing: Option<Id> = app
         .db
-        .first("SELECT id, extra_json FROM platforms WHERE bot_id = ?1 AND kind = ?2 AND app_id = ?3", args![bot.id, kind, app_id])
+        .first(
+            "SELECT id, extra_json FROM platforms WHERE bot_id = ?1 AND kind = ?2 AND app_id = ?3",
+            args![bot.id, kind, app_id],
+        )
         .await?;
     let id = match existing {
         Some(e) => {
@@ -137,9 +156,14 @@ async fn upsert_platform(
             e.id
         }
         None => {
-            let n = app.db.count("SELECT COUNT(*) AS n FROM platforms WHERE bot_id = ?1", args![bot.id]).await?;
+            let n = app
+                .db
+                .count("SELECT COUNT(*) AS n FROM platforms WHERE bot_id = ?1", args![bot.id])
+                .await?;
             if n >= MAX_PLATFORMS_PER_BOT {
-                return Err(ApiError::quota(format!("每只小鱼最多绑定 {MAX_PLATFORMS_PER_BOT} 个平台")));
+                return Err(ApiError::quota(format!(
+                    "每只小鱼最多绑定 {MAX_PLATFORMS_PER_BOT} 个平台"
+                )));
             }
             let id = new_id();
             app.db
@@ -152,7 +176,9 @@ async fn upsert_platform(
             id
         }
     };
-    app.db.run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot.id, now_ms()]).await?;
+    app.db
+        .run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot.id, now_ms()])
+        .await?;
     platform_by_id(app, &bot.id, &id).await
 }
 
@@ -160,9 +186,19 @@ pub async fn qr_start(req: &Request, app: &App, bot_id: &str, kind: &str) -> Api
     let user = app.current_user(req).await?;
     let bot = app.owned_bot(&user, bot_id).await?;
     let client = app.node_client(&bot.node_id).await?;
-    let v = client.call(Method::Post, &format!("/v1/qr/{kind}"), Some(&json!({})), 10_000).await.map_err(node_err)?;
-    let task_id = v.get("task_id").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(502, "node_error", "节点没有返回二维码任务"))?;
-    let expires_at = v.get("expires_at").and_then(Value::as_i64).unwrap_or(now_ms() + 5 * 60 * 1000);
+    let v = client
+        .call(Method::Post, &format!("/v1/qr/{kind}"), Some(&json!({})), 10_000)
+        .await
+        .map_err(node_err)?;
+    let task_id = v
+        .get("task_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(502, "node_error", "节点没有返回二维码任务"))?;
+    let expires_at = v
+        .get("expires_at")
+        .and_then(Value::as_i64)
+        .unwrap_or(now_ms() + 5 * 60 * 1000);
     app.db
         .run(
             "INSERT INTO qr_tasks (task_id, kind, bot_id, node_id, platform_id, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6) \
@@ -187,16 +223,24 @@ pub async fn qr_poll(req: &Request, app: &App, bot_id: &str, kind: &str, task_id
     }
     let task: Task = app
         .db
-        .first("SELECT platform_id FROM qr_tasks WHERE kind = ?1 AND task_id = ?2 AND bot_id = ?3", args![kind, task_id, bot.id])
+        .first(
+            "SELECT platform_id FROM qr_tasks WHERE kind = ?1 AND task_id = ?2 AND bot_id = ?3",
+            args![kind, task_id, bot.id],
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("二维码任务不存在"))?;
     if let Some(pid) = task.platform_id {
         if let Ok(p) = platform_by_id(app, &bot.id, &pid).await {
-            return Ok(Reply::json(json!({"status": "created", "platform": app.platform_view(&p)?})));
+            return Ok(Reply::json(
+                json!({"status": "created", "platform": app.platform_view(&p)?}),
+            ));
         }
     }
     let client = app.node_client(&bot.node_id).await?;
-    let v = client.call(Method::Get, &format!("/v1/qr/{kind}/{task_id}"), None, 10_000).await.map_err(node_err)?;
+    let v = client
+        .call(Method::Get, &format!("/v1/qr/{kind}/{task_id}"), None, 10_000)
+        .await
+        .map_err(node_err)?;
     let raw = v.get("status").and_then(Value::as_str).unwrap_or("error");
     let status = map_qr_status(kind, raw);
     let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -210,23 +254,41 @@ pub async fn qr_poll(req: &Request, app: &App, bot_id: &str, kind: &str, task_id
     let platform = if kind == "qq" {
         let (app_id, secret) = (s("app_id"), s("secret"));
         if app_id.is_empty() || secret.is_empty() {
-            return Ok(Reply::json(json!({"status": "error", "message": "扫码结果缺少机器人凭据"})));
+            return Ok(Reply::json(
+                json!({"status": "error", "message": "扫码结果缺少机器人凭据"}),
+            ));
         }
-        upsert_platform(app, &bot, platform_kind(kind), &app_id, &secret, json!({}), &format!("QQ 机器人 {app_id}")).await?
+        upsert_platform(
+            app,
+            &bot,
+            platform_kind(kind),
+            &app_id,
+            &secret,
+            json!({}),
+            &format!("QQ 机器人 {app_id}"),
+        )
+        .await?
     } else {
         let (wx_bot, token) = (s("bot_id"), s("token"));
         if wx_bot.is_empty() || token.is_empty() {
-            return Ok(Reply::json(json!({"status": "error", "message": "扫码结果缺少机器人凭据"})));
+            return Ok(Reply::json(
+                json!({"status": "error", "message": "扫码结果缺少机器人凭据"}),
+            ));
         }
         let extra = json!({"base_url": s("base_url"), "user_id": s("user_id")});
         upsert_platform(app, &bot, platform_kind(kind), &wx_bot, &token, extra, "微信机器人").await?
     };
     app.db
-        .run("UPDATE qr_tasks SET platform_id = ?3 WHERE kind = ?1 AND task_id = ?2", args![kind, task_id, platform.id])
+        .run(
+            "UPDATE qr_tasks SET platform_id = ?3 WHERE kind = ?1 AND task_id = ?2",
+            args![kind, task_id, platform.id],
+        )
         .await?;
     app.push_bot(&bot.id).await?;
     let fresh = platform_by_id(app, &bot.id, &platform.id).await?;
-    Ok(Reply::json(json!({"status": "created", "platform": app.platform_view(&fresh)?})))
+    Ok(Reply::json(
+        json!({"status": "created", "platform": app.platform_view(&fresh)?}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -252,7 +314,16 @@ pub async fn qq_manual(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<
         Some(m) => json!({"mode": m}),
         None => json!({}),
     };
-    let p = upsert_platform(app, &bot, "qq_official", app_id, secret, extra, &format!("QQ 机器人 {app_id}")).await?;
+    let p = upsert_platform(
+        app,
+        &bot,
+        "qq_official",
+        app_id,
+        secret,
+        extra,
+        &format!("QQ 机器人 {app_id}"),
+    )
+    .await?;
     app.push_bot(&bot.id).await?;
     let fresh = platform_by_id(app, &bot.id, &p.id).await?;
     Ok(Reply::json(app.platform_view(&fresh)?))
@@ -301,7 +372,9 @@ pub async fn patch(req: &mut Request, app: &App, bot_id: &str, pid: &str) -> Api
             args![p.id, display_name, enabled, status, detail, serde_json::to_string(&extra)?],
         )
         .await?;
-    app.db.run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot.id, now_ms()]).await?;
+    app.db
+        .run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot.id, now_ms()])
+        .await?;
     app.push_bot(&bot.id).await?;
     let fresh = platform_by_id(app, &bot.id, pid).await?;
     Ok(Reply::json(app.platform_view(&fresh)?))
@@ -313,20 +386,29 @@ const MAX_CALLBACK_BYTES: usize = 64 * 1024;
 /// Ed25519 signature and answers, this handler only routes the request there.
 pub async fn qq_webhook(req: &mut Request, app: &App, pid: &str) -> ApiResult<Reply> {
     let header = |name: &str| req.headers().get(name).ok().flatten().unwrap_or_default();
-    let (timestamp, signature, app_id) = (header("x-signature-timestamp"), header("x-signature-ed25519"), header("x-bot-appid"));
+    let (timestamp, signature, app_id) = (
+        header("x-signature-timestamp"),
+        header("x-signature-ed25519"),
+        header("x-bot-appid"),
+    );
     let raw = read_body(req).await?;
     if raw.len() > MAX_CALLBACK_BYTES {
         return Err(ApiError::new(413, "payload_too_large", "回调内容过大"));
     }
     let body = String::from_utf8(raw).map_err(|_| ApiError::bad_request("回调内容不是 UTF-8"))?;
-    let op = serde_json::from_str::<Value>(&body).ok().and_then(|v| v.get("op").and_then(Value::as_u64));
+    let op = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("op").and_then(Value::as_u64));
     if op.is_none() || (op != Some(13) && signature.is_empty()) {
         return Err(ApiError::new(401, "webhook_unauthorized", "回调缺少签名"));
     }
     let not_found = || ApiError::not_found("回调地址不存在");
     let p: PlatformRow = app
         .db
-        .first(&format!("SELECT {PLATFORM_COLS} FROM platforms WHERE id = ?1"), args![pid])
+        .first(
+            &format!("SELECT {PLATFORM_COLS} FROM platforms WHERE id = ?1"),
+            args![pid],
+        )
         .await?
         .ok_or_else(not_found)?;
     if p.qq_mode() != Some("webhook") || p.enabled == 0 {
@@ -335,7 +417,15 @@ pub async fn qq_webhook(req: &mut Request, app: &App, pid: &str) -> ApiResult<Re
     let bot = app.bot_by_id(&p.bot_id).await?.ok_or_else(not_found)?;
     let client = app.node_client(&bot.node_id).await?;
     let payload = json!({"timestamp": timestamp, "signature": signature, "app_id": app_id, "body": body});
-    match client.call(Method::Post, &format!("/v1/bots/{}/platforms/{}/qq-webhook", bot.id, p.id), Some(&payload), 8_000).await {
+    match client
+        .call(
+            Method::Post,
+            &format!("/v1/bots/{}/platforms/{}/qq-webhook", bot.id, p.id),
+            Some(&payload),
+            8_000,
+        )
+        .await
+    {
         Ok(v) => Ok(Reply::json(v)),
         Err(NodeError::Status(401, d)) => Err(ApiError::new(401, "webhook_unauthorized", d)),
         Err(NodeError::Status(_, d)) => Err(ApiError::new(400, "webhook_rejected", d)),
@@ -346,11 +436,19 @@ pub async fn qq_webhook(req: &mut Request, app: &App, pid: &str) -> ApiResult<Re
 pub async fn delete(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;
     let bot = app.owned_bot(&user, bot_id).await?;
-    let n = app.db.run("DELETE FROM platforms WHERE id = ?1 AND bot_id = ?2", args![pid, bot.id]).await?;
+    let n = app
+        .db
+        .run(
+            "DELETE FROM platforms WHERE id = ?1 AND bot_id = ?2",
+            args![pid, bot.id],
+        )
+        .await?;
     if n == 0 {
         return Err(ApiError::not_found("平台不存在"));
     }
-    app.db.run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot.id, now_ms()]).await?;
+    app.db
+        .run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot.id, now_ms()])
+        .await?;
     app.push_bot(&bot.id).await?;
     Ok(Reply::json(ok_json()))
 }
@@ -361,8 +459,14 @@ mod tests {
 
     #[test]
     fn mode_survives_credential_refresh() {
-        assert_eq!(merge_extra(r#"{"mode":"webhook"}"#, json!({})), json!({"mode": "webhook"}));
-        assert_eq!(merge_extra(r#"{"mode":"webhook"}"#, json!({"mode": "websocket"})), json!({"mode": "websocket"}));
+        assert_eq!(
+            merge_extra(r#"{"mode":"webhook"}"#, json!({})),
+            json!({"mode": "webhook"})
+        );
+        assert_eq!(
+            merge_extra(r#"{"mode":"webhook"}"#, json!({"mode": "websocket"})),
+            json!({"mode": "websocket"})
+        );
         assert_eq!(merge_extra("{}", json!({"bot_id": "b"})), json!({"bot_id": "b"}));
         assert_eq!(merge_extra("not json", json!({})), json!({}));
     }
@@ -393,7 +497,10 @@ mod tests {
         assert_eq!(row("qq_official", "{}").qq_mode(), Some("websocket"));
         assert_eq!(row("qq_official", r#"{"mode":"webhook"}"#).qq_mode(), Some("webhook"));
         assert_eq!(row("weixin_ilink", r#"{"mode":"webhook"}"#).qq_mode(), None);
-        assert_eq!(row("qq_official", r#"{"mode":"webhook"}"#).view(None)["mode"], "webhook");
+        assert_eq!(
+            row("qq_official", r#"{"mode":"webhook"}"#).view(None)["mode"],
+            "webhook"
+        );
     }
 
     #[test]

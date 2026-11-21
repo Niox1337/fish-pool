@@ -18,10 +18,12 @@ use crate::model::{
 };
 use crate::pipeline::{is_listed, wake, RateLimiter};
 use crate::platform::{loopback, qq, weixin, Inbound, PlatformConn, StatusSink};
-use crate::plugin::install::Installer;
 use crate::plugin::group::has_own_packages;
+use crate::plugin::install::Installer;
 use crate::plugin::proc::EXIT_UNGROUPABLE;
-use crate::plugin::{launch, restart_backoff, Groups, LaunchSpec, LoadError, OutMsg, PluginOut, PluginProc, Sidecar, Ungroupable};
+use crate::plugin::{
+    launch, restart_backoff, Groups, LaunchSpec, LoadError, OutMsg, PluginOut, PluginProc, Sidecar, Ungroupable,
+};
 use crate::sandbox::{chown_tree, Cgroups};
 use crate::store::{ConvDb, NodeDb};
 
@@ -140,9 +142,7 @@ struct DormantPlugin {
 }
 
 fn matches_wake_commands(commands: Option<&[String]>, command: Option<&str>) -> bool {
-    commands.is_none_or(|names| {
-        names.is_empty() || command.is_some_and(|word| names.iter().any(|name| name == word))
-    })
+    commands.is_none_or(|names| names.is_empty() || command.is_some_and(|word| names.iter().any(|name| name == word)))
 }
 
 /// One tenant bot: desired state, live connections, plugin processes and status.
@@ -484,7 +484,12 @@ impl Bot {
         if spec.app_id.is_empty() || spec.secret.is_empty() {
             return None;
         }
-        let fixture_token = self.shared.cfg.dev_services.then(|| std::env::var("FISH_QQ_PANEL_TOKEN_URL").ok()).flatten();
+        let fixture_token = self
+            .shared
+            .cfg
+            .dev_services
+            .then(|| std::env::var("FISH_QQ_PANEL_TOKEN_URL").ok())
+            .flatten();
         if fixture_token.is_none() {
             if let Some(PlatformConn::Qq(conn)) = self.platforms.read().unwrap().get(id) {
                 if conn.has_credentials(&spec.app_id, &spec.secret) {
@@ -492,7 +497,13 @@ impl Bot {
                 }
             }
         }
-        let mut conn = qq::QqConn::new(id, &spec.app_id, &spec.secret, self.shared.http.clone(), self.logs.clone());
+        let mut conn = qq::QqConn::new(
+            id,
+            &spec.app_id,
+            &spec.secret,
+            self.shared.http.clone(),
+            self.logs.clone(),
+        );
         if let Some(url) = fixture_token {
             conn.token_url = url;
         }
@@ -517,7 +528,10 @@ impl Bot {
                     .unwrap()
                     .insert(spec.id.clone(), PlatformConn::Qq(conn.clone()));
                 if conn.webhook {
-                    self.logs.info(platform_source(&spec.kind), "QQ 平台使用 Webhook 接收消息，等待开放平台回调");
+                    self.logs.info(
+                        platform_source(&spec.kind),
+                        "QQ 平台使用 Webhook 接收消息，等待开放平台回调",
+                    );
                     sink("connecting", "等待 QQ 开放平台回调验证");
                 } else {
                     tokio::spawn(qq::run(conn, core.inbound_tx.clone(), sink, tok.clone()));
@@ -619,15 +633,18 @@ impl Bot {
                 }
             }
             if let Some(slot) = rt.plugins.remove(&spec.id) {
-                self.logs.info(&format!("plugin:{}", spec.name), "插件版本变化，重新安装");
+                self.logs
+                    .info(&format!("plugin:{}", spec.name), "插件版本变化，重新安装");
                 Self::stop_slot(slot).await;
             }
             let Some(core) = rt.core.as_ref() else { return };
             let cancel = core.cancel.child_token();
             let (config, updates) = watch::channel(spec.config.clone());
-            let task = tokio::spawn(self.clone().supervise_plugin(
-                spec.clone(), updates, cancel.clone(), core.out_tx.clone(),
-            ));
+            let task =
+                tokio::spawn(
+                    self.clone()
+                        .supervise_plugin(spec.clone(), updates, cancel.clone(), core.out_tx.clone()),
+                );
             rt.plugins.insert(
                 spec.id.clone(),
                 PluginSlot {
@@ -647,7 +664,9 @@ impl Bot {
         if !self.shared.installer.is_installed(&slot.spec, &dir) {
             return Err("插件尚未安装完成，请检查安装状态");
         }
-        slot.config.send(slot.spec.config.clone()).map_err(|_| "插件进程不可用，请稍后重试")
+        slot.config
+            .send(slot.spec.config.clone())
+            .map_err(|_| "插件进程不可用，请稍后重试")
     }
 
     fn storage_over_quota(&self) -> bool {
@@ -781,7 +800,8 @@ impl Bot {
                 }
             }
             if tokio::time::timeout_at(deadline, gen.changed()).await.is_err() {
-                self.logs.warn("core", "有插件没能及时唤醒，这条消息只交给正在运行的插件");
+                self.logs
+                    .warn("core", "有插件没能及时唤醒，这条消息只交给正在运行的插件");
                 return self.procs.read().unwrap().values().cloned().collect();
             }
         }
@@ -848,8 +868,8 @@ impl Bot {
             };
             let _ = std::fs::create_dir_all(&inst.data);
             chown_tree(&shared.cfg, &inst.data);
-            let grouped = !self.solo.lock().unwrap().contains(&spec.id)
-                && !has_own_packages(inst.site_packages.as_deref());
+            let grouped =
+                !self.solo.lock().unwrap().contains(&spec.id) && !has_own_packages(inst.site_packages.as_deref());
             let workdir = Groups::workdir(&shared.cfg.bot_dir(&user, &self.id));
             if grouped {
                 let _ = std::fs::create_dir_all(&workdir);
@@ -977,14 +997,11 @@ impl Bot {
                     }
                     shared.forget_proc(&proc_id);
                     let minutes = idle.map(|d| d.as_secs().div_ceil(60)).unwrap_or(0);
-                    let command_only = proc
-                        .hello
-                        .wake_commands
-                        .as_ref()
-                        .is_some_and(|names| !names.is_empty());
+                    let command_only = proc.hello.wake_commands.as_ref().is_some_and(|names| !names.is_empty());
                     drop(proc);
                     let trigger = if command_only { "插件指令" } else { "消息" };
-                    self.logs.info(&src, format!("{minutes} 分钟未收到{trigger}，插件已休眠"));
+                    self.logs
+                        .info(&src, format!("{minutes} 分钟未收到{trigger}，插件已休眠"));
                     let detail = format!("空闲休眠中，收到{trigger}时自动唤醒");
                     self.set_plugin_status(&spec.id, "sleeping", &detail, Some(version));
                     let wake_reason = loop {
@@ -1199,7 +1216,8 @@ impl Bot {
         }
         let Some(spec) = spec.filter(|l| !l.api_key.is_empty()) else {
             self.logs.warn("llm", "未配置 LLM 密钥，无法回复");
-            self.notify_trouble(target, &ev.unified_msg_origin, llm::Trouble::NoKey).await;
+            self.notify_trouble(target, &ev.unified_msg_origin, llm::Trouble::NoKey)
+                .await;
             return;
         };
         let session = &ev.unified_msg_origin;
@@ -1280,7 +1298,8 @@ impl Bot {
             let reply = match llm::chat_reply(&self.shared.http, req).await {
                 Ok(r) => r,
                 Err(e) if tools_on && round == 0 && is_client_error(&e) => {
-                    self.logs.warn("llm", format!("模型不接受插件工具，这次不带工具回复: {e:#}"));
+                    self.logs
+                        .warn("llm", format!("模型不接受插件工具，这次不带工具回复: {e:#}"));
                     tools_on = false;
                     continue;
                 }
@@ -1296,10 +1315,17 @@ impl Bot {
                 text = reply.text;
                 break;
             }
-            messages.push(ChatMessage::assistant_raw(reply.raw.unwrap_or_else(|| json!({"role": "assistant"}))));
+            messages.push(ChatMessage::assistant_raw(
+                reply.raw.unwrap_or_else(|| json!({"role": "assistant"})),
+            ));
             for call in reply.tool_calls {
-                let result = self.run_tool(&owners, ev, event_id, &call.name, &call.arguments, &mut sent_by_tools).await;
-                messages.push(ChatMessage::tool_result(&call.id, truncate_chars(&result, MAX_TOOL_RESULT_CHARS)));
+                let result = self
+                    .run_tool(&owners, ev, event_id, &call.name, &call.arguments, &mut sent_by_tools)
+                    .await;
+                messages.push(ChatMessage::tool_result(
+                    &call.id,
+                    truncate_chars(&result, MAX_TOOL_RESULT_CHARS),
+                ));
             }
         }
         if !text.is_empty() {
@@ -1317,7 +1343,10 @@ impl Bot {
         {
             let mut notices = self.notices.lock().unwrap();
             let key = (session.to_string(), trouble);
-            if notices.get(&key).is_some_and(|t| now.duration_since(*t) < trouble.cooldown()) {
+            if notices
+                .get(&key)
+                .is_some_and(|t| now.duration_since(*t) < trouble.cooldown())
+            {
                 return;
             }
             if notices.len() > 1024 {
@@ -1338,7 +1367,10 @@ impl Bot {
             for t in p.tools() {
                 let Some(tool) = tool_definition(t) else { continue };
                 if owners.contains_key(&tool.name) {
-                    self.logs.warn(&format!("plugin:{}", p.plugin_name), format!("工具 {} 与其他插件重名，已忽略", tool.name));
+                    self.logs.warn(
+                        &format!("plugin:{}", p.plugin_name),
+                        format!("工具 {} 与其他插件重名，已忽略", tool.name),
+                    );
                     continue;
                 }
                 owners.insert(tool.name.clone(), p.clone());
@@ -1365,7 +1397,8 @@ impl Bot {
         self.logs.info(&src, format!("模型调用工具 {name}"));
         let call_id = ulid::Ulid::new().to_string().to_lowercase();
         let Some(v) = p.tool_call(&call_id, event_id, ev, name, arguments, TOOL_WAIT).await else {
-            self.logs.warn(&src, format!("工具 {name} 超过 {} 秒没有返回", TOOL_WAIT.as_secs()));
+            self.logs
+                .warn(&src, format!("工具 {name} 超过 {} 秒没有返回", TOOL_WAIT.as_secs()));
             return "工具执行超时".into();
         };
         if v.get("sent").and_then(Value::as_bool) == Some(true) {
@@ -1484,15 +1517,26 @@ impl Bot {
 }
 
 fn valid_tool_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 fn tool_definition(value: &Value) -> Option<ToolDef> {
     let name = value.get("name")?.as_str()?;
     valid_tool_name(name).then(|| ToolDef {
         name: name.to_string(),
-        description: value.get("description").and_then(Value::as_str).unwrap_or(name).to_string(),
-        parameters: value.get("parameters").filter(|v| v.is_object()).cloned()
+        description: value
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or(name)
+            .to_string(),
+        parameters: value
+            .get("parameters")
+            .filter(|v| v.is_object())
+            .cloned()
             .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
     })
 }

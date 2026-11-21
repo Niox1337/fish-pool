@@ -18,15 +18,37 @@ const levelStyle: Record<LogLine['level'], { label: string; cls: string }> = {
 }
 
 const sourceLabel = (s: string) =>
-  s === 'core' ? '核心' : s === 'qq_official' ? 'QQ' : s === 'weixin_ilink' ? '微信' : s === 'llm' ? '模型' : s.startsWith('plugin:') ? `插件 ${s.slice(7)}` : s
+  s === 'core'
+    ? '核心'
+    : s === 'qq_official'
+      ? 'QQ'
+      : s === 'weixin_ilink'
+        ? '微信'
+        : s === 'llm'
+          ? '模型'
+          : s.startsWith('plugin:')
+            ? `插件 ${s.slice(7)}`
+            : s
 
 export function LogRow({ line, stacked }: { line: LogLine; stacked?: boolean }) {
   const lv = levelStyle[line.level] ?? levelStyle.info
   return (
-    <li className={cn('flex flex-wrap items-baseline gap-x-2.5 px-3 py-0.5 text-white/85', !stacked && 'sm:flex-nowrap', line.level === 'error' && 'bg-[#ff6b78]/10')}>
+    <li
+      className={cn(
+        'flex flex-wrap items-baseline gap-x-2.5 px-3 py-0.5 text-white/85',
+        !stacked && 'sm:flex-nowrap',
+        line.level === 'error' && 'bg-[#ff6b78]/10',
+      )}
+    >
       <time className="shrink-0 text-white/45 tabular-nums">{fmtTime(line.ts)}</time>
       <span className={cn('w-[5ch] shrink-0 font-semibold', lv.cls)}>{lv.label}</span>
-      <span className={cn('max-w-[16ch] shrink-0 truncate rounded bg-white/10 px-1.5 text-[12px] text-white/70', !stacked && 'sm:w-28 sm:max-w-28')} title={line.source}>
+      <span
+        className={cn(
+          'max-w-[16ch] shrink-0 truncate rounded bg-white/10 px-1.5 text-[12px] text-white/70',
+          !stacked && 'sm:w-28 sm:max-w-28',
+        )}
+        title={line.source}
+      >
         {sourceLabel(line.source)}
       </span>
       <span className={cn('min-w-0 basis-full break-words whitespace-pre-wrap', !stacked && 'sm:basis-auto')}>{line.message}</span>
@@ -81,10 +103,14 @@ export default function Logs({ bot }: { bot: Bot }) {
     <section aria-label="日志">
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <Field label="来源" htmlFor={sourceId} className="min-w-0 flex-1 basis-40 sm:max-w-56">
-          <Select id={sourceId} value={source} onChange={(e) => {
-            setSource(e.target.value)
-            setStick(true)
-          }}>
+          <Select
+            id={sourceId}
+            value={source}
+            onChange={(e) => {
+              setSource(e.target.value)
+              setStick(true)
+            }}
+          >
             <option value="all">全部来源</option>
             {sources.map((s) => (
               <option key={s} value={s}>
@@ -94,10 +120,14 @@ export default function Logs({ bot }: { bot: Bot }) {
           </Select>
         </Field>
         <Field label="级别" htmlFor={levelId} className="min-w-0 flex-1 basis-40 sm:max-w-56">
-          <Select id={levelId} value={minLevel} onChange={(e) => {
-            setMinLevel(e.target.value as LogLine['level'])
-            setStick(true)
-          }}>
+          <Select
+            id={levelId}
+            value={minLevel}
+            onChange={(e) => {
+              setMinLevel(e.target.value as LogLine['level'])
+              setStick(true)
+            }}
+          >
             <option value="debug">全部级别</option>
             <option value="info">信息及以上</option>
             <option value="warn">警告及以上</option>
@@ -118,9 +148,7 @@ export default function Logs({ bot }: { bot: Bot }) {
         <div className="grid min-h-60 place-items-center rounded-2xl border border-dashed border-paper-3 p-6 text-center">
           <div>
             <p className="font-semibold text-ink">还没有日志</p>
-            <p className="mt-1 text-sm leading-relaxed text-ink-2">
-              {bot.status === 'stopped' ? '启动小鱼后查看日志。' : '每 4 秒刷新。'}
-            </p>
+            <p className="mt-1 text-sm leading-relaxed text-ink-2">{bot.status === 'stopped' ? '启动小鱼后查看日志。' : '每 4 秒刷新。'}</p>
           </div>
         </div>
       ) : (

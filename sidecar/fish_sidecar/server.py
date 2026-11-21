@@ -478,7 +478,9 @@ class ForkServer:
                 os.setsid()
                 from fish_sidecar import template
 
-                code = template.serve(child, {k: spec.get(k) for k in ("plugin_dir", "venv_site_packages", "plugin_name")}, workdir)
+                code = template.serve(
+                    child, {k: spec.get(k) for k in ("plugin_dir", "venv_site_packages", "plugin_name")}, workdir
+                )
             except BaseException:
                 try:
                     traceback.print_exc(file=sys.__stderr__)

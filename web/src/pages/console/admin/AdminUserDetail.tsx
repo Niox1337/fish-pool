@@ -107,7 +107,13 @@ function ServicePanel({ user }: { user: AdminUser }) {
           <p className="mb-2 text-sm font-semibold text-ink">延长</p>
           <div className="flex flex-wrap gap-2">
             {[7, 30, 90].map((d) => (
-              <Button key={d} size="sm" loading={busy === `+${d}`} disabled={!!busy} onClick={() => run(`+${d}`, { extend_days: d }, extended)}>
+              <Button
+                key={d}
+                size="sm"
+                loading={busy === `+${d}`}
+                disabled={!!busy}
+                onClick={() => run(`+${d}`, { extend_days: d }, extended)}
+              >
                 <span className="tabular-nums">+{d} 天</span>
               </Button>
             ))}
@@ -137,8 +143,19 @@ function ServicePanel({ user }: { user: AdminUser }) {
         <form onSubmit={submitDate} className="border-t border-paper-3 pt-4">
           <Field label="设定到期日" htmlFor={dateId} hint="当天结束时到期。">
             <div className="flex flex-wrap items-center gap-2">
-              <Input id={dateId} type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 w-44 rounded-lg text-sm tabular-nums" />
-              <Button type="submit" size="sm" loading={busy === 'date'} disabled={!!busy || !date || date === toDateInput(user.service_until)}>
+              <Input
+                id={dateId}
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="h-8 w-44 rounded-lg text-sm tabular-nums"
+              />
+              <Button
+                type="submit"
+                size="sm"
+                loading={busy === 'date'}
+                disabled={!!busy || !date || date === toDateInput(user.service_until)}
+              >
                 设定
               </Button>
               {user.service_until != null && (
@@ -215,7 +232,8 @@ const MAX_CREDIT_YUAN = 1000
 /** Error for a credit amount in yuan, null when valid. */
 function creditAmountError(v: string): string | null {
   const t = v.trim()
-  if (!/^\d{1,4}(\.\d{1,2})?$/.test(t) || Number(t) <= 0 || Number(t) > MAX_CREDIT_YUAN) return `填 0.01 到 ${MAX_CREDIT_YUAN} 元，最多两位小数`
+  if (!/^\d{1,4}(\.\d{1,2})?$/.test(t) || Number(t) <= 0 || Number(t) > MAX_CREDIT_YUAN)
+    return `填 0.01 到 ${MAX_CREDIT_YUAN} 元，最多两位小数`
   return null
 }
 
@@ -298,10 +316,22 @@ function CreditRow({ userId, c }: { userId: string; c: AdminCredit }) {
       {editing ? (
         <form onSubmit={save} noValidate className="mt-3 grid gap-3 rounded-xl bg-paper-2/60 p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
           <Field label="总额度（元）" htmlFor={amountId} error={amount && amountError ? amountError : undefined}>
-            <Input id={amountId} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-8 rounded-lg text-sm tabular-nums" />
+            <Input
+              id={amountId}
+              inputMode="decimal"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="h-8 rounded-lg text-sm tabular-nums"
+            />
           </Field>
           <Field label="过期日" htmlFor={dateId} hint="留空则不过期">
-            <Input id={dateId} type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 rounded-lg text-sm tabular-nums" />
+            <Input
+              id={dateId}
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="h-8 rounded-lg text-sm tabular-nums"
+            />
           </Field>
           <div className="flex gap-2">
             <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!!amountError}>
@@ -339,7 +369,8 @@ function CreditPanel({ user }: { user: AdminUser }) {
     if (!amount || amountError) return
     setBusy(true)
     const ok = await act(
-      () => api.adminAddCredit(user.id, { amount: amount.trim(), expires_at: date ? endOfDay(date) : null, note: note.trim() || undefined }),
+      () =>
+        api.adminAddCredit(user.id, { amount: amount.trim(), expires_at: date ? endOfDay(date) : null, note: note.trim() || undefined }),
       `已添加 ${amount.trim()} 元活动额度`,
     )
     setBusy(false)
@@ -377,13 +408,32 @@ function CreditPanel({ user }: { user: AdminUser }) {
           {data.configured ? (
             <form onSubmit={add} noValidate className="mt-4 grid gap-3 border-t border-paper-3 pt-4 sm:grid-cols-2">
               <Field label="添加额度（元）" htmlFor={amountId} error={amountError ?? undefined}>
-                <Input id={amountId} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="例如 5" className="h-8 rounded-lg text-sm tabular-nums" />
+                <Input
+                  id={amountId}
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="例如 5"
+                  className="h-8 rounded-lg text-sm tabular-nums"
+                />
               </Field>
               <Field label="过期日" htmlFor={dateId} hint="留空则不过期">
-                <Input id={dateId} type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 rounded-lg text-sm tabular-nums" />
+                <Input
+                  id={dateId}
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="h-8 rounded-lg text-sm tabular-nums"
+                />
               </Field>
               <Field label="备注（可选）" htmlFor={noteId}>
-                <Input id={noteId} value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} className="h-8 rounded-lg text-sm" />
+                <Input
+                  id={noteId}
+                  value={note}
+                  maxLength={200}
+                  onChange={(e) => setNote(e.target.value)}
+                  className="h-8 rounded-lg text-sm"
+                />
               </Field>
               <div className="flex items-end">
                 <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!amount || !!amountError}>
@@ -508,11 +558,19 @@ function LogsSection({ userId, bots }: { userId: string; bots: Bot[] }) {
             onClick={() => setPicked(b.id)}
             className={cn(
               'inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors duration-150',
-              b.id === botId ? 'border-cobalt bg-cobalt text-white' : 'border-paper-3 bg-cream text-ink-2 hover:border-ink-3/50 hover:text-ink',
+              b.id === botId
+                ? 'border-cobalt bg-cobalt text-white'
+                : 'border-paper-3 bg-cream text-ink-2 hover:border-ink-3/50 hover:text-ink',
             )}
           >
             {b.name}
-            <span className={cn('size-2 rounded-full', b.status === 'running' ? 'bg-ok' : b.status === 'error' ? 'bg-bad' : b.status === 'starting' ? 'bg-warn' : 'bg-ink-3')} aria-hidden />
+            <span
+              className={cn(
+                'size-2 rounded-full',
+                b.status === 'running' ? 'bg-ok' : b.status === 'error' ? 'bg-bad' : b.status === 'starting' ? 'bg-warn' : 'bg-ink-3',
+              )}
+              aria-hidden
+            />
           </button>
         ))}
       </div>
@@ -563,9 +621,13 @@ export default function AdminUserDetail() {
           <header className="mb-5">
             <h1 className="font-display text-2xl font-black break-all text-ink sm:text-[28px]">{q.data.user.email}</h1>
             <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2">
-              <span className={cn('font-semibold', q.data.user.role === 'admin' ? 'text-sky' : 'text-ink')}>{q.data.user.role === 'admin' ? '管理员' : '普通用户'}</span>
+              <span className={cn('font-semibold', q.data.user.role === 'admin' ? 'text-sky' : 'text-ink')}>
+                {q.data.user.role === 'admin' ? '管理员' : '普通用户'}
+              </span>
               <span className="tabular-nums">{fmtDate(q.data.user.created_at)} 注册</span>
-              <span className="tabular-nums">{q.data.user.last_login_at ? `最近登录 ${fmtAgo(q.data.user.last_login_at)}` : '从未登录'}</span>
+              <span className="tabular-nums">
+                {q.data.user.last_login_at ? `最近登录 ${fmtAgo(q.data.user.last_login_at)}` : '从未登录'}
+              </span>
             </p>
           </header>
           <nav aria-label="用户详情" className="mb-6 flex gap-1 border-b border-paper-3">

@@ -25,7 +25,11 @@ fn amount_fen(v: &Value) -> ApiResult<i64> {
 fn expires_ms(v: &Value) -> ApiResult<Option<i64>> {
     match v {
         Value::Null => Ok(None),
-        v => v.as_i64().filter(|n| *n > 0).map(Some).ok_or_else(|| ApiError::bad_request("expires_at 应为毫秒时间戳或 null")),
+        v => v
+            .as_i64()
+            .filter(|n| *n > 0)
+            .map(Some)
+            .ok_or_else(|| ApiError::bad_request("expires_at 应为毫秒时间戳或 null")),
     }
 }
 
@@ -37,7 +41,11 @@ async fn credit_views(app: &App, user_id: &str) -> ApiResult<Value> {
         credit: CreditRow,
         created_by_email: Option<String>,
     }
-    let cols = CREDIT_COLS.split(", ").map(|c| format!("c.{c}")).collect::<Vec<_>>().join(", ");
+    let cols = CREDIT_COLS
+        .split(", ")
+        .map(|c| format!("c.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let rows: Vec<Row> = app
         .db
         .all(
@@ -77,7 +85,9 @@ async fn credit_views(app: &App, user_id: &str) -> ApiResult<Value> {
             })
         })
         .collect();
-    Ok(json!({"configured": gw.token.is_some(), "account": account.is_some(), "items": items, "remote_error": remote_error}))
+    Ok(
+        json!({"configured": gw.token.is_some(), "account": account.is_some(), "items": items, "remote_error": remote_error}),
+    )
 }
 
 pub async fn list(req: &Request, app: &App, user_id: &str) -> ApiResult<Reply> {
@@ -99,7 +109,13 @@ pub async fn add(req: &mut Request, app: &App, user_id: &str) -> ApiResult<Reply
     if expires_at.is_some_and(|t| t <= now_ms()) {
         return Err(ApiError::bad_request("过期时间应晚于现在"));
     }
-    let note: String = body["note"].as_str().unwrap_or("").trim().chars().take(NOTE_CHARS).collect();
+    let note: String = body["note"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(NOTE_CHARS)
+        .collect();
     let id = new_id();
     app.db
         .run(
@@ -118,11 +134,16 @@ pub async fn add(req: &mut Request, app: &App, user_id: &str) -> ApiResult<Reply
 pub async fn patch(req: &mut Request, app: &App, user_id: &str, credit_id: &str) -> ApiResult<Reply> {
     app.require_admin(req).await?;
     let body: Value = json_body(req).await?;
-    let obj = body.as_object().ok_or_else(|| ApiError::bad_request("请求体必须是对象"))?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("请求体必须是对象"))?;
     let user = app.user_by_id(user_id).await?;
     let credit: CreditRow = app
         .db
-        .first(&format!("SELECT {CREDIT_COLS} FROM gateway_credits WHERE id = ?1 AND user_id = ?2"), args![credit_id, user.id])
+        .first(
+            &format!("SELECT {CREDIT_COLS} FROM gateway_credits WHERE id = ?1 AND user_id = ?2"),
+            args![credit_id, user.id],
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("额度不存在"))?;
     let fen = obj.get("amount").map(amount_fen).transpose()?;
@@ -131,7 +152,9 @@ pub async fn patch(req: &mut Request, app: &App, user_id: &str, credit_id: &str)
         return Err(ApiError::bad_request("没有要修改的内容"));
     }
     if let Some(remote_id) = &credit.remote_id {
-        let account = gengwiki::account(app, &user.id).await?.ok_or_else(|| ApiError::internal("gateway account missing"))?;
+        let account = gengwiki::account(app, &user.id)
+            .await?
+            .ok_or_else(|| ApiError::internal("gateway account missing"))?;
         app.gengwiki()
             .patch_credit(&account.remote_key_id, remote_id, fen, expires_at)
             .await
@@ -140,7 +163,12 @@ pub async fn patch(req: &mut Request, app: &App, user_id: &str, credit_id: &str)
     app.db
         .run(
             "UPDATE gateway_credits SET amount_fen = ?3, expires_at = ?4 WHERE id = ?1 AND user_id = ?2",
-            args![credit.id, user.id, fen.unwrap_or(credit.amount_fen), expires_at.unwrap_or(credit.expires_at)],
+            args![
+                credit.id,
+                user.id,
+                fen.unwrap_or(credit.amount_fen),
+                expires_at.unwrap_or(credit.expires_at)
+            ],
         )
         .await?;
     if credit.remote_id.is_none() {

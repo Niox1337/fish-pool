@@ -129,7 +129,9 @@ def find_star(package: str, main: types.ModuleType) -> StarMetadata:
     candidates = [
         m
         for m in star_registry
-        if m.star_cls_type is not None and m.module_path and (m.module_path == package or m.module_path.startswith(package + "."))
+        if m.star_cls_type is not None
+        and m.module_path
+        and (m.module_path == package or m.module_path.startswith(package + "."))
     ]
     if candidates:
         return candidates[-1]
@@ -167,7 +169,9 @@ def read_schema(plugin_dir: Path) -> dict | None:
     return json.loads(path.read_text("utf-8-sig"))
 
 
-def plugin_config(plugin_dir: Path, plugin_name: str, values: dict | None, required: bool = False) -> AstrBotConfig | None:
+def plugin_config(
+    plugin_dir: Path, plugin_name: str, values: dict | None, required: bool = False
+) -> AstrBotConfig | None:
     """The plugin config: node values in ``config/<name>_config.json``, completed with schema defaults.
 
     None when the plugin has no ``_conf_schema.json``, unless ``required``.
@@ -209,7 +213,16 @@ def _requires_config(cls: type) -> bool:
 
 
 def _apply_metadata(md: StarMetadata, meta: dict[str, Any], plugin_name: str) -> None:
-    for field in ("name", "author", "desc", "short_desc", "repo", "display_name", "support_platforms", "astrbot_version"):
+    for field in (
+        "name",
+        "author",
+        "desc",
+        "short_desc",
+        "repo",
+        "display_name",
+        "support_platforms",
+        "astrbot_version",
+    ):
         if meta.get(field) is not None:
             setattr(md, field, meta[field])
     if meta.get("description") is not None and not md.desc:
@@ -239,7 +252,10 @@ def bind(md: StarMetadata, instance: Star) -> None:
         handler.handler = functools.partial(raw, instance)
     for ft in _plugin_tools(module_path):
         owner = getattr(ft.handler, "__module__", None) if ft.handler is not None else None
-        if ft.handler is not None and (owner == module_path or (isinstance(ft.handler, functools.partial) and ft.handler_module_path == module_path)):
+        if ft.handler is not None and (
+            owner == module_path
+            or (isinstance(ft.handler, functools.partial) and ft.handler_module_path == module_path)
+        ):
             raw = ft.handler.func if isinstance(ft.handler, functools.partial) else ft.handler
             ft.handler_module_path = module_path
             ft.handler = functools.partial(raw, instance)
@@ -247,7 +263,9 @@ def bind(md: StarMetadata, instance: Star) -> None:
         if path == module_path or path.startswith(module_path + "."):
             ft.active = True
     md.activated = True
-    md.star_handler_full_names = [h.handler_full_name for h in star_handlers_registry.get_handlers_by_module_name(module_path)]
+    md.star_handler_full_names = [
+        h.handler_full_name for h in star_handlers_registry.get_handlers_by_module_name(module_path)
+    ]
 
 
 async def instantiate(md: StarMetadata, plugin_dir: Path, plugin_name: str, config_values: dict | None) -> LoadedPlugin:

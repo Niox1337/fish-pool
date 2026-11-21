@@ -33,7 +33,13 @@ pub struct LlmSettings {
 
 impl Default for LlmSettings {
     fn default() -> Self {
-        Self { key_id: None, model: String::new(), temperature: 0.7, max_tokens: 1024, context_turns: 12 }
+        Self {
+            key_id: None,
+            model: String::new(),
+            temperature: 0.7,
+            max_tokens: 1024,
+            context_turns: 12,
+        }
     }
 }
 
@@ -112,7 +118,8 @@ impl BotSettings {
             return Err("模型名称过长".into());
         }
         let b = &self.behavior;
-        let list_ok = |v: &Vec<String>, max: usize| v.len() <= max && v.iter().all(|s| !s.is_empty() && s.chars().count() <= 64);
+        let list_ok =
+            |v: &Vec<String>, max: usize| v.len() <= max && v.iter().all(|s| !s.is_empty() && s.chars().count() <= 64);
         if !list_ok(&b.wake_prefixes, 10) {
             return Err("唤醒前缀最多 10 个，每个 1 到 64 个字符".into());
         }
@@ -171,13 +178,18 @@ mod tests {
         let stored = serde_json::to_string(&s).unwrap();
         assert_eq!(BotSettings::from_stored(&stored), s);
         assert_eq!(BotSettings::from_stored("{"), BotSettings::default());
-        assert_eq!(BotSettings::from_stored(r#"{"persona":{"name":"x"}}"#).llm.max_tokens, 1024);
+        assert_eq!(
+            BotSettings::from_stored(r#"{"persona":{"name":"x"}}"#).llm.max_tokens,
+            1024
+        );
     }
 
     #[test]
     fn patches() {
         let s = BotSettings::default();
-        let n = s.apply_patch(&json!({"persona": {"greeting": "你好"}, "llm": {"temperature": 1.2}})).unwrap();
+        let n = s
+            .apply_patch(&json!({"persona": {"greeting": "你好"}, "llm": {"temperature": 1.2}}))
+            .unwrap();
         assert_eq!(n.persona.greeting, "你好");
         assert_eq!(n.persona.name, "大肥鱼");
         assert_eq!(n.llm.temperature, 1.2);
@@ -187,6 +199,8 @@ mod tests {
         assert!(s.apply_patch(&json!({"llm": {"max_tokens": "x"}})).is_err());
         assert!(s.apply_patch(&json!({"persona": {"name": ""}})).is_err());
         assert!(s.apply_patch(&json!([1])).is_err());
-        assert!(s.apply_patch(&json!({"behavior": {"rate_limit_per_minute": 0}})).is_err());
+        assert!(s
+            .apply_patch(&json!({"behavior": {"rate_limit_per_minute": 0}}))
+            .is_err());
     }
 }

@@ -6,8 +6,8 @@ use crate::args;
 use crate::captcha;
 use crate::crypto::{self, sha256_hex};
 use crate::email;
-use crate::invite;
 use crate::error::{ApiError, ApiResult};
+use crate::invite;
 use crate::models::{AccountQuota, UserRow, UNLIMITED_COUNT};
 use crate::util::{log, new_id, normalize_email, now_ms, random_bytes, valid_email};
 use serde::Deserialize;
@@ -57,15 +57,28 @@ async fn check_captcha(app: &App, id: Option<&str>, answer: Option<&str>) -> Api
         answer_hash: String,
         expires_at: i64,
     }
-    let row: Option<Row> = app.db.first("DELETE FROM captchas WHERE id = ?1 RETURNING answer_hash, expires_at", args![id]).await?;
+    let row: Option<Row> = app
+        .db
+        .first(
+            "DELETE FROM captchas WHERE id = ?1 RETURNING answer_hash, expires_at",
+            args![id],
+        )
+        .await?;
     match row {
-        Some(r) if r.expires_at > now_ms() && crypto::ct_eq(r.answer_hash.as_bytes(), captcha_hash(id, answer).as_bytes()) => Ok(()),
+        Some(r)
+            if r.expires_at > now_ms()
+                && crypto::ct_eq(r.answer_hash.as_bytes(), captcha_hash(id, answer).as_bytes()) =>
+        {
+            Ok(())
+        }
         _ => Err(invalid()),
     }
 }
 
 async fn user_by_email(app: &App, email: &str) -> ApiResult<Option<UserRow>> {
-    app.db.first(&format!("SELECT {USER_COLS} FROM users WHERE email = ?1"), args![email]).await
+    app.db
+        .first(&format!("SELECT {USER_COLS} FROM users WHERE email = ?1"), args![email])
+        .await
 }
 
 fn check_purpose(p: &str) -> ApiResult<()> {
@@ -131,7 +144,9 @@ pub async fn email_code(req: &mut Request, app: &App) -> ApiResult<Reply> {
     }
     let ip_bucket = format!("email_code_ip:{}", client_ip(req));
     let mail_bucket = format!("email_code_mail:{email}");
-    if app.rate_count(&ip_bucket, 3600 * 1000).await? >= 10 || app.rate_count(&mail_bucket, 24 * 3600 * 1000).await? >= 10 {
+    if app.rate_count(&ip_bucket, 3600 * 1000).await? >= 10
+        || app.rate_count(&mail_bucket, 24 * 3600 * 1000).await? >= 10
+    {
         return Err(ApiError::rate_limited("验证码请求次数过多，请稍后再试"));
     }
 
@@ -158,7 +173,12 @@ pub async fn email_code(req: &mut Request, app: &App) -> ApiResult<Reply> {
         .await?;
     let mail = email::code_mail(&email, &body.purpose, &code, CODE_TTL_MS / 60_000);
     if let Err(e) = email::send(app, &mail, &code).await {
-        app.db.run("DELETE FROM email_codes WHERE email = ?1 AND purpose = ?2", args![email, body.purpose]).await?;
+        app.db
+            .run(
+                "DELETE FROM email_codes WHERE email = ?1 AND purpose = ?2",
+                args![email, body.purpose],
+            )
+            .await?;
         return Err(e);
     }
     Ok(Reply::json(json!({"ok": true, "cooldown_s": CODE_COOLDOWN_MS / 1000})))
@@ -180,7 +200,9 @@ async fn verify_code(app: &App, email: &str, purpose: &str, code: &str) -> ApiRe
             args![email, purpose],
         )
         .await?;
-    let Some(row) = row else { return Err(ApiError::new(400, "code_invalid", "邮箱验证码错误，请重新获取")) };
+    let Some(row) = row else {
+        return Err(ApiError::new(400, "code_invalid", "邮箱验证码错误，请重新获取"));
+    };
     if row.expires_at <= now_ms() {
         return Err(ApiError::new(400, "code_expired", "邮箱验证码已过期，请重新获取"));
     }
@@ -188,10 +210,20 @@ async fn verify_code(app: &App, email: &str, purpose: &str, code: &str) -> ApiRe
         return Err(ApiError::new(400, "code_invalid", "验证码错误次数过多，请重新获取"));
     }
     if !crypto::ct_eq(row.code_hash.as_bytes(), code_hash(email, purpose, code).as_bytes()) {
-        app.db.run("UPDATE email_codes SET attempts = attempts + 1 WHERE rowid = ?1", args![row.rid]).await?;
+        app.db
+            .run(
+                "UPDATE email_codes SET attempts = attempts + 1 WHERE rowid = ?1",
+                args![row.rid],
+            )
+            .await?;
         return Err(ApiError::new(400, "code_invalid", "邮箱验证码错误"));
     }
-    app.db.run("DELETE FROM email_codes WHERE email = ?1 AND purpose = ?2", args![email, purpose]).await?;
+    app.db
+        .run(
+            "DELETE FROM email_codes WHERE email = ?1 AND purpose = ?2",
+            args![email, purpose],
+        )
+        .await?;
     Ok(())
 }
 
@@ -216,7 +248,9 @@ async fn require_invite(app: &App, email: &str, input: Option<&str>) -> ApiResul
 }
 
 fn is_admin_email(app: &App, email: &str) -> bool {
-    app.var("ADMIN_EMAILS").map(|list| email_in_list(&list, email)).unwrap_or(false)
+    app.var("ADMIN_EMAILS")
+        .map(|list| email_in_list(&list, email))
+        .unwrap_or(false)
 }
 
 /// Whether `email` (already normalized) appears in a comma separated list.
@@ -250,14 +284,22 @@ pub async fn register(req: &mut Request, app: &App) -> ApiResult<Reply> {
     }
     let invite_code = require_invite(app, &email, body.invite_code.as_deref()).await?;
     verify_code(app, &email, "register", &body.code).await?;
-    let hash = crypto::hash_password(&body.password).await.map_err(ApiError::internal)?;
+    let hash = crypto::hash_password(&body.password)
+        .await
+        .map_err(ApiError::internal)?;
     let id = new_id();
     let role = if is_admin_email(app, &email) { "admin" } else { "user" };
     let now = now_ms();
     let quota = AccountQuota::default();
     let bots = quota.bots.unwrap_or(UNLIMITED_COUNT);
     let plugins = quota.plugins.unwrap_or(UNLIMITED_COUNT);
-    let taken = |e: ApiError| if e.code == "conflict" { ApiError::conflict("email_taken", "该邮箱已注册，请直接登录") } else { e };
+    let taken = |e: ApiError| {
+        if e.code == "conflict" {
+            ApiError::conflict("email_taken", "该邮箱已注册，请直接登录")
+        } else {
+            e
+        }
+    };
     match invite_code {
         Some(code) => {
             // The user row is inserted only when the conditional claim changed one row,
@@ -323,28 +365,46 @@ pub async fn login(req: &mut Request, app: &App) -> ApiResult<Reply> {
     let fails = app.rate_count(&fail_bucket, LOGIN_WINDOW_MS).await?;
     if fails >= LOGIN_FAILS_FOR_CAPTCHA {
         if body.captcha_id.as_deref().unwrap_or("").is_empty() {
-            return Err(ApiError::new(400, "captcha_required", "登录失败次数较多，请输入图形验证码"));
+            return Err(ApiError::new(
+                400,
+                "captcha_required",
+                "登录失败次数较多，请输入图形验证码",
+            ));
         }
         check_captcha(app, body.captcha_id.as_deref(), body.captcha_answer.as_deref()).await?;
     }
 
     let user = user_by_email(app, &email).await?;
     let ok = match &user {
-        Some(u) => crypto::verify_password(&body.password, &u.password_hash).await.map_err(ApiError::internal)?,
+        Some(u) => crypto::verify_password(&body.password, &u.password_hash)
+            .await
+            .map_err(ApiError::internal)?,
         None => false,
     };
     let Some(user) = user.filter(|_| ok) else {
         app.rate_hit(&fail_bucket).await?;
         if fails + 1 >= LOGIN_FAILS_FOR_CAPTCHA {
-            return Err(ApiError::new(400, "captcha_required", "邮箱或密码错误，请输入图形验证码后重试"));
+            return Err(ApiError::new(
+                400,
+                "captcha_required",
+                "邮箱或密码错误，请输入图形验证码后重试",
+            ));
         }
         return Err(ApiError::new(401, "invalid_credentials", "邮箱或密码错误"));
     };
-    let role = if is_admin_email(app, &email) { "admin" } else { user.role.as_str() };
+    let role = if is_admin_email(app, &email) {
+        "admin"
+    } else {
+        user.role.as_str()
+    };
     app.db
         .batch(vec![
-            app.db.stmt("DELETE FROM rate_events WHERE bucket = ?1", args![fail_bucket])?,
-            app.db.stmt("UPDATE users SET role = ?2, last_login_at = ?3 WHERE id = ?1", args![user.id, role, now_ms()])?,
+            app.db
+                .stmt("DELETE FROM rate_events WHERE bucket = ?1", args![fail_bucket])?,
+            app.db.stmt(
+                "UPDATE users SET role = ?2, last_login_at = ?3 WHERE id = ?1",
+                args![user.id, role, now_ms()],
+            )?,
         ])
         .await?;
     let user = app.user_by_id(&user.id).await?;
@@ -355,7 +415,12 @@ pub async fn login(req: &mut Request, app: &App) -> ApiResult<Reply> {
 pub async fn logout(req: &Request, app: &App) -> ApiResult<Reply> {
     let header = req.headers().get("cookie").ok().flatten().unwrap_or_default();
     if let Some(token) = crate::app::cookie_value(&header, SESSION_COOKIE) {
-        app.db.run("DELETE FROM sessions WHERE token_hash = ?1", args![sha256_hex(token.as_bytes())]).await?;
+        app.db
+            .run(
+                "DELETE FROM sessions WHERE token_hash = ?1",
+                args![sha256_hex(token.as_bytes())],
+            )
+            .await?;
     }
     Ok(Reply::json(ok_json()).with_cookie(clear_cookie()))
 }
@@ -373,13 +438,23 @@ pub async fn reset(req: &mut Request, app: &App) -> ApiResult<Reply> {
     check_email(&email)?;
     check_password(&body.password)?;
     verify_code(app, &email, "reset", &body.code).await?;
-    let user = user_by_email(app, &email).await?.ok_or_else(|| ApiError::new(400, "code_invalid", "邮箱验证码错误"))?;
-    let hash = crypto::hash_password(&body.password).await.map_err(ApiError::internal)?;
+    let user = user_by_email(app, &email)
+        .await?
+        .ok_or_else(|| ApiError::new(400, "code_invalid", "邮箱验证码错误"))?;
+    let hash = crypto::hash_password(&body.password)
+        .await
+        .map_err(ApiError::internal)?;
     app.db
         .batch(vec![
-            app.db.stmt("UPDATE users SET password_hash = ?2 WHERE id = ?1", args![user.id, hash])?,
+            app.db.stmt(
+                "UPDATE users SET password_hash = ?2 WHERE id = ?1",
+                args![user.id, hash],
+            )?,
             app.db.stmt("DELETE FROM sessions WHERE user_id = ?1", args![user.id])?,
-            app.db.stmt("DELETE FROM rate_events WHERE bucket = ?1", args![format!("login_fail:{email}")])?,
+            app.db.stmt(
+                "DELETE FROM rate_events WHERE bucket = ?1",
+                args![format!("login_fail:{email}")],
+            )?,
         ])
         .await?;
     Ok(Reply::json(ok_json()).with_cookie(clear_cookie()))

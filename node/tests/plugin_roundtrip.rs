@@ -268,7 +268,9 @@ async fn plugin_round_trip_through_sidecar_protocol() {
         }
     );
     let llm = next_out(&mut out_rx).await;
-    assert!(matches!(&llm.msg, PluginOut::Llm { req_id, prompt, .. } if req_id == "r1" && prompt.as_deref() == Some("hi")));
+    assert!(
+        matches!(&llm.msg, PluginOut::Llm { req_id, prompt, .. } if req_id == "r1" && prompt.as_deref() == Some("hi"))
+    );
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), d).await.unwrap().unwrap(),
         (true, false)
@@ -298,7 +300,8 @@ async fn plugin_round_trip_through_sidecar_protocol() {
     assert_eq!(hooked["system_prompt"], "sys [hooked]");
 
     // config update
-    proc.writer().send(&json!({"op": "config", "config": {"greeting": "yo"}}));
+    proc.writer()
+        .send(&json!({"op": "config", "config": {"greeting": "yo"}}));
     let cfg = next_out(&mut out_rx).await;
     assert!(matches!(&cfg.msg, PluginOut::Log { message, .. } if message.contains("yo")));
 

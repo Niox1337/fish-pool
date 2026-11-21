@@ -34,7 +34,11 @@ pub struct Mail {
 }
 
 pub fn code_mail(to: &str, purpose: &str, code: &str, ttl_minutes: i64) -> Mail {
-    let action = if purpose == "reset" { "重置密码" } else { "注册账号" };
+    let action = if purpose == "reset" {
+        "重置密码"
+    } else {
+        "注册账号"
+    };
     let subject = format!("大肥鱼托管班 {action}验证码：{code}");
     let text = format!(
         "你正在{action}，验证码是 {code}，{ttl_minutes} 分钟内有效。\n\n如果不是你本人操作，请忽略这封邮件，不要把验证码告诉任何人。\n\n大肥鱼托管班 fish.niox.lol"
@@ -46,7 +50,12 @@ pub fn code_mail(to: &str, purpose: &str, code: &str, ttl_minutes: i64) -> Mail 
 <p>{ttl_minutes} 分钟内有效。如果不是你本人操作，请忽略这封邮件，不要把验证码告诉任何人。</p>\
 <p style=\"color:#888\">大肥鱼托管班 fish.niox.lol</p></div>"
     );
-    Mail { to: to.to_string(), subject, text, html }
+    Mail {
+        to: to.to_string(),
+        subject,
+        text,
+        html,
+    }
 }
 
 fn send_failed() -> ApiError {
@@ -85,7 +94,10 @@ pub async fn send(app: &App, mail: &Mail, dev_code: &str) -> ApiResult<()> {
             set(&msg, "html", &mail.html.as_str().into());
             let builder: SendEmailBuilder = msg.unchecked_into();
             binding.send_with_builder(&builder).await.map_err(|e| {
-                let code = js_sys::Reflect::get(&e, &"code".into()).ok().and_then(|c| c.as_string()).unwrap_or_default();
+                let code = js_sys::Reflect::get(&e, &"code".into())
+                    .ok()
+                    .and_then(|c| c.as_string())
+                    .unwrap_or_default();
                 log_error(&format!("cloudflare email send failed {code}: {:?}", e.message()));
                 send_failed()
             })?;
@@ -105,13 +117,23 @@ pub async fn send(app: &App, mail: &Mail, dev_code: &str) -> ApiResult<()> {
             });
             let bytes = serde_json::to_vec(&body)?;
             let auth = format!("Bearer {key}");
-            let headers = [("authorization", auth.as_str()), ("content-type", "application/json"), ("user-agent", "fish-console")];
-            let resp = http::send(Method::Post, "https://api.resend.com/emails", &headers, Some(&bytes), 10_000)
-                .await
-                .map_err(|e| {
-                    log_error(&format!("resend: {e}"));
-                    send_failed()
-                })?;
+            let headers = [
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("user-agent", "fish-console"),
+            ];
+            let resp = http::send(
+                Method::Post,
+                "https://api.resend.com/emails",
+                &headers,
+                Some(&bytes),
+                10_000,
+            )
+            .await
+            .map_err(|e| {
+                log_error(&format!("resend: {e}"));
+                send_failed()
+            })?;
             if !resp.ok() {
                 log_error(&format!("resend {}: {}", resp.status, resp.text()));
                 return Err(send_failed());

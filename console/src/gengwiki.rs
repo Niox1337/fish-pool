@@ -83,9 +83,18 @@ const UNREADABLE: &str = "活动额度服务返回的内容无法识别";
 
 impl Gengwiki {
     pub fn new(base: Option<&str>, token: Option<&str>, model: Option<&str>) -> Self {
-        let base = base.map(str::trim).filter(|b| !b.is_empty()).unwrap_or(DEFAULT_BASE).trim_end_matches('/').to_string();
+        let base = base
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+            .unwrap_or(DEFAULT_BASE)
+            .trim_end_matches('/')
+            .to_string();
         let token = token.map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
-        let model = model.map(str::trim).filter(|m| !m.is_empty()).unwrap_or(DEFAULT_MODEL).to_string();
+        let model = model
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .unwrap_or(DEFAULT_MODEL)
+            .to_string();
         Self { base, token, model }
     }
 
@@ -107,7 +116,14 @@ impl Gengwiki {
         if text.is_some() {
             headers.push(("content-type", "application/json"));
         }
-        let resp = http::send(method, &format!("{}/manage{path}", self.base), &headers, text.as_deref().map(str::as_bytes), TIMEOUT_MS).await?;
+        let resp = http::send(
+            method,
+            &format!("{}/manage{path}", self.base),
+            &headers,
+            text.as_deref().map(str::as_bytes),
+            TIMEOUT_MS,
+        )
+        .await?;
         if !resp.ok() {
             return Err(upstream_message(resp.status, &resp.text()));
         }
@@ -116,31 +132,56 @@ impl Gengwiki {
 
     /// Creates the key of `external_ref` with an empty base budget. A repeated `external_ref` reissues that key with a new secret.
     pub async fn issue_key(&self, name: &str, external_ref: &str) -> Result<IssuedKey, String> {
-        let v = self.manage(Method::Post, "/keys", Some(json!({"name": key_label(name), "budget": "0", "external_ref": external_ref}))).await?;
+        let v = self
+            .manage(
+                Method::Post,
+                "/keys",
+                Some(json!({"name": key_label(name), "budget": "0", "external_ref": external_ref})),
+            )
+            .await?;
         parse_issued(&v).ok_or_else(|| UNREADABLE.into())
     }
 
     /// Replaces the secret of a key.
     pub async fn rotate(&self, key_id: &str) -> Result<IssuedKey, String> {
-        let v = self.manage(Method::Post, &format!("/keys/{key_id}/rotate"), None).await?;
+        let v = self
+            .manage(Method::Post, &format!("/keys/{key_id}/rotate"), None)
+            .await?;
         parse_issued(&v).ok_or_else(|| UNREADABLE.into())
     }
 
     /// Adds a credit. A repeated `external_ref` returns the credit already there.
-    pub async fn add_credit(&self, key_id: &str, fen: i64, expires_at: Option<i64>, external_ref: &str, note: &str) -> Result<RemoteCredit, String> {
+    pub async fn add_credit(
+        &self,
+        key_id: &str,
+        fen: i64,
+        expires_at: Option<i64>,
+        external_ref: &str,
+        note: &str,
+    ) -> Result<RemoteCredit, String> {
         let body = json!({"amount": yuan(fen), "expires_at": expires_at.map(rfc3339), "external_ref": external_ref, "note": note_label(note)});
-        let v = self.manage(Method::Post, &format!("/keys/{key_id}/credits"), Some(body)).await?;
+        let v = self
+            .manage(Method::Post, &format!("/keys/{key_id}/credits"), Some(body))
+            .await?;
         serde_json::from_value(v["credit"].clone()).map_err(|_| UNREADABLE.into())
     }
 
     /// Every credit of a key, expired ones included.
     pub async fn credits(&self, key_id: &str) -> Result<Vec<RemoteCredit>, String> {
-        let v = self.manage(Method::Get, &format!("/keys/{key_id}/credits"), None).await?;
+        let v = self
+            .manage(Method::Get, &format!("/keys/{key_id}/credits"), None)
+            .await?;
         serde_json::from_value(v["items"].clone()).map_err(|_| UNREADABLE.into())
     }
 
     /// Changes the total amount or the expiry of a credit. `expires_at` of `Some(None)` removes the expiry.
-    pub async fn patch_credit(&self, key_id: &str, credit_id: &str, fen: Option<i64>, expires_at: Option<Option<i64>>) -> Result<RemoteCredit, String> {
+    pub async fn patch_credit(
+        &self,
+        key_id: &str,
+        credit_id: &str,
+        fen: Option<i64>,
+        expires_at: Option<Option<i64>>,
+    ) -> Result<RemoteCredit, String> {
         let mut body = serde_json::Map::new();
         if let Some(f) = fen {
             body.insert("amount".into(), json!(yuan(f)));
@@ -148,7 +189,13 @@ impl Gengwiki {
         if let Some(e) = expires_at {
             body.insert("expires_at".into(), json!(e.map(rfc3339)));
         }
-        let v = self.manage(Method::Patch, &format!("/keys/{key_id}/credits/{credit_id}"), Some(Value::Object(body))).await?;
+        let v = self
+            .manage(
+                Method::Patch,
+                &format!("/keys/{key_id}/credits/{credit_id}"),
+                Some(Value::Object(body)),
+            )
+            .await?;
         serde_json::from_value(v["credit"].clone()).map_err(|_| UNREADABLE.into())
     }
 
@@ -156,11 +203,20 @@ impl Gengwiki {
     pub async fn balance(&self, api_key: &str) -> Result<Balance, String> {
         let auth = format!("Bearer {api_key}");
         let headers = [("authorization", auth.as_str()), ("accept", "application/json")];
-        let resp = http::send(Method::Get, &format!("{}/balance", self.api_base()), &headers, None, TIMEOUT_MS).await?;
+        let resp = http::send(
+            Method::Get,
+            &format!("{}/balance", self.api_base()),
+            &headers,
+            None,
+            TIMEOUT_MS,
+        )
+        .await?;
         if !resp.ok() {
             return Err(upstream_message(resp.status, &resp.text()));
         }
-        resp.json().and_then(|v| serde_json::from_value(v).ok()).ok_or_else(|| UNREADABLE.into())
+        resp.json()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .ok_or_else(|| UNREADABLE.into())
     }
 }
 
@@ -197,14 +253,25 @@ pub fn yuan(fen: i64) -> String {
 /// Nano-yuan as yuan with up to four decimals, rounded down.
 pub fn yuan_nano(nano: i64) -> String {
     let tenth_li = nano / 100_000;
-    format!("{}{}.{:04}", if nano < 0 { "-" } else { "" }, (tenth_li / 10_000).abs(), (tenth_li % 10_000).abs())
+    format!(
+        "{}{}.{:04}",
+        if nano < 0 { "-" } else { "" },
+        (tenth_li / 10_000).abs(),
+        (tenth_li % 10_000).abs()
+    )
 }
 
 /// Yuan with at most two decimals as fen, None for anything else or a negative amount.
 pub fn parse_fen(s: &str) -> Option<i64> {
     let s = s.trim();
     let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
-    if whole.is_empty() || whole.len() > 9 || frac.len() > 2 || (s.contains('.') && frac.is_empty()) || !whole.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
+    if whole.is_empty()
+        || whole.len() > 9
+        || frac.len() > 2
+        || (s.contains('.') && frac.is_empty())
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || !frac.bytes().all(|b| b.is_ascii_digit())
+    {
         return None;
     }
     let frac = format!("{frac:0<2}");
@@ -225,7 +292,12 @@ pub fn rfc3339(ms: i64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 // ---------- accounts and credits ----------
@@ -253,10 +325,16 @@ pub struct CreditRow {
     pub error: Option<String>,
 }
 
-pub const CREDIT_COLS: &str = "id, user_id, amount_fen, expires_at, source, ref, note, created_by, created_at, remote_id, error";
+pub const CREDIT_COLS: &str =
+    "id, user_id, amount_fen, expires_at, source, ref, note, created_by, created_at, remote_id, error";
 
 pub async fn account(app: &App, user_id: &str) -> ApiResult<Option<Account>> {
-    app.db.first("SELECT user_id, remote_key_id, llm_key_id FROM gateway_accounts WHERE user_id = ?1", args![user_id]).await
+    app.db
+        .first(
+            "SELECT user_id, remote_key_id, llm_key_id FROM gateway_accounts WHERE user_id = ?1",
+            args![user_id],
+        )
+        .await
 }
 
 /// Saves `issued` as the user's gateway key: a new `llm_keys` row, or the existing one when it is still there.
@@ -264,9 +342,20 @@ async fn store_key(app: &App, user_id: &str, issued: &IssuedKey, gw: &Gengwiki) 
     let existing: Option<Account> = account(app, user_id).await?;
     let enc = app.encrypt(&issued.key)?;
     if let Some(a) = existing {
-        let n = app.db.run("UPDATE llm_keys SET api_key_enc = ?3 WHERE id = ?1 AND user_id = ?2", args![a.llm_key_id, user_id, enc]).await?;
+        let n = app
+            .db
+            .run(
+                "UPDATE llm_keys SET api_key_enc = ?3 WHERE id = ?1 AND user_id = ?2",
+                args![a.llm_key_id, user_id, enc],
+            )
+            .await?;
         if n == 1 {
-            app.db.run("UPDATE gateway_accounts SET remote_key_id = ?2 WHERE user_id = ?1", args![user_id, issued.id]).await?;
+            app.db
+                .run(
+                    "UPDATE gateway_accounts SET remote_key_id = ?2 WHERE user_id = ?1",
+                    args![user_id, issued.id],
+                )
+                .await?;
             return Ok(a.llm_key_id);
         }
     }
@@ -296,14 +385,23 @@ async fn ensure_account(app: &App, user_id: &str, email: &str, gw: &Gengwiki) ->
     }
     let issued = gw.issue_key(&key_name(email), &key_ref(user_id)).await?;
     let llm_key_id = store_key(app, user_id, &issued, gw).await.map_err(|e| e.message)?;
-    Ok(Account { user_id: user_id.into(), remote_key_id: issued.id, llm_key_id })
+    Ok(Account {
+        user_id: user_id.into(),
+        remote_key_id: issued.id,
+        llm_key_id,
+    })
 }
 
 /// Gives the user's key a new secret. A deleted model key is added again.
 pub async fn rotate_key(app: &App, user_id: &str) -> ApiResult<Option<String>> {
-    let Some(a) = account(app, user_id).await? else { return Ok(None) };
+    let Some(a) = account(app, user_id).await? else {
+        return Ok(None);
+    };
     let gw = app.gengwiki();
-    let issued = gw.rotate(&a.remote_key_id).await.map_err(|e| crate::error::ApiError::new(502, "upstream_error", format!("刷新失败：{e}")))?;
+    let issued = gw
+        .rotate(&a.remote_key_id)
+        .await
+        .map_err(|e| crate::error::ApiError::new(502, "upstream_error", format!("刷新失败：{e}")))?;
     let llm_key_id = store_key(app, user_id, &issued, &gw).await?;
     push_bots_using(app, user_id, &llm_key_id).await?;
     Ok(Some(llm_key_id))
@@ -315,10 +413,15 @@ async fn push_bots_using(app: &App, user_id: &str, llm_key_id: &str) -> ApiResul
         id: String,
         settings_json: String,
     }
-    let bots: Vec<B> = app.db.all("SELECT id, settings_json FROM bots WHERE user_id = ?1", args![user_id]).await?;
+    let bots: Vec<B> = app
+        .db
+        .all("SELECT id, settings_json FROM bots WHERE user_id = ?1", args![user_id])
+        .await?;
     for b in bots {
         if BotSettings::from_stored(&b.settings_json).llm.key_id.as_deref() == Some(llm_key_id) {
-            app.db.run("UPDATE bots SET needs_push = 1 WHERE id = ?1", args![b.id]).await?;
+            app.db
+                .run("UPDATE bots SET needs_push = 1 WHERE id = ?1", args![b.id])
+                .await?;
             if let Err(e) = app.push_bot(&b.id).await {
                 log_error(&format!("push bot {} after key change: {}", b.id, e.message));
             }
@@ -375,17 +478,28 @@ async fn send_credits(app: &App, pending: Vec<CreditRow>) -> ApiResult<usize> {
                 .and_then(|v| v["email"].as_str().map(str::to_string));
             let email = email.ok_or("user missing")?;
             let a = ensure_account(app, &c.user_id, &email, &gw).await?;
-            gw.add_credit(&a.remote_key_id, c.amount_fen, c.expires_at, &c.reference, &c.note).await
+            gw.add_credit(&a.remote_key_id, c.amount_fen, c.expires_at, &c.reference, &c.note)
+                .await
         }
         .await;
         match result {
             Ok(remote) => {
-                app.db.run("UPDATE gateway_credits SET remote_id = ?2, error = NULL WHERE id = ?1", args![c.id, remote.id]).await?;
+                app.db
+                    .run(
+                        "UPDATE gateway_credits SET remote_id = ?2, error = NULL WHERE id = ?1",
+                        args![c.id, remote.id],
+                    )
+                    .await?;
                 sent += 1;
             }
             Err(e) => {
                 log_error(&format!("gateway credit {}: {e}", c.reference));
-                app.db.run("UPDATE gateway_credits SET error = ?2 WHERE id = ?1", args![c.id, e.chars().take(300).collect::<String>()]).await?;
+                app.db
+                    .run(
+                        "UPDATE gateway_credits SET error = ?2 WHERE id = ?1",
+                        args![c.id, e.chars().take(300).collect::<String>()],
+                    )
+                    .await?;
             }
         }
     }
@@ -472,7 +586,8 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(c.remaining_nano, 4);
-        let b: Balance = serde_json::from_value(json!({"currency": "CNY", "available": "1", "budget": "1", "spent": "0"})).unwrap();
+        let b: Balance =
+            serde_json::from_value(json!({"currency": "CNY", "available": "1", "budget": "1", "spent": "0"})).unwrap();
         assert!(b.credits.is_empty());
     }
 }

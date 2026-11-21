@@ -31,7 +31,10 @@ fn github_down() -> ApiError {
 }
 
 async fn gh_get(app: &App, url: &str, api: bool) -> ApiResult<http::HttpResponse> {
-    let token = app.var("GITHUB_TOKEN").filter(|t| !t.is_empty()).map(|t| format!("Bearer {t}"));
+    let token = app
+        .var("GITHUB_TOKEN")
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("Bearer {t}"));
     let mut headers: Vec<(&str, &str)> = vec![("user-agent", "fish-console")];
     if api {
         headers.push(("accept", "application/vnd.github+json"));
@@ -54,7 +57,14 @@ struct Bases {
 /// GitHub endpoints. Dev mode may point them at a local fake through GITHUB_API_BASE, GITHUB_RAW_BASE
 /// and GITHUB_GIT_BASE.
 fn bases(app: &App) -> Bases {
-    let pick = |k: &str, d: &str| if app.dev { app.var(k).filter(|s| !s.is_empty()) } else { None }.unwrap_or_else(|| d.to_string());
+    let pick = |k: &str, d: &str| {
+        if app.dev {
+            app.var(k).filter(|s| !s.is_empty())
+        } else {
+            None
+        }
+        .unwrap_or_else(|| d.to_string())
+    };
     Bases {
         api: pick("GITHUB_API_BASE", github::API_BASE),
         raw: pick("GITHUB_RAW_BASE", github::RAW_BASE),
@@ -74,11 +84,17 @@ pub async fn latest_commit(app: &App, repo: &RepoRef) -> Option<String> {
         }
     }
     let reference = repo.branch.as_deref().unwrap_or("HEAD");
-    let resp = gh_get(app, &github::api_commit_url(&b.api, repo, reference), true).await.ok()?;
+    let resp = gh_get(app, &github::api_commit_url(&b.api, repo, reference), true)
+        .await
+        .ok()?;
     if resp.status != 200 {
         return None;
     }
-    resp.json()?.get("sha")?.as_str().filter(|s| github::is_commit(s)).map(|s| s.to_ascii_lowercase())
+    resp.json()?
+        .get("sha")?
+        .as_str()
+        .filter(|s| github::is_commit(s))
+        .map(|s| s.to_ascii_lowercase())
 }
 
 /// Fetches a raw file. Ok(None) means the file does not exist.
@@ -100,7 +116,9 @@ async fn missing_metadata(app: &App, repo: &RepoRef) -> ApiError {
         return unclear();
     };
     match api.status {
-        200 if api.json().and_then(|v| v.get("private").and_then(Value::as_bool)) == Some(true) => repo_invalid("仅支持公开仓库"),
+        200 if api.json().and_then(|v| v.get("private").and_then(Value::as_bool)) == Some(true) => {
+            repo_invalid("仅支持公开仓库")
+        }
         200 => not_plugin("仓库中没有 metadata.yaml，不是 AstrBot 插件"),
         404 | 451 => repo_invalid("仓库不存在或不是公开仓库"),
         _ => unclear(),
@@ -108,7 +126,8 @@ async fn missing_metadata(app: &App, repo: &RepoRef) -> ApiError {
 }
 
 pub async fn inspect(app: &App, repo_url: &str) -> ApiResult<Inspected> {
-    let repo = github::parse_repo_url(repo_url).ok_or_else(|| repo_invalid("仓库地址无效，请粘贴 https://github.com/作者/仓库 形式的链接"))?;
+    let repo = github::parse_repo_url(repo_url)
+        .ok_or_else(|| repo_invalid("仓库地址无效，请粘贴 https://github.com/作者/仓库 形式的链接"))?;
     let commit = latest_commit(app, &repo).await;
     inspect_at(app, &repo, commit).await
 }
@@ -116,7 +135,10 @@ pub async fn inspect(app: &App, repo_url: &str) -> ApiResult<Inspected> {
 /// Reads the plugin metadata at `commit`, or at the head of the branch when it is None.
 async fn inspect_at(app: &App, repo: &RepoRef, commit: Option<String>) -> ApiResult<Inspected> {
     let repo = repo.clone();
-    let branch = commit.clone().or_else(|| repo.branch.clone()).unwrap_or_else(|| "HEAD".to_string());
+    let branch = commit
+        .clone()
+        .or_else(|| repo.branch.clone())
+        .unwrap_or_else(|| "HEAD".to_string());
 
     let meta_text = match raw_file(app, &repo, &branch, "metadata.yaml").await? {
         Some(t) => t,
@@ -127,12 +149,19 @@ async fn inspect_at(app: &App, repo: &RepoRef, commit: Option<String>) -> ApiRes
     };
     let meta = github::parse_metadata(&meta_text, &repo)
         .ok_or_else(|| ApiError::new(400, "not_astrbot_plugin", "metadata.yaml 缺少插件名称或格式不正确"))?;
-    let schema = raw_file(app, &repo, &branch, "_conf_schema.json").await?.and_then(|t| github::parse_schema(&t));
+    let schema = raw_file(app, &repo, &branch, "_conf_schema.json")
+        .await?
+        .and_then(|t| github::parse_schema(&t));
     let repo_url = match &repo.branch {
         Some(b) => format!("{}/tree/{b}", repo.canonical_url()),
         None => repo.canonical_url(),
     };
-    Ok(Inspected { meta, repo_url, schema, commit })
+    Ok(Inspected {
+        meta,
+        repo_url,
+        schema,
+        commit,
+    })
 }
 
 #[derive(Deserialize)]
@@ -142,13 +171,18 @@ struct InstallReq {
 
 async fn plugin_by_id(app: &App, bot_id: &str, pid: &str) -> ApiResult<PluginRow> {
     app.db
-        .first(&format!("SELECT {PLUGIN_COLS} FROM plugins WHERE id = ?1 AND bot_id = ?2"), args![pid, bot_id])
+        .first(
+            &format!("SELECT {PLUGIN_COLS} FROM plugins WHERE id = ?1 AND bot_id = ?2"),
+            args![pid, bot_id],
+        )
         .await?
         .ok_or_else(|| ApiError::not_found("插件不存在"))
 }
 
 async fn touch_bot(app: &App, bot_id: &str) -> ApiResult<()> {
-    app.db.run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot_id, now_ms()]).await?;
+    app.db
+        .run("UPDATE bots SET updated_at = ?2 WHERE id = ?1", args![bot_id, now_ms()])
+        .await?;
     Ok(())
 }
 
@@ -159,14 +193,23 @@ pub async fn install(req: &mut Request, app: &App, bot_id: &str) -> ApiResult<Re
     let body: InstallReq = json_body(req).await?;
     let used = app
         .db
-        .count("SELECT COUNT(*) AS n FROM plugins p JOIN bots b ON b.id = p.bot_id WHERE b.user_id = ?1", args![user.id])
+        .count(
+            "SELECT COUNT(*) AS n FROM plugins p JOIN bots b ON b.id = p.bot_id WHERE b.user_id = ?1",
+            args![user.id],
+        )
         .await?;
     if user.quota_plugins >= 0 && used >= user.quota_plugins {
         return Err(ApiError::quota(format!("最多可以安装 {} 个插件", user.quota_plugins)));
     }
     let item = super::market::find(req, app, &body.plugin_id).await?;
     let ins = inspect(app, &item.repo_url).await?;
-    let exists = app.db.count("SELECT COUNT(*) AS n FROM plugins WHERE bot_id = ?1 AND name = ?2", args![bot.id, ins.meta.name]).await?;
+    let exists = app
+        .db
+        .count(
+            "SELECT COUNT(*) AS n FROM plugins WHERE bot_id = ?1 AND name = ?2",
+            args![bot.id, ins.meta.name],
+        )
+        .await?;
     if exists > 0 {
         return Err(ApiError::conflict("plugin_exists", "这只小鱼已经安装了同名插件"));
     }
@@ -212,7 +255,10 @@ pub async fn patch(req: &mut Request, app: &App, bot_id: &str, pid: &str) -> Api
     let body: PatchReq = json_body(req).await?;
     let config = match body.config {
         Some(c) => {
-            if body.config_revision.is_some_and(|revision| revision != p.config_revision()) {
+            if body
+                .config_revision
+                .is_some_and(|revision| revision != p.config_revision())
+            {
                 return Err(config_changed());
             }
             schema::validate(p.schema().as_ref(), &c).map_err(|m| ApiError::new(400, "config_invalid", m))?;
@@ -282,8 +328,14 @@ const UPDATE_INTERVAL_MS: i64 = 3600 * 1000;
 pub async fn check_updates(app: &App, now: i64) -> ApiResult<usize> {
     app.db
         .batch(vec![
-            app.db.stmt("INSERT OR IGNORE INTO plugin_repos (repo_url) SELECT DISTINCT repo_url FROM plugins", args![])?,
-            app.db.stmt("DELETE FROM plugin_repos WHERE repo_url NOT IN (SELECT repo_url FROM plugins)", args![])?,
+            app.db.stmt(
+                "INSERT OR IGNORE INTO plugin_repos (repo_url) SELECT DISTINCT repo_url FROM plugins",
+                args![],
+            )?,
+            app.db.stmt(
+                "DELETE FROM plugin_repos WHERE repo_url NOT IN (SELECT repo_url FROM plugins)",
+                args![],
+            )?,
         ])
         .await?;
     #[derive(Deserialize)]
@@ -300,12 +352,24 @@ pub async fn check_updates(app: &App, now: i64) -> ApiResult<usize> {
     let mut updated = 0;
     let mut bots: Vec<String> = Vec::new();
     for d in due {
-        app.db.run("UPDATE plugin_repos SET checked_at = ?2 WHERE repo_url = ?1", args![d.repo_url, now]).await?;
-        let Some(repo) = github::parse_repo_url(&d.repo_url) else { continue };
-        let Some(commit) = latest_commit(app, &repo).await else { continue };
+        app.db
+            .run(
+                "UPDATE plugin_repos SET checked_at = ?2 WHERE repo_url = ?1",
+                args![d.repo_url, now],
+            )
+            .await?;
+        let Some(repo) = github::parse_repo_url(&d.repo_url) else {
+            continue;
+        };
+        let Some(commit) = latest_commit(app, &repo).await else {
+            continue;
+        };
         let stale: Vec<PluginRow> = app
             .db
-            .all(&format!("SELECT {PLUGIN_COLS} FROM plugins WHERE repo_url = ?1 AND commit_sha != ?2"), args![d.repo_url, commit])
+            .all(
+                &format!("SELECT {PLUGIN_COLS} FROM plugins WHERE repo_url = ?1 AND commit_sha != ?2"),
+                args![d.repo_url, commit],
+            )
             .await?;
         if !stale.is_empty() {
             let ins = match inspect_at(app, &repo, Some(commit.clone())).await {
@@ -317,7 +381,10 @@ pub async fn check_updates(app: &App, now: i64) -> ApiResult<usize> {
             };
             for p in &stale {
                 if ins.meta.name != p.name {
-                    crate::util::log_error(&format!("plugin update {} at {commit}: name changed to {}", d.repo_url, ins.meta.name));
+                    crate::util::log_error(&format!(
+                        "plugin update {} at {commit}: name changed to {}",
+                        d.repo_url, ins.meta.name
+                    ));
                     continue;
                 }
                 if apply_update(app, p, &ins, now).await? {
@@ -328,7 +395,12 @@ pub async fn check_updates(app: &App, now: i64) -> ApiResult<usize> {
                 }
             }
         }
-        app.db.run("UPDATE plugin_repos SET commit_sha = ?2 WHERE repo_url = ?1", args![d.repo_url, commit]).await?;
+        app.db
+            .run(
+                "UPDATE plugin_repos SET commit_sha = ?2 WHERE repo_url = ?1",
+                args![d.repo_url, commit],
+            )
+            .await?;
     }
     for bot_id in bots {
         touch_bot(app, &bot_id).await?;
@@ -343,7 +415,10 @@ pub async fn reload(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiRes
     App::require_service(&user)?;
     let plugin = plugin_by_id(app, &bot.id, pid).await?;
     if bot.desired_running == 0 || plugin.enabled == 0 {
-        return Err(ApiError::conflict("plugin_reload_unavailable", "启动小鱼并启用插件后才能重载"));
+        return Err(ApiError::conflict(
+            "plugin_reload_unavailable",
+            "启动小鱼并启用插件后才能重载",
+        ));
     }
     let client = app.node_client(&bot.node_id).await?;
     let path = format!("/v1/bots/{}/plugins/{}/reload", bot.id, plugin.id);
@@ -358,7 +433,10 @@ pub async fn reload(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiRes
 pub async fn delete(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;
     let bot = app.owned_bot(&user, bot_id).await?;
-    let n = app.db.run("DELETE FROM plugins WHERE id = ?1 AND bot_id = ?2", args![pid, bot.id]).await?;
+    let n = app
+        .db
+        .run("DELETE FROM plugins WHERE id = ?1 AND bot_id = ?2", args![pid, bot.id])
+        .await?;
     if n == 0 {
         return Err(ApiError::not_found("插件不存在"));
     }

@@ -64,12 +64,10 @@ export default function Persona({
   const key = keyList.find((k) => k.id === s.llm.key_id)
   const provider = key && providerForEndpoint(key.base_url)
   const presetProvider = provider?.models.includes(s.llm.model || key?.model || '') ? provider.id : undefined
-  const fixedTemperature = provider?.id === 'anthropic' || presetProvider === 'moonshot'
-    || presetProvider === 'minimax' || presetProvider === 'longcat'
-  const maxTemperature = presetProvider === 'zhipu' || presetProvider === 'grok' ? 1
-    : presetProvider === 'mimo' ? 1.5
-    : presetProvider === 'qwen' ? 1.9
-    : 2
+  const fixedTemperature =
+    provider?.id === 'anthropic' || presetProvider === 'moonshot' || presetProvider === 'minimax' || presetProvider === 'longcat'
+  const maxTemperature =
+    presetProvider === 'zhipu' || presetProvider === 'grok' ? 1 : presetProvider === 'mimo' ? 1.5 : presetProvider === 'qwen' ? 1.9 : 2
   const missingKey = !!s.llm.key_id && llmKeys.isSuccess && !key
   const tokensErr = intOk(s.llm.max_tokens, 1, 32768) ? '' : '请输入 1 到 32768 之间的整数'
   const rateErr = intOk(s.behavior.rate_limit_per_minute, 1, 600) ? '' : '请输入 1 到 600 之间的整数'
@@ -115,10 +113,18 @@ export default function Persona({
           hint="如果安装了人设插件，建议清空此处。"
           error={promptErr || undefined}
           aside={
-            <span className="text-[13px] text-ink-3 tabular-nums">{promptLen} / {PROMPT_LIMIT}</span>
+            <span className="text-[13px] text-ink-3 tabular-nums">
+              {promptLen} / {PROMPT_LIMIT}
+            </span>
           }
         >
-          <Textarea id={ids.prompt} rows={10} value={s.persona.system_prompt} onChange={(e) => set('persona', { system_prompt: e.target.value })} aria-invalid={!!promptErr || undefined} />
+          <Textarea
+            id={ids.prompt}
+            rows={10}
+            value={s.persona.system_prompt}
+            onChange={(e) => set('persona', { system_prompt: e.target.value })}
+            aria-invalid={!!promptErr || undefined}
+          />
         </Field>
         <Field label="开场白" htmlFor={ids.greeting} error={greetingErr || undefined}>
           <Input
@@ -135,11 +141,13 @@ export default function Persona({
           label="模型 Key"
           htmlFor={ids.key}
           error={missingKey ? '之前选的 Key 已经删掉了，请重新选一个' : undefined}
-          aside={keyList.length > 0 && (
-            <Link to="/app/keys" className="text-[13px] font-semibold text-sky hover:underline">
-              管理 Key
-            </Link>
-          )}
+          aside={
+            keyList.length > 0 && (
+              <Link to="/app/keys" className="text-[13px] font-semibold text-sky hover:underline">
+                管理 Key
+              </Link>
+            )
+          }
         >
           {llmKeys.isLoading ? (
             <Skeleton className="h-11" />
@@ -173,19 +181,30 @@ export default function Persona({
             </Select>
           )}
         </Field>
-        <ModelField key={key?.id} id={ids.model} value={s.llm.model} onChange={(model) => set('llm', { model })} models={provider?.models} fallback={key?.model} />
+        <ModelField
+          key={key?.id}
+          id={ids.model}
+          value={s.llm.model}
+          onChange={(model) => set('llm', { model })}
+          models={provider?.models}
+          fallback={key?.model}
+        />
         <div className="grid gap-5">
-          {fixedTemperature ? <p className="text-sm text-ink-3">此模型使用固定温度。</p> : <RangeField
-            id={ids.temp}
-            label="温度（Temperature）"
-            hint="越低越稳定，越高越多样。"
-            value={Math.min(s.llm.temperature, maxTemperature)}
-            min={0}
-            max={maxTemperature}
-            step={0.1}
-            format={(v) => v.toFixed(1)}
-            onChange={(temperature) => set('llm', { temperature })}
-          />}
+          {fixedTemperature ? (
+            <p className="text-sm text-ink-3">此模型使用固定温度。</p>
+          ) : (
+            <RangeField
+              id={ids.temp}
+              label="温度（Temperature）"
+              hint="越低越稳定，越高越多样。"
+              value={Math.min(s.llm.temperature, maxTemperature)}
+              min={0}
+              max={maxTemperature}
+              step={0.1}
+              format={(v) => v.toFixed(1)}
+              onChange={(temperature) => set('llm', { temperature })}
+            />
+          )}
           <RangeField
             id={ids.turns}
             label="记住几轮对话"
@@ -218,38 +237,64 @@ export default function Persona({
           <ChevronDown className="size-4 text-ink-3 group-open:rotate-180" aria-hidden />
         </summary>
         <div className="grid gap-5 px-5 pb-5 sm:px-6">
-        <Field label="唤醒前缀" htmlFor={ids.prefixes} hint="例如 /help 中的 /。按回车或逗号添加。">
-          <ChipsInput id={ids.prefixes} label="唤醒前缀" value={s.behavior.wake_prefixes} onChange={(wake_prefixes) => set('behavior', { wake_prefixes })} placeholder="/" />
-        </Field>
-        <div className="grid gap-4 rounded-xl border border-paper-3 bg-paper/50 p-4">
-          <SwitchRow label="被 @ 时回复" checked={s.behavior.reply_when_at} onChange={(reply_when_at) => set('behavior', { reply_when_at })} />
-          <SwitchRow label="私聊时回复" checked={s.behavior.reply_in_private} onChange={(reply_in_private) => set('behavior', { reply_in_private })} />
-          <SwitchRow
-            label="群里不 @ 也回复"
-            hint="开启后可能增加回复次数和 token 用量。"
-            checked={s.behavior.reply_in_group_without_at}
-            onChange={(reply_in_group_without_at) => set('behavior', { reply_in_group_without_at })}
-          />
-        </div>
-        <Field label="管理员" htmlFor={ids.admins} hint="可用管理指令。格式为「平台:账号」。">
-          <ChipsInput id={ids.admins} label="管理员" value={s.behavior.admins} onChange={(admins) => set('behavior', { admins })} placeholder="qq:12345" />
-        </Field>
-        <Field label="黑名单" htmlFor={ids.block} hint="格式为「平台:账号」。">
-          <ChipsInput id={ids.block} label="黑名单" value={s.behavior.blocklist} onChange={(blocklist) => set('behavior', { blocklist })} placeholder="qq:67890" />
-        </Field>
-        <Field label="每分钟回复上限" htmlFor={ids.rate} error={rateErr || undefined}>
-          <Input
-            id={ids.rate}
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={600}
-            value={Number.isFinite(s.behavior.rate_limit_per_minute) ? s.behavior.rate_limit_per_minute : ''}
-            aria-invalid={!!rateErr || undefined}
-            onChange={(e) => set('behavior', { rate_limit_per_minute: e.target.value === '' ? NaN : Number(e.target.value) })}
-            className="tabular-nums sm:max-w-48"
-          />
-        </Field>
+          <Field label="唤醒前缀" htmlFor={ids.prefixes} hint="例如 /help 中的 /。按回车或逗号添加。">
+            <ChipsInput
+              id={ids.prefixes}
+              label="唤醒前缀"
+              value={s.behavior.wake_prefixes}
+              onChange={(wake_prefixes) => set('behavior', { wake_prefixes })}
+              placeholder="/"
+            />
+          </Field>
+          <div className="grid gap-4 rounded-xl border border-paper-3 bg-paper/50 p-4">
+            <SwitchRow
+              label="被 @ 时回复"
+              checked={s.behavior.reply_when_at}
+              onChange={(reply_when_at) => set('behavior', { reply_when_at })}
+            />
+            <SwitchRow
+              label="私聊时回复"
+              checked={s.behavior.reply_in_private}
+              onChange={(reply_in_private) => set('behavior', { reply_in_private })}
+            />
+            <SwitchRow
+              label="群里不 @ 也回复"
+              hint="开启后可能增加回复次数和 token 用量。"
+              checked={s.behavior.reply_in_group_without_at}
+              onChange={(reply_in_group_without_at) => set('behavior', { reply_in_group_without_at })}
+            />
+          </div>
+          <Field label="管理员" htmlFor={ids.admins} hint="可用管理指令。格式为「平台:账号」。">
+            <ChipsInput
+              id={ids.admins}
+              label="管理员"
+              value={s.behavior.admins}
+              onChange={(admins) => set('behavior', { admins })}
+              placeholder="qq:12345"
+            />
+          </Field>
+          <Field label="黑名单" htmlFor={ids.block} hint="格式为「平台:账号」。">
+            <ChipsInput
+              id={ids.block}
+              label="黑名单"
+              value={s.behavior.blocklist}
+              onChange={(blocklist) => set('behavior', { blocklist })}
+              placeholder="qq:67890"
+            />
+          </Field>
+          <Field label="每分钟回复上限" htmlFor={ids.rate} error={rateErr || undefined}>
+            <Input
+              id={ids.rate}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={600}
+              value={Number.isFinite(s.behavior.rate_limit_per_minute) ? s.behavior.rate_limit_per_minute : ''}
+              aria-invalid={!!rateErr || undefined}
+              onChange={(e) => set('behavior', { rate_limit_per_minute: e.target.value === '' ? NaN : Number(e.target.value) })}
+              className="tabular-nums sm:max-w-48"
+            />
+          </Field>
         </div>
       </details>
 

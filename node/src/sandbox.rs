@@ -223,7 +223,9 @@ impl Cgroups {
             return;
         }
         let quota = tenant_limit_bytes(memory_mb);
-        let bytes = self.memory_max(user_id).map_or(quota, |cur| cur.clamp(quota, quota * BURST_FACTOR));
+        let bytes = self
+            .memory_max(user_id)
+            .map_or(quota, |cur| cur.clamp(quota, quota * BURST_FACTOR));
         if let Err(e) = write(&dir.join("memory.max"), &bytes.to_string()) {
             tracing::warn!("cgroup memory.max: {e}");
         }
@@ -324,7 +326,9 @@ mod tests {
     #[test]
     fn tenant_limit_keeps_a_burst_within_the_quota_range() {
         let root = tempfile::tempdir().unwrap();
-        let groups = Cgroups { base: root.path().to_path_buf() };
+        let groups = Cgroups {
+            base: root.path().to_path_buf(),
+        };
         let mib = 1024 * 1024;
         assert_eq!(groups.memory_max("u1"), None);
         groups.set_limit("u1", 128);
@@ -345,11 +349,17 @@ mod tests {
     #[test]
     fn working_set_excludes_inactive_file_cache() {
         let root = tempfile::tempdir().unwrap();
-        let groups = Cgroups { base: root.path().to_path_buf() };
+        let groups = Cgroups {
+            base: root.path().to_path_buf(),
+        };
         let dir = groups.tenant("u1");
         std::fs::create_dir_all(&dir).unwrap();
         write(&dir.join("memory.current"), "1000\n").unwrap();
-        write(&dir.join("memory.stat"), "anon 600\nactive_file 100\ninactive_file 300\n").unwrap();
+        write(
+            &dir.join("memory.stat"),
+            "anon 600\nactive_file 100\ninactive_file 300\n",
+        )
+        .unwrap();
         assert_eq!(groups.tenant_working_set("u1"), Some(700));
         write(&root.path().join("memory.max"), "5000\n").unwrap();
         write(&root.path().join("memory.current"), "2000\n").unwrap();

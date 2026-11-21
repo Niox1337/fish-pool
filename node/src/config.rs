@@ -163,7 +163,10 @@ mod tests {
         assert_eq!(idle_sleep(None), Some(Duration::from_secs(DEFAULT_PLUGIN_IDLE_SECS)));
         assert_eq!(idle_sleep(Some("90")), Some(Duration::from_secs(90)));
         assert_eq!(idle_sleep(Some("0")), None);
-        assert_eq!(idle_sleep(Some("x")), Some(Duration::from_secs(DEFAULT_PLUGIN_IDLE_SECS)));
+        assert_eq!(
+            idle_sleep(Some("x")),
+            Some(Duration::from_secs(DEFAULT_PLUGIN_IDLE_SECS))
+        );
     }
 
     #[test]

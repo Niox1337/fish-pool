@@ -14,13 +14,28 @@ export function QuotaInputs({ form, onChange }: { form: QuotaForm; onChange: (ke
         const error = quotaFieldError(form[f.key], f)
         return (
           <Field key={f.key} label={`${f.label}（${f.unit}）`} htmlFor={fieldId} error={error}>
-            <Input id={fieldId} type="number" inputMode="numeric" min={f.min} max={f.max} disabled={form[f.key] === null}
-              value={form[f.key] ?? ''} placeholder={form[f.key] === null ? '不限' : undefined}
-              onChange={(e) => onChange(f.key, e.target.value)} aria-invalid={!!error} className="tabular-nums" />
+            <Input
+              id={fieldId}
+              type="number"
+              inputMode="numeric"
+              min={f.min}
+              max={f.max}
+              disabled={form[f.key] === null}
+              value={form[f.key] ?? ''}
+              placeholder={form[f.key] === null ? '不限' : undefined}
+              onChange={(e) => onChange(f.key, e.target.value)}
+              aria-invalid={!!error}
+              className="tabular-nums"
+            />
             {f.min === 0 && (
               <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-ink-2">
-                <input type="checkbox" className="accent-cobalt" aria-label={`${f.label}数量不限`} checked={form[f.key] === null}
-                  onChange={(e) => onChange(f.key, e.target.checked ? null : '1')} />
+                <input
+                  type="checkbox"
+                  className="accent-cobalt"
+                  aria-label={`${f.label}数量不限`}
+                  checked={form[f.key] === null}
+                  onChange={(e) => onChange(f.key, e.target.checked ? null : '1')}
+                />
                 不限
               </label>
             )}
@@ -62,9 +77,15 @@ const levelTone: Record<LogLine['level'], string> = {
 
 export function LogList({ items }: { items: LogLine[] }) {
   return (
-    <ol className="max-h-[60dvh] overflow-y-auto rounded-2xl border border-paper-3 bg-cream p-3 font-mono text-[12px] leading-relaxed sm:p-4 sm:text-[13px]" aria-live="polite">
+    <ol
+      className="max-h-[60dvh] overflow-y-auto rounded-2xl border border-paper-3 bg-cream p-3 font-mono text-[12px] leading-relaxed sm:p-4 sm:text-[13px]"
+      aria-live="polite"
+    >
       {items.map((l, i) => (
-        <li key={`${l.ts}-${i}`} className={cn('grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 py-0.5', l.level === 'error' && 'rounded bg-bad-soft/60')}>
+        <li
+          key={`${l.ts}-${i}`}
+          className={cn('grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 py-0.5', l.level === 'error' && 'rounded bg-bad-soft/60')}
+        >
           <span className="text-ink-3 tabular-nums">{fmtTime(l.ts)}</span>
           <span className="break-words text-ink">
             <span className={cn('mr-2 font-semibold uppercase', levelTone[l.level])}>{l.level}</span>

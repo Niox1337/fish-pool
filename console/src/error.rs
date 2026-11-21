@@ -13,7 +13,11 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
     pub fn new(status: u16, code: &'static str, message: impl Into<String>) -> Self {
-        Self { status, code, message: message.into() }
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
     }
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self::new(400, "invalid_input", message)

@@ -67,7 +67,9 @@
     border-radius: 999px;
     background: rgb(255 255 255 / 0.1);
     color: #fff;
-    transition: background-color 0.2s, border-color 0.2s;
+    transition:
+      background-color 0.2s,
+      border-color 0.2s;
   }
   .lp-frame .lp-qq:hover {
     background: rgb(255 255 255 / 0.2);
@@ -217,9 +219,16 @@
     gap: 16px;
     border-radius: 22px;
   }
-  .lp-frame .lp-step-1 { grid-row: 8; }
-  .lp-frame .lp-step-2 { grid-row: 9; }
-  .lp-frame .lp-step-3 { grid-row: 10; margin-bottom: 44px; }
+  .lp-frame .lp-step-1 {
+    grid-row: 8;
+  }
+  .lp-frame .lp-step-2 {
+    grid-row: 9;
+  }
+  .lp-frame .lp-step-3 {
+    grid-row: 10;
+    margin-bottom: 44px;
+  }
   .lp-frame .lp-step-badge {
     left: -6px;
     top: -12px;

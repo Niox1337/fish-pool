@@ -15,7 +15,8 @@ import { PluginSettings } from './PluginSettings'
 import { PluginMarket } from './PluginMarket'
 import { schemaFields } from './schema'
 
-const menuItem = 'flex min-h-10 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-sm text-ink outline-none data-highlighted:bg-paper-2 data-disabled:cursor-not-allowed data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0'
+const menuItem =
+  'flex min-h-10 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-sm text-ink outline-none data-highlighted:bg-paper-2 data-disabled:cursor-not-allowed data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0'
 
 function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: number | null }) {
   const [confirm, setConfirm] = useState(false)
@@ -63,32 +64,58 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
             checked={enabled}
             disabled={busy || installing}
             label={`启用 ${name}`}
-            onCheckedChange={(value) => toggle.mutate(value, {
-              onSuccess: () => toast.success(value ? `${name} 已启用` : `${name} 已停用`),
-              onError: (error) => showError(error),
-            })}
+            onCheckedChange={(value) =>
+              toggle.mutate(value, {
+                onSuccess: () => toast.success(value ? `${name} 已启用` : `${name} 已停用`),
+                onError: (error) => showError(error),
+              })
+            }
           />
           {hasConfig && (
-            <Button ref={configButton} size="sm" variant="secondary" className="ml-1 h-10" onClick={() => setConfig(true)} aria-label={`设置 ${name}`}>
+            <Button
+              ref={configButton}
+              size="sm"
+              variant="secondary"
+              className="ml-1 h-10"
+              onClick={() => setConfig(true)}
+              aria-label={`设置 ${name}`}
+            >
               <Settings2 aria-hidden />
               设置
             </Button>
           )}
           <DropdownMenu.Root modal={false}>
             <DropdownMenu.Trigger asChild>
-              <Button ref={actionsButton} variant="ghost" className="size-10 px-0" aria-busy={busy || undefined} aria-label={`${name} 的更多操作`}>
+              <Button
+                ref={actionsButton}
+                variant="ghost"
+                className="size-10 px-0"
+                aria-busy={busy || undefined}
+                aria-label={`${name} 的更多操作`}
+              >
                 <Ellipsis aria-hidden />
               </Button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.Content align="end" sideOffset={6} collisionPadding={12} className="z-40 w-52 rounded-xl bg-cream p-1.5 shadow-[var(--shadow-soft)]">
+              <DropdownMenu.Content
+                align="end"
+                sideOffset={6}
+                collisionPadding={12}
+                className="z-40 w-52 rounded-xl bg-cream p-1.5 shadow-[var(--shadow-soft)]"
+              >
                 <DropdownMenu.Item className={menuItem} disabled={busy || !canReload} onSelect={reloadPlugin}>
                   <RotateCw aria-hidden /> 重载
                 </DropdownMenu.Item>
-                <DropdownMenu.Item className={menuItem} disabled={busy || installing} onSelect={() => upgrade.mutate(undefined, {
-                  onSuccess: () => toast.success(`${name} 正在更新`),
-                  onError: (error) => showError(error),
-                })}>
+                <DropdownMenu.Item
+                  className={menuItem}
+                  disabled={busy || installing}
+                  onSelect={() =>
+                    upgrade.mutate(undefined, {
+                      onSuccess: () => toast.success(`${name} 正在更新`),
+                      onError: (error) => showError(error),
+                    })
+                  }
+                >
                   <ArrowUpCircle aria-hidden /> 更新
                 </DropdownMenu.Item>
                 <DropdownMenu.Label className="px-2.5 py-1 text-xs leading-relaxed wrap-anywhere text-ink-3">
@@ -111,10 +138,16 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
           <p role="status" className="min-w-0 flex-1 basis-60 text-[13px] leading-relaxed wrap-anywhere text-bad">
             {plugin.status_detail || (plugin.status === 'over_quota' ? '插件超出内存配额。' : '插件出错，请查看日志。')}
           </p>
-          {canReload && <Button size="sm" loading={reload.isPending} disabled={busy} onClick={reloadPlugin}>重载</Button>}
+          {canReload && (
+            <Button size="sm" loading={reload.isPending} disabled={busy} onClick={reloadPlugin}>
+              重载
+            </Button>
+          )}
         </div>
       )}
-      {config && <PluginSettings bot={bot} plugin={plugin} onClose={() => setConfig(false)} returnFocus={() => configButton.current?.focus()} />}
+      {config && (
+        <PluginSettings bot={bot} plugin={plugin} onClose={() => setConfig(false)} returnFocus={() => configButton.current?.focus()} />
+      )}
       <ConfirmDialog
         open={confirm}
         onOpenChange={setConfirm}
@@ -148,9 +181,11 @@ export default function Plugins({ bot }: { bot: Bot }) {
   const full = quota != null && used >= quota
   const empty = bot.plugins.length === 0
   const query = search.trim().toLowerCase()
-  const visible = query ? bot.plugins.filter((plugin) =>
-    [plugin.display_name, plugin.name, plugin.description, plugin.author].some((part) => part.toLowerCase().includes(query)),
-  ) : bot.plugins
+  const visible = query
+    ? bot.plugins.filter((plugin) =>
+        [plugin.display_name, plugin.name, plugin.description, plugin.author].some((part) => part.toLowerCase().includes(query)),
+      )
+    : bot.plugins
   const mem = (pid: string) => {
     if (!usage.data) return null
     return usage.data.sources.find((s) => s.bot_id === bot.id && s.plugin_id === pid)?.memory_bytes ?? 0
@@ -164,10 +199,16 @@ export default function Plugins({ bot }: { bot: Bot }) {
     <Tabs.Root value={tab} onValueChange={setTab} className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Tabs.List aria-label="插件视图" className="flex min-w-0 flex-wrap gap-1">
-          <Tabs.Trigger value="installed" className="min-h-10 rounded-lg px-3 text-sm font-semibold text-ink-2 hover:bg-paper-2 data-[state=active]:bg-cream data-[state=active]:text-sky data-[state=active]:ring-1 data-[state=active]:ring-paper-3">
+          <Tabs.Trigger
+            value="installed"
+            className="min-h-10 rounded-lg px-3 text-sm font-semibold text-ink-2 hover:bg-paper-2 data-[state=active]:bg-cream data-[state=active]:text-sky data-[state=active]:ring-1 data-[state=active]:ring-paper-3"
+          >
             已安装 <span className="ml-1 tabular-nums">{bot.plugins.length}</span>
           </Tabs.Trigger>
-          <Tabs.Trigger value="market" className="min-h-10 rounded-lg px-3 text-sm font-semibold text-ink-2 hover:bg-paper-2 data-[state=active]:bg-cream data-[state=active]:text-sky data-[state=active]:ring-1 data-[state=active]:ring-paper-3">
+          <Tabs.Trigger
+            value="market"
+            className="min-h-10 rounded-lg px-3 text-sm font-semibold text-ink-2 hover:bg-paper-2 data-[state=active]:bg-cream data-[state=active]:text-sky data-[state=active]:ring-1 data-[state=active]:ring-paper-3"
+          >
             插件市场
           </Tabs.Trigger>
         </Tabs.List>
@@ -177,7 +218,14 @@ export default function Plugins({ bot }: { bot: Bot }) {
           {!empty && (
             <div className="relative min-w-0 flex-1 basis-48">
               <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-ink-3" aria-hidden />
-              <Input type="search" aria-label="搜索已安装插件" placeholder="搜索已安装插件" value={search} onChange={(event) => setSearch(event.target.value)} className="h-10 pl-10" />
+              <Input
+                type="search"
+                aria-label="搜索已安装插件"
+                placeholder="搜索已安装插件"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="h-10 pl-10"
+              />
             </div>
           )}
           {quota != null && (
@@ -195,7 +243,9 @@ export default function Plugins({ bot }: { bot: Bot }) {
             ))}
           </ul>
         ) : (
-          <p role="status" className="border-t border-paper-3 py-4 text-sm text-ink-2">{query && !empty ? '没有匹配的插件。' : '暂无插件。'}</p>
+          <p role="status" className="border-t border-paper-3 py-4 text-sm text-ink-2">
+            {query && !empty ? '没有匹配的插件。' : '暂无插件。'}
+          </p>
         )}
       </Tabs.Content>
       <Tabs.Content value="market">

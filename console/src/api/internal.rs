@@ -1,7 +1,10 @@
 //! Node callbacks and scheduled maintenance.
 
 use super::{read_body, Reply};
-use crate::app::{keep_expiry_detail, ok_json, valid_bot_status, valid_platform_status, valid_plugin_status, App, SERVICE_EXPIRED_DETAIL};
+use crate::app::{
+    keep_expiry_detail, ok_json, valid_bot_status, valid_platform_status, valid_plugin_status, App,
+    SERVICE_EXPIRED_DETAIL,
+};
 use crate::args;
 use crate::crypto::{verify_request, SigError};
 use crate::error::{ApiError, ApiResult};
@@ -36,7 +39,11 @@ pub async fn node_auth(req: &Request, app: &App, method: &str, body: &[u8]) -> A
     let (ts, sig) = (header("x-fish-ts"), header("x-fish-sig"));
     let path = signed_path(req.url()?.as_ref()).ok_or_else(bad_sig)?;
     app.ensure_default_node().await?;
-    let known = app.db.count("SELECT COUNT(*) AS n FROM nodes WHERE id = ?1", args![node_id]).await? > 0;
+    let known = app
+        .db
+        .count("SELECT COUNT(*) AS n FROM nodes WHERE id = ?1", args![node_id])
+        .await?
+        > 0;
     let secret = app.node_secret(&node_id).filter(|_| known).ok_or_else(bad_sig)?;
     match verify_request(&secret, ts.as_deref(), sig.as_deref(), now_ms(), method, &path, body) {
         Ok(()) => Ok(node_id),
@@ -49,7 +56,8 @@ pub async fn node_events(req: &mut Request, app: &App) -> ApiResult<Reply> {
     let bad_sig = || ApiError::new(401, "bad_signature", "签名校验失败");
     let body = read_body(req).await?;
     let node_id = node_auth(req, app, "POST", &body).await?;
-    let payload: Events = serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("事件格式错误：{e}")))?;
+    let payload: Events =
+        serde_json::from_slice(&body).map_err(|e| ApiError::bad_request(format!("事件格式错误：{e}")))?;
     if payload.node_id != node_id {
         return Err(bad_sig());
     }
@@ -90,10 +98,13 @@ pub async fn run_maintenance(app: &App) -> ApiResult<()> {
     app.db
         .batch(vec![
             app.db.stmt("DELETE FROM captchas WHERE expires_at < ?1", args![now])?,
-            app.db.stmt("DELETE FROM email_codes WHERE expires_at < ?1", args![now])?,
+            app.db
+                .stmt("DELETE FROM email_codes WHERE expires_at < ?1", args![now])?,
             app.db.stmt("DELETE FROM sessions WHERE expires_at < ?1", args![now])?,
-            app.db.stmt("DELETE FROM rate_events WHERE created_at < ?1", args![now - day])?,
-            app.db.stmt("DELETE FROM qr_tasks WHERE expires_at < ?1", args![now - day])?,
+            app.db
+                .stmt("DELETE FROM rate_events WHERE created_at < ?1", args![now - day])?,
+            app.db
+                .stmt("DELETE FROM qr_tasks WHERE expires_at < ?1", args![now - day])?,
         ])
         .await?;
 
@@ -107,7 +118,10 @@ pub async fn run_maintenance(app: &App) -> ApiResult<()> {
         bot_id: String,
         node_id: String,
     }
-    let tombs: Vec<Tomb> = app.db.all("SELECT bot_id, node_id FROM node_tombstones LIMIT 50", &[]).await?;
+    let tombs: Vec<Tomb> = app
+        .db
+        .all("SELECT bot_id, node_id FROM node_tombstones LIMIT 50", &[])
+        .await?;
     for t in tombs {
         if let Err(e) = app.delete_on_node(&t.bot_id, &t.node_id).await {
             log_error(&format!("tombstone {}: {e}", t.bot_id));
@@ -138,7 +152,8 @@ pub async fn run_maintenance(app: &App) -> ApiResult<()> {
 }
 
 /// Users without an active service period at `?2`.
-const EXPIRED_USERS: &str = "SELECT id FROM users WHERE role != 'admin' AND (service_until IS NULL OR service_until <= ?2)";
+const EXPIRED_USERS: &str =
+    "SELECT id FROM users WHERE role != 'admin' AND (service_until IS NULL OR service_until <= ?2)";
 
 /// Stops the running bots of users whose service period ended, optionally of one user only.
 /// Data is kept.

@@ -38,10 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
     const chunk = isChunkError(error)
     const screen = this.props.variant !== 'inline'
     return (
-      <div
-        role="alert"
-        className={cn('grid place-items-center px-6 text-center', screen ? 'min-h-dvh bg-paper' : 'py-16')}
-      >
+      <div role="alert" className={cn('grid place-items-center px-6 text-center', screen ? 'min-h-dvh bg-paper' : 'py-16')}>
         <div className="flex max-w-sm flex-col items-center gap-4">
           <Pupil mood={reloading ? 'eat' : 'dizzy'} size={112} />
           <h1 className="font-display text-xl font-bold text-ink">

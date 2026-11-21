@@ -28,6 +28,7 @@ EXIT_UNGROUPABLE = 4
 LLM_TIMEOUT_S = 180
 TERMINATE_TIMEOUT_S = 5
 
+
 class _LineWriter(io.TextIOBase):
     """File object that turns each written line into a log op."""
 
@@ -118,8 +119,12 @@ class ChildRuntime:
         await self._drain()
 
     async def llm(
-        self, prompt: str | None, system_prompt: str | None, contexts: list[dict],
-        image_urls: list[str], tools: list[dict],
+        self,
+        prompt: str | None,
+        system_prompt: str | None,
+        contexts: list[dict],
+        image_urls: list[str],
+        tools: list[dict],
     ) -> dict[str, Any]:
         req_id = uuid.uuid4().hex
         message: dict[str, Any] = {"op": "llm", "req_id": req_id}
@@ -227,7 +232,13 @@ class ChildRuntime:
         package, main = self.import_plugin()
         moved = await astrbot_boot.migrate_legacy_kv(str(self.data_dir))
         if moved:
-            self.write({"op": "log", "level": "info", "message": f"已把 {moved} 条插件数据从 {astrbot_boot.LEGACY_KV} 迁入 AstrBot 数据库"})
+            self.write(
+                {
+                    "op": "log",
+                    "level": "info",
+                    "message": f"已把 {moved} 条插件数据从 {astrbot_boot.LEGACY_KV} 迁入 AstrBot 数据库",
+                }
+            )
         md = loader.find_star(package, main)
         md.module = main
         md.root_dir_name = self.plugin_dir.name
@@ -317,7 +328,8 @@ class ChildRuntime:
         reasons: list[str] = []
         own = {self.main_task, self.reader_task, asyncio.current_task()}
         tasks = [
-            t for t in asyncio.all_tasks(self.loop)
+            t
+            for t in asyncio.all_tasks(self.loop)
             if t not in own and not t.done() and self.owns_context(t.get_context())
         ]
         if tasks:
@@ -329,7 +341,8 @@ class ChildRuntime:
                 reasons.append("指令唤醒条件已变化")
         try:
             timers = [
-                h for h in self.loop._scheduled  # type: ignore[attr-defined]
+                h
+                for h in self.loop._scheduled  # type: ignore[attr-defined]
                 if not h.cancelled() and self.owns_context(getattr(h, "_context", None))
             ]
             if timers:
@@ -340,7 +353,11 @@ class ChildRuntime:
                 reasons.append(f"{len(fds)} 个打开的网络连接")
         except Exception as e:
             reasons.append(f"无法检查事件循环: {e}")
-        threads = [t.name for t in threading.enumerate() if t is not threading.main_thread() and t.is_alive() and not _idle_thread(t)]
+        threads = [
+            t.name
+            for t in threading.enumerate()
+            if t is not threading.main_thread() and t.is_alive() and not _idle_thread(t)
+        ]
         if threads:
             reasons.append("线程 " + ", ".join(sorted(threads)[:3]))
         return reasons
@@ -359,7 +376,10 @@ class ChildRuntime:
         call_id = str(message.get("call_id"))
         try:
             result = await self.dispatcher.handle_tool_call(
-                str(message.get("event_id")), message.get("event") or {}, str(message.get("name")), message.get("arguments")
+                str(message.get("event_id")),
+                message.get("event") or {},
+                str(message.get("name")),
+                message.get("arguments"),
             )
         except Exception as e:
             log.error("tool call failed: %s", describe_error(e))

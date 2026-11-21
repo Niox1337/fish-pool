@@ -41,7 +41,11 @@ pub fn decode_key32(s: &str) -> Option<[u8; 32]> {
 
 /// The string that is signed for node requests: `{ts}\n{METHOD}\n{path_with_query}\n{hex(sha256(body))}`.
 pub fn sig_payload(ts: i64, method: &str, path_with_query: &str, body: &[u8]) -> String {
-    format!("{ts}\n{}\n{path_with_query}\n{}", method.to_uppercase(), sha256_hex(body))
+    format!(
+        "{ts}\n{}\n{path_with_query}\n{}",
+        method.to_uppercase(),
+        sha256_hex(body)
+    )
 }
 
 pub fn sign_request(secret: &[u8], ts: i64, method: &str, path_with_query: &str, body: &[u8]) -> String {
@@ -67,7 +71,9 @@ pub fn verify_request(
     path_with_query: &str,
     body: &[u8],
 ) -> Result<(), SigError> {
-    let (Some(ts), Some(sig)) = (ts_header, sig_header) else { return Err(SigError::Missing) };
+    let (Some(ts), Some(sig)) = (ts_header, sig_header) else {
+        return Err(SigError::Missing);
+    };
     let ts: i64 = ts.trim().parse().map_err(|_| SigError::Missing)?;
     if (now_ms - ts).abs() > SIG_MAX_SKEW_MS {
         return Err(SigError::Skew);
@@ -83,7 +89,9 @@ pub fn verify_request(
 /// Encrypts to base64(nonce12 || ciphertext || tag16).
 pub fn encrypt_with_nonce(key: &[u8; 32], nonce: [u8; 12], plaintext: &[u8]) -> String {
     let cipher = Aes256Gcm::new(key.into());
-    let ct = cipher.encrypt(Nonce::from_slice(&nonce), plaintext).expect("aes-gcm encrypt");
+    let ct = cipher
+        .encrypt(Nonce::from_slice(&nonce), plaintext)
+        .expect("aes-gcm encrypt");
     let mut out = Vec::with_capacity(12 + ct.len());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
@@ -166,7 +174,9 @@ pub async fn pbkdf2_sha256(password: &str, salt: &[u8], iterations: u32) -> Resu
     set("hash", &"SHA-256".into()).map_err(err)?;
     set("salt", &js_sys::Uint8Array::from(salt).into()).map_err(err)?;
     set("iterations", &JsValue::from_f64(iterations as f64)).map_err(err)?;
-    let bits = JsFuture::from(subtle::derive_bits(&alg, &key, 256).map_err(err)?).await.map_err(err)?;
+    let bits = JsFuture::from(subtle::derive_bits(&alg, &key, 256).map_err(err)?)
+        .await
+        .map_err(err)?;
     Ok(js_sys::Uint8Array::new(&bits).to_vec())
 }
 
@@ -185,7 +195,9 @@ pub async fn hash_password(password: &str) -> Result<String, String> {
 }
 
 pub async fn verify_password(password: &str, stored: &str) -> Result<bool, String> {
-    let Some(parsed) = parse_password_hash(stored) else { return Ok(false) };
+    let Some(parsed) = parse_password_hash(stored) else {
+        return Ok(false);
+    };
     let hash = pbkdf2_sha256(password, &parsed.salt, parsed.iterations).await?;
     Ok(ct_eq(&hash, &parsed.hash))
 }
@@ -200,7 +212,10 @@ mod tests {
 
     #[test]
     fn sha256_known() {
-        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]
@@ -222,9 +237,20 @@ mod tests {
         );
         let sig = sign_request(&secret, 1000, "PUT", "/v1/bots/x", b"{}");
         assert_eq!(sig.len(), 64);
-        assert_eq!(verify_request(&secret, Some("1000"), Some(&sig), 1000, "PUT", "/v1/bots/x", b"{}"), Ok(()));
         assert_eq!(
-            verify_request(&secret, Some("1000"), Some(&sig.to_uppercase()), 30_000, "PUT", "/v1/bots/x", b"{}"),
+            verify_request(&secret, Some("1000"), Some(&sig), 1000, "PUT", "/v1/bots/x", b"{}"),
+            Ok(())
+        );
+        assert_eq!(
+            verify_request(
+                &secret,
+                Some("1000"),
+                Some(&sig.to_uppercase()),
+                30_000,
+                "PUT",
+                "/v1/bots/x",
+                b"{}"
+            ),
             Ok(())
         );
         assert_eq!(
@@ -239,8 +265,14 @@ mod tests {
             verify_request(&secret, Some("1000"), Some(&sig), 70_000, "PUT", "/v1/bots/x", b"{}"),
             Err(SigError::Skew)
         );
-        assert_eq!(verify_request(&secret, None, Some(&sig), 1000, "PUT", "/", b""), Err(SigError::Missing));
-        assert_eq!(verify_request(&[8u8; 32], Some("1000"), Some(&sig), 1000, "PUT", "/v1/bots/x", b"{}"), Err(SigError::Mismatch));
+        assert_eq!(
+            verify_request(&secret, None, Some(&sig), 1000, "PUT", "/", b""),
+            Err(SigError::Missing)
+        );
+        assert_eq!(
+            verify_request(&[8u8; 32], Some("1000"), Some(&sig), 1000, "PUT", "/v1/bots/x", b"{}"),
+            Err(SigError::Mismatch)
+        );
     }
 
     #[test]
@@ -283,6 +315,9 @@ mod tests {
     #[test]
     fn pbkdf2_known_vector() {
         let out = block_on(pbkdf2_sha256("password", b"salt", 1)).unwrap();
-        assert_eq!(hex::encode(out), "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
+        assert_eq!(
+            hex::encode(out),
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
     }
 }

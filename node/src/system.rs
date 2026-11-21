@@ -35,7 +35,9 @@ pub fn parse_cpu_line(stat: &str) -> Option<(u64, u64)> {
 
 /// Boot time in unix seconds from the `btime` line of `/proc/stat`.
 pub fn parse_btime(stat: &str) -> Option<u64> {
-    stat.lines().find_map(|l| l.strip_prefix("btime ")).and_then(|v| v.trim().parse().ok())
+    stat.lines()
+        .find_map(|l| l.strip_prefix("btime "))
+        .and_then(|v| v.trim().parse().ok())
 }
 
 /// Lines of the form `Key: value [kB]` or `key value`, values in their raw unit except `kB`, which is
@@ -44,7 +46,9 @@ pub fn parse_kv(text: &str) -> HashMap<String, u64> {
     let mut out = HashMap::new();
     for line in text.lines() {
         let mut it = line.split_whitespace();
-        let (Some(k), Some(v)) = (it.next(), it.next()) else { continue };
+        let (Some(k), Some(v)) = (it.next(), it.next()) else {
+            continue;
+        };
         let Ok(n) = v.parse::<u64>() else { continue };
         let n = if it.next() == Some("kB") { n * 1024 } else { n };
         out.insert(k.trim_end_matches(':').to_string(), n);
@@ -105,7 +109,12 @@ pub fn parse_rollup(text: &str) -> Option<ProcMem> {
         (Some(c), Some(d)) => Some(c + d),
         _ => None,
     };
-    Some(ProcMem { rss, pss: kv.get("Pss").copied(), uss, swap: kv.get("Swap").copied() })
+    Some(ProcMem {
+        rss,
+        pss: kv.get("Pss").copied(),
+        uss,
+        swap: kv.get("Swap").copied(),
+    })
 }
 
 // ---------- snapshot types ----------
@@ -340,54 +349,88 @@ fn read_linux(cgroup: &Path) -> Read {
         kernel: read("/proc/sys/kernel/osrelease").map(|s| s.trim().to_string()),
     };
     let cpu_stat = parse_kv(&read(cgroup.join("cpu.stat")).unwrap_or_default());
-    let container = read(cgroup.join("memory.current")).and_then(|t| t.trim().parse::<u64>().ok()).map(|current| {
-        let ms = parse_kv(&read(cgroup.join("memory.stat")).unwrap_or_default());
-        let ev = parse_kv(&read(cgroup.join("memory.events")).unwrap_or_default());
-        Container {
-            memory_current_bytes: current,
-            memory_max_bytes: read(cgroup.join("memory.max")).and_then(|t| parse_limit(&t)),
-            memory_peak_bytes: read(cgroup.join("memory.peak")).and_then(|t| parse_limit(&t)),
-            memory_anon_bytes: ms.get("anon").copied(),
-            memory_file_bytes: ms.get("file").copied(),
-            oom_kills: ev.get("oom_kill").copied().unwrap_or(0),
-            cpu_percent: None,
-            cpu_limit_cores: read(cgroup.join("cpu.max")).and_then(|t| parse_cpu_max(&t)),
-            pids_current: read(cgroup.join("pids.current")).and_then(|t| parse_limit(&t)),
-            pids_max: read(cgroup.join("pids.max")).and_then(|t| parse_limit(&t)),
-        }
-    });
+    let container = read(cgroup.join("memory.current"))
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .map(|current| {
+            let ms = parse_kv(&read(cgroup.join("memory.stat")).unwrap_or_default());
+            let ev = parse_kv(&read(cgroup.join("memory.events")).unwrap_or_default());
+            Container {
+                memory_current_bytes: current,
+                memory_max_bytes: read(cgroup.join("memory.max")).and_then(|t| parse_limit(&t)),
+                memory_peak_bytes: read(cgroup.join("memory.peak")).and_then(|t| parse_limit(&t)),
+                memory_anon_bytes: ms.get("anon").copied(),
+                memory_file_bytes: ms.get("file").copied(),
+                oom_kills: ev.get("oom_kill").copied().unwrap_or(0),
+                cpu_percent: None,
+                cpu_limit_cores: read(cgroup.join("cpu.max")).and_then(|t| parse_cpu_max(&t)),
+                pids_current: read(cgroup.join("pids.current")).and_then(|t| parse_limit(&t)),
+                pids_max: read(cgroup.join("pids.max")).and_then(|t| parse_limit(&t)),
+            }
+        });
     let mut procs = Vec::new();
     for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
-        let Some(ps) = read(format!("/proc/{pid}/stat")).and_then(|t| parse_proc_stat(&t)) else { continue };
+        let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(ps) = read(format!("/proc/{pid}/stat")).and_then(|t| parse_proc_stat(&t)) else {
+            continue;
+        };
         let mem = read(format!("/proc/{pid}/smaps_rollup"))
             .and_then(|t| parse_rollup(&t))
             .or_else(|| {
                 read(format!("/proc/{pid}/status"))
                     .and_then(|t| crate::usage::parse_status_rss(&t))
-                    .map(|rss| ProcMem { rss, ..Default::default() })
+                    .map(|rss| ProcMem {
+                        rss,
+                        ..Default::default()
+                    })
             })
             .unwrap_or_default();
-        procs.push(ProcRead { pid, stat: ps, mem, cpu: None });
+        procs.push(ProcRead {
+            pid,
+            stat: ps,
+            mem,
+            cpu: None,
+        });
     }
     let raw = Raw {
         at: Instant::now(),
         host_cpu: parse_cpu_line(&stat),
         cgroup_usec: cpu_stat.get("usage_usec").copied(),
-        procs: procs.iter().map(|p| (p.pid, (p.stat.start_ticks, p.stat.ticks))).collect(),
+        procs: procs
+            .iter()
+            .map(|p| (p.pid, (p.stat.start_ticks, p.stat.ticks)))
+            .collect(),
     };
-    Read { raw, btime: parse_btime(&stat), host, container, procs }
+    Read {
+        raw,
+        btime: parse_btime(&stat),
+        host,
+        container,
+        procs,
+    }
 }
 
 /// Process tree below `own` from `ps`, for hosts without `/proc`.
 fn read_ps(own: u32) -> Read {
-    let out = std::process::Command::new("ps").args(["-A", "-o", "pid=,ppid=,rss=,%cpu=,comm="]).output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    let out = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,rss=,%cpu=,comm="])
+        .output();
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
     let mut rows = Vec::new();
     for line in text.lines() {
         let mut it = line.split_whitespace();
-        let (Some(pid), Some(ppid), Some(rss), Some(cpu)) = (it.next(), it.next(), it.next(), it.next()) else { continue };
-        let (Ok(pid), Ok(ppid), Ok(rss), Ok(cpu)) = (pid.parse::<u32>(), ppid.parse::<u32>(), rss.parse::<u64>(), cpu.parse::<f64>()) else {
+        let (Some(pid), Some(ppid), Some(rss), Some(cpu)) = (it.next(), it.next(), it.next(), it.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(ppid), Ok(rss), Ok(cpu)) = (
+            pid.parse::<u32>(),
+            ppid.parse::<u32>(),
+            rss.parse::<u64>(),
+            cpu.parse::<f64>(),
+        ) else {
             continue;
         };
         let name = it.collect::<Vec<_>>().join(" ");
@@ -412,14 +455,25 @@ fn read_ps(own: u32) -> Read {
         .filter(|r| below(r.0))
         .map(|(pid, ppid, rss, cpu, name)| ProcRead {
             pid,
-            stat: ProcStat { name, ppid, ticks: 0, threads: 0, start_ticks: 0 },
-            mem: ProcMem { rss, ..Default::default() },
+            stat: ProcStat {
+                name,
+                ppid,
+                ticks: 0,
+                threads: 0,
+                start_ticks: 0,
+            },
+            mem: ProcMem {
+                rss,
+                ..Default::default()
+            },
             cpu: Some(round1(cpu)),
         })
         .collect();
     let total = {
         let out = std::process::Command::new("sysctl").args(["-n", "hw.memsize"]).output();
-        out.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok()).unwrap_or(0)
+        out.ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+            .unwrap_or(0)
     };
     let host = Host {
         cpu_count: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
@@ -427,14 +481,33 @@ fn read_ps(own: u32) -> Read {
         memory_total_bytes: total,
         ..Default::default()
     };
-    let raw = Raw { at: Instant::now(), host_cpu: None, cgroup_usec: None, procs: HashMap::new() };
-    Read { raw, btime: None, host, container: None, procs }
+    let raw = Raw {
+        at: Instant::now(),
+        host_cpu: None,
+        cgroup_usec: None,
+        procs: HashMap::new(),
+    };
+    Read {
+        raw,
+        btime: None,
+        host,
+        container: None,
+        procs,
+    }
 }
 
 /// Builds a snapshot from a fresh reading and the previous raw counters.
 fn build(read: Read, prev: Option<&Raw>, owners: &Owners) -> (Snapshot, Raw) {
-    let Read { raw, btime, mut host, mut container, procs } = read;
-    let secs = prev.map(|p| raw.at.duration_since(p.at).as_secs_f64()).filter(|s| *s > 0.5);
+    let Read {
+        raw,
+        btime,
+        mut host,
+        mut container,
+        procs,
+    } = read;
+    let secs = prev
+        .map(|p| raw.at.duration_since(p.at).as_secs_f64())
+        .filter(|s| *s > 0.5);
     if let (Some(p), Some((t1, i1))) = (prev.and_then(|p| p.host_cpu), raw.host_cpu) {
         let (t0, i0) = p;
         if t1 > t0 {
@@ -442,7 +515,12 @@ fn build(read: Read, prev: Option<&Raw>, owners: &Owners) -> (Snapshot, Raw) {
             host.cpu_percent = Some(round1(busy * host.cpu_count as f64 * 100.0));
         }
     }
-    if let (Some(c), Some(s), Some(u0), Some(u1)) = (container.as_mut(), secs, prev.and_then(|p| p.cgroup_usec), raw.cgroup_usec) {
+    if let (Some(c), Some(s), Some(u0), Some(u1)) = (
+        container.as_mut(),
+        secs,
+        prev.and_then(|p| p.cgroup_usec),
+        raw.cgroup_usec,
+    ) {
         if u1 >= u0 {
             c.cpu_percent = Some(round1((u1 - u0) as f64 / (s * 1e6) * 100.0));
         }
@@ -451,32 +529,54 @@ fn build(read: Read, prev: Option<&Raw>, owners: &Owners) -> (Snapshot, Raw) {
     let parents: HashMap<u32, u32> = procs.iter().map(|p| (p.pid, p.stat.ppid)).collect();
     let mut out: Vec<Proc> = procs
         .into_iter()
-        .map(|ProcRead { pid, stat: ps, mem, cpu }| {
-            let (role, plugin) = classify(pid, &parents, owners);
-            let cpu = cpu.or_else(|| match (secs, prev.and_then(|p| p.procs.get(&pid))) {
-                (Some(s), Some(&(start, t0))) if start == ps.start_ticks && ps.ticks >= t0 => {
-                    Some(round1((ps.ticks - t0) as f64 / tck / s * 100.0))
+        .map(
+            |ProcRead {
+                 pid,
+                 stat: ps,
+                 mem,
+                 cpu,
+             }| {
+                let (role, plugin) = classify(pid, &parents, owners);
+                let cpu = cpu.or_else(|| match (secs, prev.and_then(|p| p.procs.get(&pid))) {
+                    (Some(s), Some(&(start, t0))) if start == ps.start_ticks && ps.ticks >= t0 => {
+                        Some(round1((ps.ticks - t0) as f64 / tck / s * 100.0))
+                    }
+                    _ => None,
+                });
+                Proc {
+                    pid,
+                    ppid: ps.ppid,
+                    role,
+                    name: ps.name,
+                    rss_bytes: mem.rss,
+                    pss_bytes: mem.pss,
+                    uss_bytes: mem.uss,
+                    swap_bytes: mem.swap,
+                    cpu_percent: cpu,
+                    threads: (ps.threads > 0).then_some(ps.threads),
+                    started_at: btime
+                        .filter(|_| ps.start_ticks > 0)
+                        .map(|b| (b as f64 * 1000.0 + ps.start_ticks as f64 / tck * 1000.0) as i64),
+                    plugin,
                 }
-                _ => None,
-            });
-            Proc {
-                pid,
-                ppid: ps.ppid,
-                role,
-                name: ps.name,
-                rss_bytes: mem.rss,
-                pss_bytes: mem.pss,
-                uss_bytes: mem.uss,
-                swap_bytes: mem.swap,
-                cpu_percent: cpu,
-                threads: (ps.threads > 0).then_some(ps.threads),
-                started_at: btime.filter(|_| ps.start_ticks > 0).map(|b| (b as f64 * 1000.0 + ps.start_ticks as f64 / tck * 1000.0) as i64),
-                plugin,
-            }
-        })
+            },
+        )
         .collect();
-    out.sort_by(|a, b| b.pss_bytes.unwrap_or(b.rss_bytes).cmp(&a.pss_bytes.unwrap_or(a.rss_bytes)).then(a.pid.cmp(&b.pid)));
-    (Snapshot { sampled_at: now_ms(), host, container, processes: out }, raw)
+    out.sort_by(|a, b| {
+        b.pss_bytes
+            .unwrap_or(b.rss_bytes)
+            .cmp(&a.pss_bytes.unwrap_or(a.rss_bytes))
+            .then(a.pid.cmp(&b.pid))
+    });
+    (
+        Snapshot {
+            sampled_at: now_ms(),
+            host,
+            container,
+            processes: out,
+        },
+        raw,
+    )
 }
 
 // ---------- monitor ----------
@@ -488,7 +588,10 @@ pub struct System {
 
 impl Default for System {
     fn default() -> Self {
-        System { started_at: now_ms(), state: Mutex::default() }
+        System {
+            started_at: now_ms(),
+            state: Mutex::default(),
+        }
     }
 }
 
@@ -503,7 +606,11 @@ fn owners(node: &Node) -> Owners {
             if proc.pid == 0 {
                 continue;
             }
-            let label = specs.iter().find(|s| &s.id == plugin_id).map(|s| s.name.clone()).filter(|n| !n.is_empty());
+            let label = specs
+                .iter()
+                .find(|s| &s.id == plugin_id)
+                .map(|s| s.name.clone())
+                .filter(|n| !n.is_empty());
             plugins.insert(
                 proc.pid,
                 PluginRef {
@@ -516,12 +623,20 @@ fn owners(node: &Node) -> Owners {
             );
         }
     }
-    Owners { own_pid: std::process::id(), sidecar_pid: node.shared.sidecar.pid(), plugins }
+    Owners {
+        own_pid: std::process::id(),
+        sidecar_pid: node.shared.sidecar.pid(),
+        plugins,
+    }
 }
 
 /// Root of the node's own cgroup v2 hierarchy as seen inside its namespace.
 fn cgroup_root(node: &Node) -> PathBuf {
-    node.shared.cgroups.as_ref().map(|c| c.base().to_path_buf()).unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup"))
+    node.shared
+        .cgroups
+        .as_ref()
+        .map(|c| c.base().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup"))
 }
 
 impl System {
@@ -536,7 +651,11 @@ impl System {
             (s.ticks % UV_CACHE_EVERY == 1, node.shared.cfg.data_dir.join("uv-cache"))
         };
         let reading = tokio::task::spawn_blocking(move || {
-            let r = if linux { read_linux(&cgroup) } else { read_ps(owners.own_pid) };
+            let r = if linux {
+                read_linux(&cgroup)
+            } else {
+                read_ps(owners.own_pid)
+            };
             let uv = refresh_uv.then(|| dir_size(&uv_dir));
             (r, owners, uv)
         })
@@ -552,7 +671,10 @@ impl System {
             ts: snap.sampled_at,
             host_cpu: snap.host.cpu_percent,
             container_cpu: snap.container.as_ref().and_then(|c| c.cpu_percent),
-            host_memory_used_bytes: snap.host.memory_available_bytes.map(|a| snap.host.memory_total_bytes.saturating_sub(a)),
+            host_memory_used_bytes: snap
+                .host
+                .memory_available_bytes
+                .map(|a| snap.host.memory_total_bytes.saturating_sub(a)),
             container_memory_bytes: snap.container.as_ref().map(|c| c.memory_current_bytes),
         });
         while s.history.len() > HISTORY_POINTS {
@@ -568,12 +690,20 @@ impl System {
         }
         let (snap, history, uv) = {
             let s = self.state.lock().unwrap();
-            (s.latest.clone(), s.history.iter().cloned().collect::<Vec<_>>(), s.uv_cache_bytes)
+            (
+                s.latest.clone(),
+                s.history.iter().cloned().collect::<Vec<_>>(),
+                s.uv_cache_bytes,
+            )
         };
         let cfg = &node.shared.cfg;
         let data_dir = cfg.data_dir.clone();
         let (disk, node_db, conv_db) = tokio::task::spawn_blocking(move || {
-            (disk(&data_dir), file_size(&data_dir.join("node.db")), file_size(&data_dir.join("conversations.db")))
+            (
+                disk(&data_dir),
+                file_size(&data_dir.join("node.db")),
+                file_size(&data_dir.join("conversations.db")),
+            )
         })
         .await
         .unwrap_or((None, 0, 0));
@@ -636,18 +766,29 @@ pub fn tenant_rows(base: &Path, users: &[String]) -> Vec<TenantRow> {
             continue;
         }
         let dir = entry.path();
-        let Some(current) = read(dir.join("memory.current")).and_then(|t| parse_limit(&t)) else { continue };
+        let Some(current) = read(dir.join("memory.current")).and_then(|t| parse_limit(&t)) else {
+            continue;
+        };
         let ev = parse_kv(&read(dir.join("memory.events")).unwrap_or_default());
         rows.push(TenantRow {
-            user_id: names.get(&name).map(|u| u.to_string()).unwrap_or_else(|| name[2..].to_string()),
+            user_id: names
+                .get(&name)
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| name[2..].to_string()),
             memory_current_bytes: current,
             memory_max_bytes: read(dir.join("memory.max")).and_then(|t| parse_limit(&t)),
             memory_peak_bytes: read(dir.join("memory.peak")).and_then(|t| parse_limit(&t)),
             oom_kills: ev.get("oom_kill").copied().unwrap_or(0),
-            procs: read(dir.join("cgroup.procs")).map(|t| t.split_whitespace().count()).unwrap_or(0),
+            procs: read(dir.join("cgroup.procs"))
+                .map(|t| t.split_whitespace().count())
+                .unwrap_or(0),
         });
     }
-    rows.sort_by(|a, b| b.memory_current_bytes.cmp(&a.memory_current_bytes).then_with(|| a.user_id.cmp(&b.user_id)));
+    rows.sort_by(|a, b| {
+        b.memory_current_bytes
+            .cmp(&a.memory_current_bytes)
+            .then_with(|| a.user_id.cmp(&b.user_id))
+    });
     rows
 }
 
@@ -671,7 +812,14 @@ fn live_status(bots: &[Arc<crate::bot::Bot>]) -> Live {
     for bot in bots {
         let st = bot.status_json();
         bump(&mut b, st["status"].as_str().unwrap_or("unknown"));
-        let kind_of: HashMap<String, String> = bot.desired.read().unwrap().platforms.iter().map(|p| (p.id.clone(), p.kind.clone())).collect();
+        let kind_of: HashMap<String, String> = bot
+            .desired
+            .read()
+            .unwrap()
+            .platforms
+            .iter()
+            .map(|p| (p.id.clone(), p.kind.clone()))
+            .collect();
         for p in st["platforms"].as_array().into_iter().flatten() {
             let id = p["id"].as_str().unwrap_or("");
             let kind = kind_of.get(id).cloned().unwrap_or_else(|| "unknown".into());
@@ -691,7 +839,11 @@ fn live_status(bots: &[Arc<crate::bot::Bot>]) -> Live {
             Value::Object(m)
         })
         .collect();
-    Live { bots: Value::Object(b), platforms: json!(platforms), plugins: Value::Object(plugins) }
+    Live {
+        bots: Value::Object(b),
+        platforms: json!(platforms),
+        plugins: Value::Object(plugins),
+    }
 }
 
 fn log_stats(bots: &[Arc<crate::bot::Bot>], since: i64) -> Value {
@@ -761,24 +913,56 @@ mod tests {
         let stat = "42 (python3 (x)) S 7 42 42 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 3 0 900 0";
         assert_eq!(
             parse_proc_stat(stat),
-            Some(ProcStat { name: "python3 (x)".into(), ppid: 7, ticks: 300, threads: 3, start_ticks: 900 })
+            Some(ProcStat {
+                name: "python3 (x)".into(),
+                ppid: 7,
+                ticks: 300,
+                threads: 3,
+                start_ticks: 900
+            })
         );
         let rollup = "55 [rollup]\nRss: 2048 kB\nPss: 1024 kB\nShared_Clean: 512 kB\nPrivate_Clean: 128 kB\nPrivate_Dirty: 256 kB\nSwap: 0 kB\n";
         assert_eq!(
             parse_rollup(rollup),
-            Some(ProcMem { rss: 2048 * 1024, pss: Some(1024 * 1024), uss: Some(384 * 1024), swap: Some(0) })
+            Some(ProcMem {
+                rss: 2048 * 1024,
+                pss: Some(1024 * 1024),
+                uss: Some(384 * 1024),
+                swap: Some(0)
+            })
         );
         assert_eq!(parse_rollup("Pss: 1 kB"), None);
     }
 
     fn plugin(id: &str) -> PluginRef {
-        PluginRef { user_id: "u".into(), bot_id: "b".into(), bot_name: "鱼".into(), plugin_id: id.into(), label: id.into() }
+        PluginRef {
+            user_id: "u".into(),
+            bot_id: "b".into(),
+            bot_name: "鱼".into(),
+            plugin_id: id.into(),
+            label: id.into(),
+        }
     }
 
     #[test]
     fn classification_follows_ancestry() {
-        let parents: HashMap<u32, u32> = [(1, 0), (10, 1), (20, 10), (21, 20), (30, 21), (31, 30), (40, 10), (50, 1)].into_iter().collect();
-        let owners = Owners { own_pid: 10, sidecar_pid: 20, plugins: [(30, plugin("p"))].into_iter().collect() };
+        let parents: HashMap<u32, u32> = [
+            (1, 0),
+            (10, 1),
+            (20, 10),
+            (21, 20),
+            (30, 21),
+            (31, 30),
+            (40, 10),
+            (50, 1),
+        ]
+        .into_iter()
+        .collect();
+        let owners = Owners {
+            own_pid: 10,
+            sidecar_pid: 20,
+            plugins: [(30, plugin("p"))].into_iter().collect(),
+        };
         assert_eq!(classify(10, &parents, &owners).0, "node");
         assert_eq!(classify(20, &parents, &owners).0, "sidecar");
         assert_eq!(classify(21, &parents, &owners).0, "sidecar");
@@ -791,7 +975,11 @@ mod tests {
 
     #[test]
     fn deltas_give_cpu_percent() {
-        let owners = Owners { own_pid: 10, sidecar_pid: 0, plugins: HashMap::new() };
+        let owners = Owners {
+            own_pid: 10,
+            sidecar_pid: 0,
+            plugins: HashMap::new(),
+        };
         let t0 = Instant::now();
         let prev = Raw {
             at: t0,
@@ -806,20 +994,42 @@ mod tests {
                 cgroup_usec: Some(6_000_000),
                 procs: HashMap::new(),
             },
-            host: Host { cpu_count: 2, ..Default::default() },
+            host: Host {
+                cpu_count: 2,
+                ..Default::default()
+            },
             btime: Some(1_700_000_000),
             container: Some(Container::default()),
             procs: vec![
                 ProcRead {
                     pid: 10,
-                    stat: ProcStat { name: "fish-node".into(), ppid: 1, ticks: 600, threads: 4, start_ticks: 5 },
-                    mem: ProcMem { rss: 10, pss: Some(8), ..Default::default() },
+                    stat: ProcStat {
+                        name: "fish-node".into(),
+                        ppid: 1,
+                        ticks: 600,
+                        threads: 4,
+                        start_ticks: 5,
+                    },
+                    mem: ProcMem {
+                        rss: 10,
+                        pss: Some(8),
+                        ..Default::default()
+                    },
                     cpu: None,
                 },
                 ProcRead {
                     pid: 11,
-                    stat: ProcStat { name: "reused".into(), ppid: 10, ticks: 900, threads: 1, start_ticks: 99 },
-                    mem: ProcMem { rss: 50, ..Default::default() },
+                    stat: ProcStat {
+                        name: "reused".into(),
+                        ppid: 10,
+                        ticks: 900,
+                        threads: 1,
+                        start_ticks: 99,
+                    },
+                    mem: ProcMem {
+                        rss: 50,
+                        ..Default::default()
+                    },
                     cpu: None,
                 },
             ],
@@ -854,8 +1064,22 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                TenantRow { user_id: "u1".into(), memory_current_bytes: 1_048_576, memory_max_bytes: Some(134_217_728), memory_peak_bytes: None, oom_kills: 1, procs: 2 },
-                TenantRow { user_id: "gone".into(), memory_current_bytes: 0, memory_max_bytes: None, memory_peak_bytes: None, oom_kills: 0, procs: 0 },
+                TenantRow {
+                    user_id: "u1".into(),
+                    memory_current_bytes: 1_048_576,
+                    memory_max_bytes: Some(134_217_728),
+                    memory_peak_bytes: None,
+                    oom_kills: 1,
+                    procs: 2
+                },
+                TenantRow {
+                    user_id: "gone".into(),
+                    memory_current_bytes: 0,
+                    memory_max_bytes: None,
+                    memory_peak_bytes: None,
+                    oom_kills: 0,
+                    procs: 0
+                },
             ]
         );
     }

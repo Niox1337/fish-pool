@@ -47,7 +47,9 @@ def test_command_plugin(fork_server, run):
             assert r["matched"] is True and "参数" in chain_text(r["sends"][0])
 
             r = await p.event("whoami", group=True, platform="weixin_ilink")
-            assert chain_text(r["sends"][0]) == "u1|Alice|weixin_oc|GROUP_MESSAGE|False|weixin_ilink:GroupMessage:g1|True"
+            assert (
+                chain_text(r["sends"][0]) == "u1|Alice|weixin_oc|GROUP_MESSAGE|False|weixin_ilink:GroupMessage:g1|True"
+            )
             await p.wait_log("whoami answered")
 
             r = await p.event("secret")
@@ -93,7 +95,9 @@ def test_managers_survive_restart(fork_server, run):
             node.procs.remove(p)
             p = await node.spawn("managers_plugin", data_dir=data_dir)
             restored = await p.event("managers")
-            assert [chain_text(s) for s in restored["sends"]] == ["Talk about fish.|Fish profile|Fish sleep in the pond."]
+            assert [chain_text(s) for s in restored["sends"]] == [
+                "Talk about fish.|Fish profile|Fish sleep in the pond."
+            ]
             cron = await p.event("cron_basic")
             assert [chain_text(s) for s in cron["sends"]] == ["cron completed"]
             assert [chain_text(s) for s in p.proactive] == ["scheduled fish"]
@@ -110,7 +114,9 @@ def test_empty_kb_opens_once_on_concurrent_use_after_restart(fork_server, run):
                 opened = await p.event("open_empty_kb")
                 assert [chain_text(s) for s in opened["sends"]] == ["False|True|0|0"], p.logs
                 await p.write({"op": "shutdown"})
-                exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == p.proc_id)
+                exited = await node.control.lines.next(
+                    lambda m: m.get("op") == "exited" and m.get("proc_id") == p.proc_id
+                )
                 assert exited["code"] == 0
                 node.procs.remove(p)
 
@@ -131,7 +137,9 @@ def test_faiss_preload_is_inherited(monkeypatch, run):
                 assert [chain_text(s) for s in inherited["sends"]] == ["True"], server.output()
                 assert (await p.event("populate"))["sends"], p.logs
                 restored = await p.event("managers")
-                assert [chain_text(s) for s in restored["sends"]] == ["Talk about fish.|Fish profile|Fish sleep in the pond."]
+                assert [chain_text(s) for s in restored["sends"]] == [
+                    "Talk about fish.|Fish profile|Fish sleep in the pond."
+                ]
 
         run(scenario())
     finally:
@@ -153,9 +161,17 @@ def test_scheduled_agent_resumes_after_plugin_restart(fork_server, run):
         if request["contexts"][-1]["role"] == "tool":
             return {"text": "Reminder delivered."}
         assert "send_message_to_user" in {tool["name"] for tool in request["tools"]}
-        return {"tool_calls": [{"id": "reminder-call", "name": "send_message_to_user", "arguments": {
-            "messages": [{"type": "plain", "text": "Fish reminder"}],
-        }}]}
+        return {
+            "tool_calls": [
+                {
+                    "id": "reminder-call",
+                    "name": "send_message_to_user",
+                    "arguments": {
+                        "messages": [{"type": "plain", "text": "Fish reminder"}],
+                    },
+                }
+            ]
+        }
 
     async def scenario():
         async with FakeNode(fork_server) as node:
@@ -249,7 +265,9 @@ def test_llm_paths(fork_server, run):
 
             r = await p.event("tell me a joke")
             assert r["matched"] is False and r["done"]["call_llm"] is True
-            hooked = await p.llm_hook(r["event_id"], {"prompt": "tell me a joke", "system_prompt": "base", "contexts": []})
+            hooked = await p.llm_hook(
+                r["event_id"], {"prompt": "tell me a joke", "system_prompt": "base", "contexts": []}
+            )
             assert hooked == {"prompt": "tell me a joke", "system_prompt": "base|hooked", "contexts": []}
 
             unknown = await p.llm_hook("missing", {"prompt": "x", "system_prompt": "s", "contexts": []})
@@ -276,7 +294,10 @@ def test_conf_schema_kv_and_hooks(fork_server, run):
             assert chain_text(r["sends"][0]) == "a->b|conf_plugin|True~"
 
             r = await p.event("hello", wake=False)
-            hooked = await p.llm_hook(r["event_id"], {"prompt": "hello", "system_prompt": "sys", "contexts": [{"role": "user", "content": "c"}]})
+            hooked = await p.llm_hook(
+                r["event_id"],
+                {"prompt": "hello", "system_prompt": "sys", "contexts": [{"role": "user", "content": "c"}]},
+            )
             assert hooked["system_prompt"] == "yo sys"
             assert hooked["prompt"] == "hello\n[extra]"
             assert hooked["contexts"] == [{"role": "user", "content": "c"}]
@@ -325,7 +346,9 @@ def test_plugin_waits_for_memory_limit_before_loading(fork_server, run):
                 await writer.drain()
                 message = await Lines(reader).next(lambda m: m.get("level") == "error")
                 assert "plugin load failed" in message["message"]
-                exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == proc_id)
+                exited = await node.control.lines.next(
+                    lambda m: m.get("op") == "exited" and m.get("proc_id") == proc_id
+                )
                 assert exited["code"] == 2
             finally:
                 writer.close()
@@ -461,14 +484,23 @@ for t in tools.plugin_tools():
     )
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
-    out = subprocess.run([sys.executable, str(script), str(plugin)], capture_output=True, text=True, env=env, timeout=60, cwd=str(tmp_path))
+    out = subprocess.run(
+        [sys.executable, str(script), str(plugin)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        cwd=str(tmp_path),
+    )
     print(out.stdout)
     assert out.returncode == 0, out.stderr
     assert "STAR " in out.stdout
     assert "HANDLER" in out.stdout
     import json as _json
 
-    tools = {t["name"]: t for t in (_json.loads(line[5:]) for line in out.stdout.splitlines() if line.startswith("TOOL "))}
+    tools = {
+        t["name"]: t for t in (_json.loads(line[5:]) for line in out.stdout.splitlines() if line.startswith("TOOL "))
+    }
     assert "search_memes" in tools
     assert tools["search_memes"]["parameters"]["properties"]["q"]["type"] == "string"
 
@@ -487,7 +519,11 @@ def test_plugin_home_is_inside_data_dir(tmp_path):
     )
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1]), "HOME": "/nonexistent"}
     out = subprocess.run(
-        [sys.executable, "-c", code, str(plugin_dir), str(data_dir)], capture_output=True, text=True, env=env, timeout=30
+        [sys.executable, "-c", code, str(plugin_dir), str(data_dir)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
     )
     assert out.returncode == 0, out.stderr
     home = (data_dir / "home").resolve()
@@ -519,10 +555,23 @@ def test_llm_tools(fork_server, run):
             await p.llm_hook(event_id, {"prompt": "hello"})
 
             async def call(name, arguments, call_id):
-                await p.write({"op": "tool_call", "call_id": call_id, "event_id": event_id, "event": {}, "name": name, "arguments": arguments})
+                await p.write(
+                    {
+                        "op": "tool_call",
+                        "call_id": call_id,
+                        "event_id": event_id,
+                        "event": {},
+                        "name": name,
+                        "arguments": arguments,
+                    }
+                )
                 sends = []
                 while True:
-                    m = await p.recv(lambda m: (m.get("op") == "tool_result" and m.get("call_id") == call_id) or m.get("op") == "send")
+                    m = await p.recv(
+                        lambda m: (
+                            (m.get("op") == "tool_result" and m.get("call_id") == call_id) or m.get("op") == "send"
+                        )
+                    )
                     if m["op"] == "send":
                         sends.append(m)
                     else:
@@ -546,6 +595,7 @@ def test_llm_tools(fork_server, run):
 def test_idle_check_reports_background_work(fork_server, run):
     async def scenario():
         async with FakeNode(fork_server) as node:
+
             async def idle(p):
                 await p.write({"op": "idle_check"})
                 return (await p.recv(lambda m: m.get("op") == "idle_result"))["busy"]
@@ -691,7 +741,9 @@ def test_kill_before_template_fork_cancels_spawn(fork_server, run):
             reply = await node.control.lines.next(lambda m: m.get("proc_id") == "slow1")
             assert reply["op"] in ("error", "spawned")
             if reply["op"] == "spawned":
-                exited = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == "slow1")
+                exited = await node.control.lines.next(
+                    lambda m: m.get("op") == "exited" and m.get("proc_id") == "slow1"
+                )
                 assert exited["pid"] == reply["pid"]
             p = await node.spawn("slow_plugin", share_key="slow-1")
             assert parent_pid(p.pid) == fork_server.proc.pid
@@ -792,7 +844,9 @@ def test_group_runs_plugins_with_separate_state(fork_server, run):
             await group.write({"op": "unload", "proc_id": cmd.proc_id})
             assert (await group.exited(cmd.proc_id))["code"] == 0
             await group.write({"op": "exit"})
-            done = await node.control.lines.next(lambda m: m.get("op") == "exited" and m.get("proc_id") == group.proc_id)
+            done = await node.control.lines.next(
+                lambda m: m.get("op") == "exited" and m.get("proc_id") == group.proc_id
+            )
             assert done["code"] == 0
 
     run(scenario())
@@ -803,7 +857,12 @@ def test_group_sends_unsuitable_plugins_back(fork_server, run):
         async with FakeNode(fork_server) as node:
             group = await node.group()
             await group.load("relimport_plugin")
-            for plugin, needle in [("bg_plugin", "后台任务"), ("thread_plugin", "线程"), ("cwd_plugin", "相对路径"), ("twin_plugin", "lib")]:
+            for plugin, needle in [
+                ("bg_plugin", "后台任务"),
+                ("thread_plugin", "线程"),
+                ("cwd_plugin", "相对路径"),
+                ("twin_plugin", "lib"),
+            ]:
                 proc_id, lines, _ = await group.load_raw(plugin)
                 exited = await group.exited(proc_id)
                 assert exited["code"] == 4 and exited["drain"] is False, (plugin, exited)

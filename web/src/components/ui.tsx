@@ -1,10 +1,4 @@
-import {
-  forwardRef,
-  type ButtonHTMLAttributes,
-  type InputHTMLAttributes,
-  type ReactNode,
-  type TextareaHTMLAttributes,
-} from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as SwitchPrimitive from '@radix-ui/react-switch'
 import { LoaderCircle } from 'lucide-react'
@@ -61,18 +55,16 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
 const control =
   'w-full rounded-xl border border-paper-3 bg-white px-3.5 text-[15px] text-ink placeholder:text-ink-3 transition-[border-color,box-shadow] duration-150 hover:border-ink-3/45 focus:border-sky focus:shadow-[0_0_0_3px_rgb(47_91_216/0.18)] focus:outline-none disabled:bg-paper-2 disabled:text-ink-3 aria-invalid:border-bad aria-invalid:focus:shadow-[0_0_0_3px_rgb(196_61_75/0.16)]'
 
-export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input(
-  { className, ...rest },
-  ref,
-) {
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input({ className, ...rest }, ref) {
   return <input ref={ref} className={cn(control, 'h-11', className)} {...rest} />
 })
 
-export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
-  function Textarea({ className, ...rest }, ref) {
-    return <textarea ref={ref} className={cn(control, 'min-h-28 py-2.5 leading-relaxed', className)} {...rest} />
-  },
-)
+export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea(
+  { className, ...rest },
+  ref,
+) {
+  return <textarea ref={ref} className={cn(control, 'min-h-28 py-2.5 leading-relaxed', className)} {...rest} />
+})
 
 export function Field({
   label,
@@ -172,7 +164,13 @@ const tones: Record<Tone, string> = {
 
 export function Pill({ tone, children, pulse, className }: { tone: Tone; children: ReactNode; pulse?: boolean; className?: string }) {
   return (
-    <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap', tones[tone], className)}>
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap',
+        tones[tone],
+        className,
+      )}
+    >
       <span className={cn('size-1.5 rounded-full bg-current', pulse && 'animate-pulse')} aria-hidden />
       {children}
     </span>
@@ -224,7 +222,14 @@ export function ConfirmDialog({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-cobalt-950/45 data-[state=open]:animate-[fade-in_150ms_ease-out]" />
         <Dialog.Content
           className="fixed top-1/2 left-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-3xl border border-paper-3 bg-cream p-6 shadow-[var(--shadow-lift)] focus:outline-none motion-safe:data-[state=open]:animate-[pop-in_200ms_var(--ease-out-expo)]"
-          onCloseAutoFocus={returnFocus ? (event) => { event.preventDefault(); returnFocus() } : undefined}
+          onCloseAutoFocus={
+            returnFocus
+              ? (event) => {
+                  event.preventDefault()
+                  returnFocus()
+                }
+              : undefined
+          }
         >
           <Dialog.Title className="font-display text-lg font-black wrap-anywhere text-ink">{title}</Dialog.Title>
           <Dialog.Description asChild>
@@ -266,14 +271,28 @@ export function Sheet({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-cobalt-950/45 data-[state=open]:animate-[fade-in_150ms_ease-out]" />
         <Dialog.Content
-          className={cn('fixed z-50 bg-paper shadow-[var(--shadow-lift)] focus:outline-none', side === 'right'
-            ? 'inset-y-0 right-0 flex w-full flex-col sm:max-w-xl motion-safe:data-[state=open]:animate-[slide-in-right_220ms_var(--ease-out-expo)]'
-            : 'inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto rounded-t-3xl border border-paper-3 p-6 sm:inset-x-auto sm:top-1/2 sm:bottom-auto sm:left-1/2 sm:w-[min(92vw,520px)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl data-[state=open]:animate-[pop-in_220ms_var(--ease-out-expo)]')}
-          onOpenAutoFocus={side === 'right' ? (event) => {
-            event.preventDefault()
-            if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
-          } : undefined}
-          onCloseAutoFocus={returnFocus ? (event) => { event.preventDefault(); returnFocus() } : undefined}
+          className={cn(
+            'fixed z-50 bg-paper shadow-[var(--shadow-lift)] focus:outline-none',
+            side === 'right'
+              ? 'inset-y-0 right-0 flex w-full flex-col sm:max-w-xl motion-safe:data-[state=open]:animate-[slide-in-right_220ms_var(--ease-out-expo)]'
+              : 'inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto rounded-t-3xl border border-paper-3 p-6 sm:inset-x-auto sm:top-1/2 sm:bottom-auto sm:left-1/2 sm:w-[min(92vw,520px)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl data-[state=open]:animate-[pop-in_220ms_var(--ease-out-expo)]',
+          )}
+          onOpenAutoFocus={
+            side === 'right'
+              ? (event) => {
+                  event.preventDefault()
+                  if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
+                }
+              : undefined
+          }
+          onCloseAutoFocus={
+            returnFocus
+              ? (event) => {
+                  event.preventDefault()
+                  returnFocus()
+                }
+              : undefined
+          }
         >
           <div className={side === 'right' ? 'border-b border-paper-3 bg-cream px-5 py-5 sm:px-8 sm:py-6' : undefined}>
             <Dialog.Title className="font-display text-xl font-black wrap-anywhere text-ink">{title}</Dialog.Title>

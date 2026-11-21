@@ -29,7 +29,15 @@ function panelItemError(item: QqPanelItem) {
   return ''
 }
 
-function PanelEditor({ botId, platformId, scope, record, onClose, onSaved, returnFocus }: {
+function PanelEditor({
+  botId,
+  platformId,
+  scope,
+  record,
+  onClose,
+  onSaved,
+  returnFocus,
+}: {
   botId: string
   platformId: string
   scope: QqPanelScope
@@ -45,9 +53,10 @@ function PanelEditor({ botId, platformId, scope, record, onClose, onSaved, retur
   const [checked, setChecked] = useState(false)
   const [unsaved, setUnsaved] = useState(false)
   const save = useMutation<unknown, Error, QqPanel>({
-    mutationFn: (panel: QqPanel) => record
-      ? api.updateQqPanel(botId, platformId, record.panel_id, panel, record.version ?? record.panel?.version)
-      : api.createQqPanel(botId, platformId, scope, panel),
+    mutationFn: (panel: QqPanel) =>
+      record
+        ? api.updateQqPanel(botId, platformId, record.panel_id, panel, record.version ?? record.panel?.version)
+        : api.createQqPanel(botId, platformId, scope, panel),
     onSuccess: () => {
       toast.success('指令面板已提交给 QQ')
       onSaved()
@@ -72,73 +81,127 @@ function PanelEditor({ botId, platformId, scope, record, onClose, onSaved, retur
 
   function changeRow(id: string, patch: Partial<QqPanelItem>) {
     setUnsaved(true)
-    setRows((current) => current.map((row) => row.id === id ? { ...row, item: { ...row.item, ...patch } } : row))
+    setRows((current) => current.map((row) => (row.id === id ? { ...row, item: { ...row.item, ...patch } } : row)))
   }
 
   return (
     <Sheet
-      open side="right" returnFocus={returnFocus}
+      open
+      side="right"
+      returnFocus={returnFocus}
       title={record ? '编辑指令面板' : '新建指令面板'}
       description={`${SCENES[scope]} · ${record?.target_type === 'specific' ? '指定会话' : '全部会话'}`}
-      onOpenChange={(open) => { if (!open) close() }}
+      onOpenChange={(open) => {
+        if (!open) close()
+      }}
     >
-      <form className="flex h-full min-h-0 flex-col" noValidate onSubmit={(event) => {
-        event.preventDefault()
-        if (save.isPending || discard) return
-        setChecked(true)
-        if (isValid) save.mutate({ items: rows.map(({ item }) => item), remark })
-      }}>
+      <form
+        className="flex h-full min-h-0 flex-col"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (save.isPending || discard) return
+          setChecked(true)
+          if (isValid) save.mutate({ items: rows.map(({ item }) => item), remark })
+        }}
+      >
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-8 sm:py-6">
           <fieldset disabled={save.isPending} className="grid min-w-0 gap-5">
             <Field label="备注" htmlFor={`${fieldId}-remark`} error={remarkError || undefined}>
-              <Input id={`${fieldId}-remark`} placeholder="仅自己可见" value={remark} onChange={(event) => {
-                setRemark(event.target.value)
-                setUnsaved(true)
-              }} />
+              <Input
+                id={`${fieldId}-remark`}
+                placeholder="仅自己可见"
+                value={remark}
+                onChange={(event) => {
+                  setRemark(event.target.value)
+                  setUnsaved(true)
+                }}
+              />
             </Field>
             <ol className="divide-y divide-paper-3 border-y border-paper-3">
               {rows.map(({ id, item }, i) => (
                 <li key={id} className="grid gap-3 py-4">
                   <div className="flex items-center gap-2">
-                    <Select aria-label={`第 ${i + 1} 项类型`} value={item.type} className="max-w-48 flex-1"
-                      onChange={(event) => changeRow(id, { type: event.target.value === 'link' ? 'link' : 'command' })}>
+                    <Select
+                      aria-label={`第 ${i + 1} 项类型`}
+                      value={item.type}
+                      className="max-w-48 flex-1"
+                      onChange={(event) => changeRow(id, { type: event.target.value === 'link' ? 'link' : 'command' })}
+                    >
                       <option value="command">指令</option>
                       <option value="link">链接</option>
                     </Select>
-                    <Button variant="ghost" className="ml-auto size-11 px-0" aria-label={`移除第 ${i + 1} 项`} onClick={() => {
-                      setRows((current) => current.filter((row) => row.id !== id))
-                      setUnsaved(true)
-                    }}>
+                    <Button
+                      variant="ghost"
+                      className="ml-auto size-11 px-0"
+                      aria-label={`移除第 ${i + 1} 项`}
+                      onClick={() => {
+                        setRows((current) => current.filter((row) => row.id !== id))
+                        setUnsaved(true)
+                      }}
+                    >
                       <Trash2 aria-hidden />
                     </Button>
                   </div>
                   <Field htmlFor={`${id}-name`} label={item.type === 'command' ? '指令内容' : '链接名称'}>
-                    <Input id={`${id}-name`} value={item.name} placeholder={item.type === 'command' ? '/帮助' : '使用文档'}
-                      onChange={(event) => changeRow(id, { name: event.target.value })} />
+                    <Input
+                      id={`${id}-name`}
+                      value={item.name}
+                      placeholder={item.type === 'command' ? '/帮助' : '使用文档'}
+                      onChange={(event) => changeRow(id, { name: event.target.value })}
+                    />
                   </Field>
                   {item.type === 'link' && (
                     <Field htmlFor={`${id}-link`} label="跳转地址">
-                      <Input id={`${id}-link`} type="url" inputMode="url" value={item.link ?? ''} placeholder="https://"
-                        onChange={(event) => changeRow(id, { link: event.target.value })} />
+                      <Input
+                        id={`${id}-link`}
+                        type="url"
+                        inputMode="url"
+                        value={item.link ?? ''}
+                        placeholder="https://"
+                        onChange={(event) => changeRow(id, { link: event.target.value })}
+                      />
                     </Field>
                   )}
                   <Field htmlFor={`${id}-desc`} label="说明">
-                    <Input id={`${id}-desc`} value={item.desc ?? ''} placeholder="选填，展示给用户"
-                      onChange={(event) => changeRow(id, { desc: event.target.value })} />
+                    <Input
+                      id={`${id}-desc`}
+                      value={item.desc ?? ''}
+                      placeholder="选填，展示给用户"
+                      onChange={(event) => changeRow(id, { desc: event.target.value })}
+                    />
                   </Field>
-                  {scope === 'group' && <SwitchRow label="仅群管理员可点" checked={!!item.only_admin}
-                    onChange={(only_admin) => changeRow(id, { only_admin })} />}
-                  {checked && errors[i] && <p role="alert" className="text-sm text-bad">{errors[i]}</p>}
+                  {scope === 'group' && (
+                    <SwitchRow
+                      label="仅群管理员可点"
+                      checked={!!item.only_admin}
+                      onChange={(only_admin) => changeRow(id, { only_admin })}
+                    />
+                  )}
+                  {checked && errors[i] && (
+                    <p role="alert" className="text-sm text-bad">
+                      {errors[i]}
+                    </p>
+                  )}
                 </li>
               ))}
             </ol>
-            <Button variant="secondary" className="justify-self-start" disabled={rows.length >= 20} onClick={() => {
-              setRows((current) => [...current, { id: crypto.randomUUID(), item: newItem() }])
-              setUnsaved(true)
-            }}>
+            <Button
+              variant="secondary"
+              className="justify-self-start"
+              disabled={rows.length >= 20}
+              onClick={() => {
+                setRows((current) => [...current, { id: crypto.randomUUID(), item: newItem() }])
+                setUnsaved(true)
+              }}
+            >
               <Plus aria-hidden /> 添加一项
             </Button>
-            {checked && !record && rows.length === 0 && <p role="alert" className="text-sm text-bad">请添加至少一项。</p>}
+            {checked && !record && rows.length === 0 && (
+              <p role="alert" className="text-sm text-bad">
+                请添加至少一项。
+              </p>
+            )}
           </fieldset>
         </div>
         <footer className="grid shrink-0 gap-2 border-t border-paper-3 bg-cream px-5 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-8">
@@ -146,13 +209,21 @@ function PanelEditor({ botId, platformId, scope, record, onClose, onSaved, retur
           {discard ? (
             <div className="flex flex-wrap items-center justify-end gap-2">
               <p className="mr-auto text-sm text-ink-2">放弃未发布的修改？</p>
-              <Button variant="ghost" onClick={() => setDiscard(false)}>继续编辑</Button>
-              <Button variant="danger" onClick={onClose}>放弃</Button>
+              <Button variant="ghost" onClick={() => setDiscard(false)}>
+                继续编辑
+              </Button>
+              <Button variant="danger" onClick={onClose}>
+                放弃
+              </Button>
             </div>
           ) : (
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" disabled={save.isPending} onClick={close}>取消</Button>
-              <Button type="submit" variant="primary" loading={save.isPending} disabled={!!record && !unsaved}>发布到 QQ</Button>
+              <Button variant="ghost" disabled={save.isPending} onClick={close}>
+                取消
+              </Button>
+              <Button type="submit" variant="primary" loading={save.isPending} disabled={!!record && !unsaved}>
+                发布到 QQ
+              </Button>
             </div>
           )}
         </footer>
@@ -194,20 +265,37 @@ function PanelList({ bot, platform }: { bot: Bot; platform: Platform }) {
           </Select>
         </Field>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="ghost" loading={panels.isFetching} onClick={() => { void panels.refetch() }}>
+          <Button
+            variant="ghost"
+            loading={panels.isFetching}
+            onClick={() => {
+              void panels.refetch()
+            }}
+          >
             <RotateCw aria-hidden /> 刷新
           </Button>
-          <Button variant="primary" disabled={!panels.data || !!panels.error} onClick={(event) => {
-            trigger.current = event.currentTarget
-            setEditor({ record: null })
-          }}>
+          <Button
+            variant="primary"
+            disabled={!panels.data || !!panels.error}
+            onClick={(event) => {
+              trigger.current = event.currentTarget
+              setEditor({ record: null })
+            }}
+          >
             <Plus aria-hidden /> 新建面板
           </Button>
         </div>
       </div>
 
-      {panels.isLoading ? <Skeleton className="h-20" /> : panels.error ? (
-        <ErrorNote error={panels.error} onRetry={() => { void panels.refetch() }} />
+      {panels.isLoading ? (
+        <Skeleton className="h-20" />
+      ) : panels.error ? (
+        <ErrorNote
+          error={panels.error}
+          onRetry={() => {
+            void panels.refetch()
+          }}
+        />
       ) : records.length === 0 ? (
         <p className="border-t border-paper-3 py-4 text-sm text-ink-2">这个场景还没有指令面板。</p>
       ) : (
@@ -218,35 +306,70 @@ function PanelList({ bot, platform }: { bot: Bot; platform: Platform }) {
                 <h4 className="font-semibold wrap-anywhere text-ink">{record.panel?.remark || '指令面板'}</h4>
                 <p className="mt-1 text-[13px] wrap-anywhere text-ink-3">
                   {record.target_type === 'specific' ? '指定会话' : '全部会话'}
-                  {' · '}{record.panel?.items?.length ?? 0} 项
+                  {' · '}
+                  {record.panel?.items?.length ?? 0} 项
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={(event) => {
-                  trigger.current = event.currentTarget
-                  setEditor({ record })
-                }}>编辑</Button>
-                <Button size="sm" variant="ghost" onClick={(event) => {
-                  trigger.current = event.currentTarget
-                  remove.reset()
-                  setDeleting(record)
-                }}>删除</Button>
+                <Button
+                  size="sm"
+                  onClick={(event) => {
+                    trigger.current = event.currentTarget
+                    setEditor({ record })
+                  }}
+                >
+                  编辑
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={(event) => {
+                    trigger.current = event.currentTarget
+                    remove.reset()
+                    setDeleting(record)
+                  }}
+                >
+                  删除
+                </Button>
               </div>
             </li>
           ))}
         </ul>
       )}
 
-      {editor && <PanelEditor botId={bot.id} platformId={platform.id} scope={scope} record={editor.record}
-        returnFocus={focusTrigger} onClose={() => setEditor(null)} onSaved={() => {
-          setEditor(null)
-          void panels.refetch()
-        }} />}
-      <ConfirmDialog open={!!deleting} returnFocus={focusTrigger} onOpenChange={(open) => {
-        if (!open && !remove.isPending) setDeleting(null)
-      }} title="删除 QQ 指令面板？"
-        body={<div className="grid gap-2"><p>删除后，该面板将从 QQ 中移除。</p>{remove.error && <ActionError error={remove.error} />}</div>}
-        confirmLabel="确认删除" loading={remove.isPending} onConfirm={() => { if (deleting) remove.mutate(deleting) }} />
+      {editor && (
+        <PanelEditor
+          botId={bot.id}
+          platformId={platform.id}
+          scope={scope}
+          record={editor.record}
+          returnFocus={focusTrigger}
+          onClose={() => setEditor(null)}
+          onSaved={() => {
+            setEditor(null)
+            void panels.refetch()
+          }}
+        />
+      )}
+      <ConfirmDialog
+        open={!!deleting}
+        returnFocus={focusTrigger}
+        onOpenChange={(open) => {
+          if (!open && !remove.isPending) setDeleting(null)
+        }}
+        title="删除 QQ 指令面板？"
+        body={
+          <div className="grid gap-2">
+            <p>删除后，该面板将从 QQ 中移除。</p>
+            {remove.error && <ActionError error={remove.error} />}
+          </div>
+        }
+        confirmLabel="确认删除"
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (deleting) remove.mutate(deleting)
+        }}
+      />
     </div>
   )
 }
@@ -263,22 +386,37 @@ export default function QqPanels({ bot }: { bot: Bot }) {
           <h2 className="font-display text-lg font-black text-ink">QQ 指令面板</h2>
           <p className="mt-1 text-sm leading-relaxed text-ink-2">点选指令会填入输入框，发送后才会触发。</p>
         </div>
-        <a href={DOCS} target="_blank" rel="noreferrer" className="inline-flex min-h-9 items-center gap-1 text-sm font-semibold text-sky hover:underline">
+        <a
+          href={DOCS}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-h-9 items-center gap-1 text-sm font-semibold text-sky hover:underline"
+        >
           QQ 文档 <ExternalLink className="size-3.5" aria-hidden />
         </a>
       </div>
       {accounts.length > 1 && (
         <Field label="QQ 机器人" htmlFor={accountId} className="max-w-sm">
           <Select id={accountId} value={account?.id} onChange={(event) => setSelected(event.target.value)}>
-            {accounts.map((platform) => <option key={platform.id} value={platform.id}>{platform.display_name} · {platform.app_id}</option>)}
+            {accounts.map((platform) => (
+              <option key={platform.id} value={platform.id}>
+                {platform.display_name} · {platform.app_id}
+              </option>
+            ))}
           </Select>
         </Field>
       )}
-      {account ? <PanelList key={account.id} bot={bot} platform={account} /> : (
+      {account ? (
+        <PanelList key={account.id} bot={bot} platform={account} />
+      ) : (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-paper-3 pt-4">
           <p className="text-sm text-ink-2">连接 QQ 官方机器人后即可管理指令。</p>
-          <Link className="inline-flex min-h-10 items-center rounded-xl border border-paper-3 px-4 text-sm font-semibold text-ink hover:bg-white"
-            to={`/app/bots/${bot.id}/connect`}>接入 QQ</Link>
+          <Link
+            className="inline-flex min-h-10 items-center rounded-xl border border-paper-3 px-4 text-sm font-semibold text-ink hover:bg-white"
+            to={`/app/bots/${bot.id}/connect`}
+          >
+            接入 QQ
+          </Link>
         </div>
       )}
     </section>

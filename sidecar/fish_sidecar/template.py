@@ -47,7 +47,13 @@ import_logs: list[tuple[str, str]] = []
 # Package name and main module of the imported plugin, set before plugin processes are forked.
 preimported: tuple[str, Any] | None = None
 
-_LEVELS = {logging.DEBUG: "debug", logging.INFO: "info", logging.WARNING: "warning", logging.ERROR: "error", logging.CRITICAL: "error"}
+_LEVELS = {
+    logging.DEBUG: "debug",
+    logging.INFO: "info",
+    logging.WARNING: "warning",
+    logging.ERROR: "error",
+    logging.CRITICAL: "error",
+}
 
 
 class _ImportStream(io.TextIOBase):
@@ -127,8 +133,20 @@ _FS_EVENTS: dict[str, tuple[int, ...]] = {
 }
 _SPAWN_EVENTS = {"os.system", "subprocess.Popen", "os.posix_spawn", "os.exec", "os.fork", "os.forkpty", "os.spawn"}
 _RANDOM_FUNCS = (
-    "random", "randint", "randrange", "choice", "choices", "sample", "shuffle", "uniform",
-    "getrandbits", "randbytes", "gauss", "normalvariate", "triangular", "betavariate",
+    "random",
+    "randint",
+    "randrange",
+    "choice",
+    "choices",
+    "sample",
+    "shuffle",
+    "uniform",
+    "getrandbits",
+    "randbytes",
+    "gauss",
+    "normalvariate",
+    "triangular",
+    "betavariate",
 )
 _SYSRANDOM_METHODS = ("random", "getrandbits", "randbytes")
 # Modules whose random state each plugin process seeds again after the fork.
@@ -349,7 +367,9 @@ class ImportWatch:
             return False
 
         def attributes(value: Any) -> dict[str, Any] | None:
-            if isinstance(value, (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)):
+            if isinstance(
+                value, (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+            ):
                 return None
             try:
                 attrs = object.__getattribute__(value, "__dict__")

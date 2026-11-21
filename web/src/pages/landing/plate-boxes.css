@@ -1,8 +1,49 @@
 /* Plate boxes: each plate's own ink box is mapped onto the comp's ink box for that region. */
-.lp-frame .lp-logo { left: 3.883%; top: 0.545%; width: 5.776%; height: 6.032%; }
-.lp-frame .lp-cloud { left: 5.335%; top: 11.895%; width: 41.180%; height: 25.465%; object-fit: fill; }
-.lp-frame .lp-steps-cloud { left: 5.415%; top: 82.090%; width: 20.616%; height: 14.921%; object-fit: fill; }
-.lp-frame .lp-next { left: -1.229%; top: calc(784.1 / 10.24 * 1%); width: 102.458%; height: 25.453%; }
-.lp-frame .lp-art { left: calc(731 / 15.36 * 1%); top: var(--r-illustration-y); width: calc(785 / 15.36 * 1%); height: calc(539 / 10.24 * 1%); object-position: center top; }
-.lp-frame .lp-sparkle { left: calc(659 / 15.36 * 1%); top: calc(491 / 10.24 * 1%); width: calc(54 / 15.36 * 1%); height: calc(34 / 10.24 * 1%); object-fit: contain; object-position: center; }
-.lp-frame .lp-book { left: calc(-36.1 / 15.36 * 1%); top: calc(62.4 / 10.24 * 1%); width: calc(1622.4 / 15.36 * 1%); height: calc(764.5 / 10.24 * 1%); object-fit: fill; }
+.lp-frame .lp-logo {
+  left: 3.883%;
+  top: 0.545%;
+  width: 5.776%;
+  height: 6.032%;
+}
+.lp-frame .lp-cloud {
+  left: 5.335%;
+  top: 11.895%;
+  width: 41.18%;
+  height: 25.465%;
+  object-fit: fill;
+}
+.lp-frame .lp-steps-cloud {
+  left: 5.415%;
+  top: 82.09%;
+  width: 20.616%;
+  height: 14.921%;
+  object-fit: fill;
+}
+.lp-frame .lp-next {
+  left: -1.229%;
+  top: calc(784.1 / 10.24 * 1%);
+  width: 102.458%;
+  height: 25.453%;
+}
+.lp-frame .lp-art {
+  left: calc(731 / 15.36 * 1%);
+  top: var(--r-illustration-y);
+  width: calc(785 / 15.36 * 1%);
+  height: calc(539 / 10.24 * 1%);
+  object-position: center top;
+}
+.lp-frame .lp-sparkle {
+  left: calc(659 / 15.36 * 1%);
+  top: calc(491 / 10.24 * 1%);
+  width: calc(54 / 15.36 * 1%);
+  height: calc(34 / 10.24 * 1%);
+  object-fit: contain;
+  object-position: center;
+}
+.lp-frame .lp-book {
+  left: calc(-36.1 / 15.36 * 1%);
+  top: calc(62.4 / 10.24 * 1%);
+  width: calc(1622.4 / 15.36 * 1%);
+  height: calc(764.5 / 10.24 * 1%);
+  object-fit: fill;
+}

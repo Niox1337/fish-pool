@@ -20,4 +20,4 @@ class GroupPlugin(Star):
 
     @adv.command("pow")
     async def adv_pow(self, event: AstrMessageEvent, a: int, b: int):
-        yield event.plain_result(f"pow={a ** b}")
+        yield event.plain_result(f"pow={a**b}")

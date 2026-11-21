@@ -83,7 +83,9 @@ def handler_descriptor(md: StarHandlerMetadata) -> dict[str, Any] | None:
         elif regex is not None:
             out.update(kind="regex", pattern=regex.regex_str)
         elif mtype is not None:
-            out.update(kind="event_message_type", pattern=mtype.event_message_type.name or str(mtype.event_message_type))
+            out.update(
+                kind="event_message_type", pattern=mtype.event_message_type.name or str(mtype.event_message_type)
+            )
         elif platform is not None and platform.platform_type is not None:
             out.update(kind="event_message_type", pattern=f"platform:{platform.platform_type.name}")
         elif filters:
@@ -132,7 +134,15 @@ class Dispatcher:
     def descriptors(self) -> list[dict[str, Any]]:
         out = [d for d in (handler_descriptor(md) for md in self.registry()) if d is not None]
         for tool in tools.plugin_tools(self.module_prefix):
-            out.append({"id": f"tool:{tool.name}", "priority": 0, "kind": "llm_tool", "pattern": tool.name, "tool": tools.tool_schema(tool)})
+            out.append(
+                {
+                    "id": f"tool:{tool.name}",
+                    "priority": 0,
+                    "kind": "llm_tool",
+                    "pattern": tool.name,
+                    "tool": tools.tool_schema(tool),
+                }
+            )
         return out
 
     def wake_commands(self) -> list[str] | None:
@@ -328,11 +338,15 @@ class Dispatcher:
             }
             if req.func_tool and not req.func_tool.empty():
                 response = await context.tool_loop_agent(
-                    event=event, chat_provider_id=adapter.PROVIDER_ID, tools=req.func_tool, **request,
+                    event=event,
+                    chat_provider_id=adapter.PROVIDER_ID,
+                    tools=req.func_tool,
+                    **request,
                 )
             else:
                 response = await context.get_using_provider().text_chat(
-                    tool_calls_result=req.tool_calls_result, **request,
+                    tool_calls_result=req.tool_calls_result,
+                    **request,
                 )
         except Exception as e:
             log.error("LLM request failed: %s", describe_error(e))

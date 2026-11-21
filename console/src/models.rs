@@ -19,7 +19,12 @@ pub const UNLIMITED_COUNT: i64 = -1;
 
 impl Default for AccountQuota {
     fn default() -> Self {
-        Self { memory_mb: 128, storage_mb: 128, bots: None, plugins: None }
+        Self {
+            memory_mb: 128,
+            storage_mb: 128,
+            bots: None,
+            plugins: None,
+        }
     }
 }
 
@@ -188,7 +193,11 @@ impl PlatformRow {
             return None;
         }
         let extra = parse_json_or(Some(&self.extra_json), json!({}));
-        Some(if extra.get("mode").and_then(Value::as_str) == Some("webhook") { "webhook" } else { "websocket" })
+        Some(if extra.get("mode").and_then(Value::as_str) == Some("webhook") {
+            "webhook"
+        } else {
+            "websocket"
+        })
     }
 }
 
@@ -227,7 +236,14 @@ impl PluginRow {
         self.schema_json.as_deref().and_then(|s| serde_json::from_str(s).ok())
     }
     pub fn config_revision(&self) -> String {
-        crate::crypto::sha256_hex(format!("{}\n{}", self.schema_json.as_deref().unwrap_or_default(), self.config_json).as_bytes())
+        crate::crypto::sha256_hex(
+            format!(
+                "{}\n{}",
+                self.schema_json.as_deref().unwrap_or_default(),
+                self.config_json
+            )
+            .as_bytes(),
+        )
     }
     pub fn view(&self) -> Value {
         json!({
@@ -337,8 +353,18 @@ pub fn build_desired(
         .filter(|k| k.user_id == user.id && settings.llm.key_id.as_deref() == Some(k.id.as_str()))
         .and_then(|k| {
             let api_key = decrypt(&k.api_key_enc)?;
-            let model = if settings.llm.model.trim().is_empty() { k.model.clone() } else { settings.llm.model.clone() };
-            Some(DesiredLlm { base_url: k.base_url.clone(), model, api_key, endpoint: String::new(), gateway_token: String::new() })
+            let model = if settings.llm.model.trim().is_empty() {
+                k.model.clone()
+            } else {
+                settings.llm.model.clone()
+            };
+            Some(DesiredLlm {
+                base_url: k.base_url.clone(),
+                model,
+                api_key,
+                endpoint: String::new(),
+                gateway_token: String::new(),
+            })
         });
     let platforms = platforms
         .iter()
@@ -374,7 +400,10 @@ pub fn build_desired(
         user_id: user.id.clone(),
         name: bot.name.clone(),
         running: bot.desired_running != 0,
-        quota: DesiredQuota { memory_mb: user.quota_memory_mb, storage_mb: user.quota_storage_mb },
+        quota: DesiredQuota {
+            memory_mb: user.quota_memory_mb,
+            storage_mb: user.quota_storage_mb,
+        },
         settings,
         llm,
         platforms,
@@ -486,13 +515,23 @@ mod tests {
         let d = build_desired(
             &user(),
             &bot,
-            &[platform("pl1", 1, "enc:s3cret"), platform("pl2", 1, "garbage"), platform("pl3", 0, "enc:x")],
+            &[
+                platform("pl1", 1, "enc:s3cret"),
+                platform("pl2", 1, "garbage"),
+                platform("pl3", 0, "enc:x"),
+            ],
             &[plugin()],
             Some(&key()),
             &dec,
         );
         assert!(d.running);
-        assert_eq!(d.quota, DesiredQuota { memory_mb: 256, storage_mb: 1024 });
+        assert_eq!(
+            d.quota,
+            DesiredQuota {
+                memory_mb: 256,
+                storage_mb: 1024
+            }
+        );
         let llm = d.llm.clone().unwrap();
         assert_eq!(llm.api_key, "sk-1234567890");
         assert_eq!(llm.model, "deepseek-chat");
@@ -507,7 +546,17 @@ mod tests {
         assert_eq!(d.plugins[0].commit, "c".repeat(40));
 
         let v = serde_json::to_value(&d).unwrap();
-        for k in ["bot_id", "user_id", "name", "running", "quota", "settings", "llm", "platforms", "plugins"] {
+        for k in [
+            "bot_id",
+            "user_id",
+            "name",
+            "running",
+            "quota",
+            "settings",
+            "llm",
+            "platforms",
+            "plugins",
+        ] {
             assert!(v.get(k).is_some(), "missing {k}");
         }
         assert_eq!(v["settings"]["llm"]["key_id"], "k1");
@@ -532,16 +581,36 @@ mod tests {
     fn admin_user_view_shape() {
         let mut u = user();
         u.last_login_at = Some(42);
-        let counts = UserCounts { bot_count: 1, plugin_count: 2, running_count: 1, error_count: 3 };
+        let counts = UserCounts {
+            bot_count: 1,
+            plugin_count: 2,
+            running_count: 1,
+            error_count: 3,
+        };
         let v = admin_user_view(&u, &counts, Some((10, 20)));
         assert_eq!(v["email"], "a@b.co");
         assert_eq!(v["quota"]["plugins"], 8);
-        assert_eq!((v["bots"].clone(), v["plugins"].clone(), v["running"].clone(), v["errors"].clone()), (json!(1), json!(2), json!(1), json!(3)));
-        assert_eq!((v["memory_bytes"].clone(), v["storage_bytes"].clone()), (json!(10), json!(20)));
+        assert_eq!(
+            (
+                v["bots"].clone(),
+                v["plugins"].clone(),
+                v["running"].clone(),
+                v["errors"].clone()
+            ),
+            (json!(1), json!(2), json!(1), json!(3))
+        );
+        assert_eq!(
+            (v["memory_bytes"].clone(), v["storage_bytes"].clone()),
+            (json!(10), json!(20))
+        );
         assert_eq!(v["last_login_at"], 42);
         assert!(v.get("password_hash").is_none());
         let unknown = admin_user_view(&user(), &UserCounts::default(), None);
-        assert!(unknown["memory_bytes"].is_null() && unknown["storage_bytes"].is_null() && unknown["last_login_at"].is_null());
+        assert!(
+            unknown["memory_bytes"].is_null()
+                && unknown["storage_bytes"].is_null()
+                && unknown["last_login_at"].is_null()
+        );
     }
 
     #[test]
