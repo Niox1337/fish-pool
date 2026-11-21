@@ -171,7 +171,6 @@ fn node_config(dir: &Path) -> Config {
         plugin_uid: None,
         plugin_gid: None,
         plugin_idle_sleep: None,
-        plugin_groups: false,
     }
 }
 
@@ -383,7 +382,6 @@ async fn light_plugins_share_a_group_process_and_others_run_alone() {
     let dir = tempfile::Builder::new().prefix("fg").tempdir_in("/tmp").unwrap();
     let mut cfg = node_config(dir.path());
     cfg.dev_services = true;
-    cfg.plugin_groups = true;
     cfg.plugin_idle_sleep = Some(Duration::from_secs(3));
     let cmd = json!({"id": "pc", "name": "cmd_plugin", "repo_url": "https://github.com/x/cmd", "version": "1", "enabled": true, "config": {}});
     let conf = json!({"id": "pf", "name": "conf_plugin", "repo_url": "https://github.com/x/conf", "version": "1", "enabled": true, "config": {}});

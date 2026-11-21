@@ -848,8 +848,7 @@ impl Bot {
             };
             let _ = std::fs::create_dir_all(&inst.data);
             chown_tree(&shared.cfg, &inst.data);
-            let grouped = shared.cfg.plugin_groups
-                && !self.solo.lock().unwrap().contains(&spec.id)
+            let grouped = !self.solo.lock().unwrap().contains(&spec.id)
                 && !has_own_packages(inst.site_packages.as_deref());
             let workdir = Groups::workdir(&shared.cfg.bot_dir(&user, &self.id));
             if grouped {
@@ -1555,7 +1554,6 @@ mod tests {
             plugin_uid: None,
             plugin_gid: None,
             plugin_idle_sleep: None,
-            plugin_groups: false,
         };
         let http = reqwest::Client::new();
         let sidecar = Arc::new(Sidecar::new(

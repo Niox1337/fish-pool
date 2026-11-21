@@ -183,6 +183,11 @@ impl Groups {
         }
         host.draining.store(true, Ordering::Relaxed);
         host.send(&json!({"op": "exit"}));
+        Self::drop_host(st, host);
+    }
+
+    /// Removes the group process from the processes new slots may use.
+    fn drop_host(st: &mut State, host: &Arc<Host>) {
         if let Some(hosts) = st.hosts.get_mut(&host.bot_id) {
             hosts.retain(|h| !Arc::ptr_eq(h, host));
             if hosts.is_empty() {
@@ -218,12 +223,7 @@ impl Groups {
         let senders: Vec<_> = {
             let mut st = self.state.lock().unwrap();
             st.slots.retain(|_, h| !Arc::ptr_eq(h, host));
-            if let Some(hosts) = st.hosts.get_mut(&host.bot_id) {
-                hosts.retain(|h| !Arc::ptr_eq(h, host));
-                if hosts.is_empty() {
-                    st.hosts.remove(&host.bot_id);
-                }
-            }
+            Self::drop_host(&mut st, host);
             host.slots.lock().unwrap().drain().map(|(_, tx)| tx).collect()
         };
         for tx in senders {
@@ -258,57 +258,51 @@ impl Groups {
             "wait_for_memory_limit": tenant.is_some(),
         });
         let pid = self.sidecar.spawn(req).await.map_err(fail)?;
-        if let Some((cgroups, user_id)) = tenant {
-            if let Err(e) = cgroups.add_pid(user_id, pid) {
-                self.sidecar.kill(&host_id).await;
-                return Err(fail(anyhow!("无法将插件进程加入内存配额组: {e}")));
+        let handshake = async {
+            if let Some((cgroups, user_id)) = tenant {
+                cgroups
+                    .add_pid(user_id, pid)
+                    .map_err(|e| anyhow!("无法将插件进程加入内存配额组: {e}"))?;
             }
-        }
-        let accepted = tokio::select! {
-            r = tokio::time::timeout(READY_TIMEOUT, listener.accept()) => r,
-            code = &mut exit_rx => return Err(fail(anyhow!("插件共用进程启动后立即退出 (code {})", code.unwrap_or(-1)))),
+            let accepted = tokio::select! {
+                r = tokio::time::timeout(READY_TIMEOUT, listener.accept()) => r,
+                code = &mut exit_rx => return Err(anyhow!("插件共用进程启动后立即退出 (code {})", code.unwrap_or(-1))),
+            };
+            let (mut stream, _) = accepted.map_err(|_| anyhow!("插件共用进程未连接"))??;
+            let _ = std::fs::remove_file(&sock);
+            if tenant.is_some() {
+                stream.write_all(&[0x01]).await?;
+            }
+            let (rd, wr) = stream.into_split();
+            let mut lines = BufReader::new(rd).lines();
+            let ready = tokio::time::timeout(READY_TIMEOUT, async {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let op = serde_json::from_str::<Value>(&line)
+                        .ok()
+                        .and_then(|v| v.get("op").and_then(Value::as_str).map(str::to_string));
+                    if op.as_deref() == Some("ready") {
+                        return true;
+                    }
+                }
+                false
+            });
+            let ready = tokio::select! {
+                r = ready => r.unwrap_or(false),
+                _ = &mut exit_rx => false,
+            };
+            if !ready {
+                return Err(anyhow!("插件共用进程没有就绪"));
+            }
+            Ok((lines, wr))
         };
-        let mut stream = match accepted {
-            Ok(Ok((s, _))) => s,
-            Ok(Err(e)) => {
+        let (mut lines, mut wr) = match handshake.await {
+            Ok(v) => v,
+            Err(e) => {
                 self.sidecar.kill(&host_id).await;
-                return Err(fail(e.into()));
-            }
-            Err(_) => {
-                self.sidecar.kill(&host_id).await;
-                return Err(fail(anyhow!("插件共用进程未连接")));
+                return Err(fail(e));
             }
         };
         drop(listener);
-        let _ = std::fs::remove_file(&sock);
-        if tenant.is_some() {
-            if let Err(e) = stream.write_all(&[0x01]).await {
-                self.sidecar.kill(&host_id).await;
-                return Err(fail(e.into()));
-            }
-        }
-        let (rd, mut wr) = stream.into_split();
-        let mut lines = BufReader::new(rd).lines();
-        let ready = tokio::time::timeout(READY_TIMEOUT, async {
-            while let Ok(Some(line)) = lines.next_line().await {
-                let is_ready = serde_json::from_str::<Value>(&line)
-                    .ok()
-                    .and_then(|v| v.get("op").and_then(Value::as_str).map(|op| op == "ready"))
-                    .unwrap_or(false);
-                if is_ready {
-                    return true;
-                }
-            }
-            false
-        });
-        let ready = tokio::select! {
-            r = ready => r.unwrap_or(false),
-            _ = &mut exit_rx => false,
-        };
-        if !ready {
-            self.sidecar.kill(&host_id).await;
-            return Err(fail(anyhow!("插件共用进程没有就绪")));
-        }
 
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         tokio::spawn(async move {

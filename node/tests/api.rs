@@ -26,7 +26,6 @@ fn config(dir: &std::path::Path) -> Config {
         plugin_uid: None,
         plugin_gid: None,
         plugin_idle_sleep: None,
-        plugin_groups: false,
     }
 }
 
