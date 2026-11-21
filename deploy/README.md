@@ -97,7 +97,7 @@ PIP_INDEX=https://mirrors.cloud.tencent.com/pypi/simple
 
 节点以 root 运行，插件以 uid 10001 (`fishplug`) 运行。
 
-- 节点为每个租户创建 `t-<user>` cgroup 并写入 `memory.max`，在插件加载前将进程加入该组。Compose 设置了 `cgroup: private` 和 `SYS_ADMIN`，入口脚本会尝试将 cgroup 目录重新挂载为可写。`SYS_PTRACE` 让节点能读取沙箱内插件进程（uid 10001）的 `/proc/<pid>/smaps_rollup`，按 PSS 统计插件内存。缺少它时节点退回 VmRSS，共享内存会被重复计入。插件进程的能力上限集为空，拿不到这项能力。节点无法启用 cgroup 时，每 5 分钟采样一次，连续 3 次超出配额后停止占用内存最大的插件。
+- 节点为每个租户创建 `t-<user>` cgroup 并写入 `memory.max`，在插件加载前将进程加入该组。Compose 设置了 `cgroup: private` 和 `SYS_ADMIN`，入口脚本会尝试将 cgroup 目录重新挂载为可写。`SYS_PTRACE` 让节点能读取沙箱内插件进程（uid 10001）的 `/proc/<pid>/smaps_rollup`，按 PSS 统计插件内存。缺少它时节点退回 VmRSS，共享内存会被重复计入。插件进程的能力上限集为空，拿不到这项能力。节点每 10 秒按自身 cgroup 的空闲内存调整各租户的 `memory.max`，在配额和两倍配额之间，并保留 256 MiB 不分出去，所以节点有余量时租户可以短时间超出配额。持续超出配额 3 分钟后，停止该租户占用内存最大的插件。节点无法启用 cgroup 时，每 5 分钟采样一次，连续 3 次超出配额后停止占用内存最大的插件。
 - 文件系统隔离: 节点启动时会探测 bubblewrap。可用时插件宿主运行在只读根文件系统中，只能写自己的租户目录和运行目录，看不到 `node.db` 等节点文件。不可用时会记录警告并直接运行插件宿主，此时插件没有沙箱。
 - seccomp 和 AppArmor 被设置为 unconfined，否则 bubblewrap 无法在容器内创建命名空间。
 - 共享导入: 同一份插件安装在插件宿主里只导入一次 (模板进程)，各机器人的插件进程从模板 fork 出来，共享已导入模块的内存，配置、数据目录和工作目录仍然各自独立。模板进程放在 `templates` cgroup，内存上限 512 MB。导入时依赖工作目录、随机数、线程或打开文件，或在模块里保存了导入时的时间或进程号的插件会自动改为单独加载，日志里会写原因。共享安装按插件提交号、当前解析出的依赖版本和 Python 版本区分，依赖有新版本时新安装不会复用旧的依赖。设置 `FISH_SIDECAR_TEMPLATES=0` 可以关闭。

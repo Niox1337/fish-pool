@@ -6,6 +6,113 @@ use serde_json::{json, Value};
 
 use crate::model::LlmSpec;
 
+/// An HTTP error reported by an LLM API, or an error object in a successful response when `status` is None.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: Option<reqwest::StatusCode>,
+    pub code: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.status {
+            Some(status) => write!(f, "LLM 返回 {status}: {}", self.message),
+            None => write!(f, "LLM 接口错误: {}", self.message),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+/// The LLM request did not get an HTTP response.
+#[derive(Debug)]
+pub struct RequestFailed(pub String);
+
+impl std::fmt::Display for RequestFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LLM 请求失败: {}", self.0)
+    }
+}
+
+impl std::error::Error for RequestFailed {}
+
+/// LLM failures with a known cause that the chat user is told about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Trouble {
+    NoKey,
+    Balance,
+    BadKey,
+    ModelMissing,
+    Busy,
+    Unreachable,
+    Refused,
+}
+
+impl Trouble {
+    /// Reply sent to the chat in place of the model's answer.
+    pub fn notice(self) -> &'static str {
+        match self {
+            Trouble::NoKey => "小鱼还没有配置模型 Key，暂时不能聊天。请小鱼的主人到控制台设置。",
+            Trouble::Balance => "小鱼的模型 Key 余额不足，暂时不能回复。请小鱼的主人充值或更换 Key。",
+            Trouble::BadKey => "小鱼的模型 Key 无效或已过期，暂时不能回复。请小鱼的主人到控制台检查。",
+            Trouble::ModelMissing => "小鱼选用的模型不可用，暂时不能回复。请小鱼的主人到控制台换一个模型。",
+            Trouble::Busy => "模型服务正忙，请稍后再问一次。",
+            Trouble::Unreachable => "暂时连不上模型服务，请稍后再试。",
+            Trouble::Refused => "模型没有回答这条消息，换个说法试试。",
+        }
+    }
+
+    /// Minimum time between two notices of this kind in one chat session.
+    pub fn cooldown(self) -> Duration {
+        match self {
+            Trouble::Busy | Trouble::Unreachable => Duration::from_secs(60),
+            Trouble::Refused => Duration::from_secs(10),
+            _ => Duration::from_secs(600),
+        }
+    }
+
+    /// Whether the same request with other options cannot succeed.
+    pub fn is_account_problem(self) -> bool {
+        matches!(self, Trouble::NoKey | Trouble::Balance | Trouble::BadKey | Trouble::ModelMissing)
+    }
+}
+
+/// Classifies an error from `chat_reply`. None for errors without a known cause.
+pub fn trouble(e: &anyhow::Error) -> Option<Trouble> {
+    if e.downcast_ref::<RequestFailed>().is_some() {
+        return Some(Trouble::Unreachable);
+    }
+    let api = e.downcast_ref::<ApiError>()?;
+    let text = format!("{} {}", api.code, api.message).to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| text.contains(w));
+    let status = api.status.map(|s| s.as_u16());
+    if status == Some(402)
+        || has(&["insufficient_quota", "insufficient_balance", "insufficient balance", "insufficient_user_quota",
+                 "exceeded your current quota", "credit balance is too low", "余额不足", "欠费", "arrearage"])
+    {
+        return Some(Trouble::Balance);
+    }
+    if status == Some(401)
+        || has(&["invalid_api_key", "invalid api key", "incorrect api key", "key_disabled", "key_expired", "authentication_error"])
+    {
+        return Some(Trouble::BadKey);
+    }
+    if status == Some(404) || has(&["model_not_found", "does not exist", "model not found", "no such model"]) {
+        return Some(Trouble::ModelMissing);
+    }
+    if matches!(status, Some(429) | Some(529)) || has(&["rate_limit", "overloaded"]) {
+        return Some(Trouble::Busy);
+    }
+    if status.is_some_and(|s| s >= 500) {
+        return Some(Trouble::Unreachable);
+    }
+    if has(&["content_filter", "content exists risk", "data_inspection_failed", "content_policy"]) {
+        return Some(Trouble::Refused);
+    }
+    None
+}
+
 const CLAUDE_BASE_URL: &str = "https://api.anthropic.com/v1";
 const CLAUDE_API_VERSION: &str = "2026-10-21";
 
@@ -385,8 +492,8 @@ const ASSISTANT_ECHO_FIELDS: [&str; 4] = ["content", "tool_calls", "reasoning_co
 /// Extracts the assistant text and tool calls from a chat completion response.
 pub fn parse_response(v: &Value) -> Result<ChatReply> {
     if let Some(err) = v.get("error") {
-        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
-        return Err(anyhow!("LLM 接口错误: {msg}"));
+        let message = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error").to_string();
+        return Err(ApiError { status: None, code: error_code(err), message }.into());
     }
     let message = v.pointer("/choices/0/message").ok_or_else(|| anyhow!("LLM 响应缺少 choices"))?;
     let text = match message.get("content").unwrap_or(&Value::Null) {
@@ -445,6 +552,19 @@ fn strip_think(s: &str) -> &str {
     s
 }
 
+/// `code` and `type` of an OpenAI or Claude error object, joined by a space.
+fn error_code(err: &Value) -> String {
+    ["code", "type"]
+        .iter()
+        .filter_map(|k| match err.get(*k) {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Sends one chat request and returns the text and any tool calls.
 pub async fn chat_reply(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<ChatReply> {
     if req.spec.api_key.is_empty() || req.spec.base_url.is_empty() {
@@ -472,17 +592,18 @@ pub async fn chat_reply(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<
     let resp = request
         .send()
         .await
-        .map_err(|e| anyhow!("LLM 请求失败: {e}"))?;
+        .map_err(|e| RequestFailed(e.to_string()))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     let v: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
     if !status.is_success() {
-        let msg = v
+        let message = v
             .pointer("/error/message")
             .and_then(|m| m.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| text.chars().take(300).collect());
-        return Err(anyhow!("LLM 返回 {status}: {msg}"));
+        let code = v.get("error").map(error_code).unwrap_or_default();
+        return Err(ApiError { status: Some(status), code, message }.into());
     }
     if claude { parse_claude_response(&v) } else { parse_response(&v) }
 }
@@ -490,6 +611,37 @@ pub async fn chat_reply(http: &reqwest::Client, req: ChatRequest<'_>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn api(status: u16, body: Value) -> anyhow::Error {
+        let err = &body["error"];
+        ApiError {
+            status: Some(reqwest::StatusCode::from_u16(status).unwrap()),
+            code: error_code(err),
+            message: err["message"].as_str().unwrap_or_default().to_string(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn classifies_known_llm_failures() {
+        let gw = |status, code: &str, message: &str| api(status, json!({"error": {"message": message, "type": code, "code": code}}));
+        assert_eq!(trouble(&gw(402, "insufficient_quota", "API Key 余额不足")), Some(Trouble::Balance));
+        assert_eq!(trouble(&gw(429, "insufficient_quota", "You exceeded your current quota")), Some(Trouble::Balance));
+        assert_eq!(trouble(&api(400, json!({"type": "error", "error": {"type": "invalid_request_error", "message": "Your credit balance is too low to access the Anthropic API."}}))), Some(Trouble::Balance));
+        assert_eq!(trouble(&gw(401, "invalid_api_key", "API Key 无效")), Some(Trouble::BadKey));
+        assert_eq!(trouble(&gw(403, "key_expired", "这个 API Key 已过期")), Some(Trouble::BadKey));
+        assert_eq!(trouble(&gw(404, "model_not_found", "网关没有开放模型 x")), Some(Trouble::ModelMissing));
+        assert_eq!(trouble(&gw(400, "invalid_request_error", "The model `gpt-x` does not exist")), Some(Trouble::ModelMissing));
+        assert_eq!(trouble(&gw(429, "rate_limit_exceeded", "请求太频繁，请稍后再试")), Some(Trouble::Busy));
+        assert_eq!(trouble(&gw(503, "upstream_error", "网关暂时不可用")), Some(Trouble::Unreachable));
+        assert_eq!(trouble(&gw(400, "invalid_request_error", "Content Exists Risk")), Some(Trouble::Refused));
+        assert_eq!(trouble(&gw(400, "invalid_request_error", "max_tokens is too large")), None);
+        assert_eq!(trouble(&RequestFailed("timeout".into()).into()), Some(Trouble::Unreachable));
+        assert_eq!(trouble(&anyhow!("LLM 响应缺少 choices")), None);
+        let in_body = parse_response(&json!({"error": {"message": "Insufficient Balance", "code": "invalid_request_error"}})).unwrap_err();
+        assert_eq!(trouble(&in_body), Some(Trouble::Balance));
+        assert_eq!(gw(402, "insufficient_quota", "API Key 余额不足").to_string(), "LLM 返回 402 Payment Required: API Key 余额不足");
+    }
 
     #[test]
     fn body_shape_with_images() {

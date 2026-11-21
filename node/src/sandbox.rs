@@ -140,8 +140,28 @@ fn write(path: &Path, value: &str) -> std::io::Result<()> {
     std::fs::write(path, value)
 }
 
-fn tenant_limit_bytes(memory_mb: u64) -> u64 {
+pub fn tenant_limit_bytes(memory_mb: u64) -> u64 {
     memory_mb.max(32) * 1024 * 1024
+}
+
+/// Upper bound of a tenant's `memory.max` as a multiple of its quota.
+pub const BURST_FACTOR: u64 = 2;
+
+/// A cgroup interface file holding one number. None for `max`, a missing file or other text.
+fn read_u64(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+/// `memory.current` minus `inactive_file` from `memory.stat` of the group at `dir`.
+fn working_set(dir: &Path) -> Option<u64> {
+    let current = read_u64(&dir.join("memory.current"))?;
+    let stat = std::fs::read_to_string(dir.join("memory.stat")).unwrap_or_default();
+    let inactive = stat
+        .lines()
+        .find_map(|l| l.strip_prefix("inactive_file "))
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    Some(current.saturating_sub(inactive))
 }
 
 impl Cgroups {
@@ -194,25 +214,57 @@ impl Cgroups {
         self.base.join(format!("t-{}", safe_name(user_id)))
     }
 
+    /// Creates the tenant group and keeps its `memory.max` between the quota and `BURST_FACTOR` times the quota.
+    /// A burst allowance granted earlier survives a desired state update when it still fits the quota.
     pub fn set_limit(&self, user_id: &str, memory_mb: u64) {
         let dir = self.tenant(user_id);
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::warn!("cgroup mkdir {}: {e}", dir.display());
             return;
         }
-        let bytes = tenant_limit_bytes(memory_mb);
+        let quota = tenant_limit_bytes(memory_mb);
+        let bytes = self.memory_max(user_id).map_or(quota, |cur| cur.clamp(quota, quota * BURST_FACTOR));
         if let Err(e) = write(&dir.join("memory.max"), &bytes.to_string()) {
             tracing::warn!("cgroup memory.max: {e}");
         }
         let _ = write(&dir.join("memory.swap.max"), "0");
     }
 
-    /// Whether the kernel enforces the requested limit or a stricter one.
-    pub fn enforces_limit(&self, user_id: &str, memory_mb: u64) -> bool {
-        std::fs::read_to_string(self.tenant(user_id).join("memory.max"))
-            .ok()
-            .and_then(|limit| limit.trim().parse::<u64>().ok())
-            .is_some_and(|limit| limit <= tenant_limit_bytes(memory_mb))
+    /// The tenant's finite `memory.max` in bytes. None when the group is missing or unlimited.
+    pub fn memory_max(&self, user_id: &str) -> Option<u64> {
+        read_u64(&self.tenant(user_id).join("memory.max"))
+    }
+
+    /// Writes the tenant's `memory.max`, kept between the quota and `BURST_FACTOR` times the quota.
+    pub fn set_memory_max(&self, user_id: &str, memory_mb: u64, bytes: u64) {
+        let quota = tenant_limit_bytes(memory_mb);
+        let bytes = bytes.clamp(quota, quota * BURST_FACTOR);
+        if self.memory_max(user_id) == Some(bytes) {
+            return;
+        }
+        if let Err(e) = write(&self.tenant(user_id).join("memory.max"), &bytes.to_string()) {
+            tracing::warn!("cgroup memory.max for {user_id}: {e}");
+        }
+    }
+
+    /// Memory the kernel charges to the tenant minus reclaimable inactive file cache, in bytes.
+    pub fn tenant_working_set(&self, user_id: &str) -> Option<u64> {
+        working_set(&self.tenant(user_id))
+    }
+
+    /// Bytes the node's own group can still use before its limit. Uses `MemAvailable` when the group has no limit.
+    pub fn node_available(&self) -> Option<u64> {
+        match read_u64(&self.base.join("memory.max")) {
+            Some(limit) => Some(limit.saturating_sub(working_set(&self.base)?)),
+            None => {
+                let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+                text.lines()
+                    .find_map(|l| l.strip_prefix("MemAvailable:"))
+                    .and_then(|r| r.split_whitespace().next())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(|kb| kb * 1024)
+            }
+        }
     }
 
     pub fn add_pid(&self, user_id: &str, pid: u32) -> std::io::Result<()> {
@@ -251,16 +303,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tenant_limit_requires_a_finite_cap_at_or_below_quota() {
+    fn tenant_limit_keeps_a_burst_within_the_quota_range() {
         let root = tempfile::tempdir().unwrap();
         let groups = Cgroups { base: root.path().to_path_buf() };
-        assert!(!groups.enforces_limit("u1", 128));
+        let mib = 1024 * 1024;
+        assert_eq!(groups.memory_max("u1"), None);
         groups.set_limit("u1", 128);
-        assert!(groups.enforces_limit("u1", 128));
-        assert!(groups.enforces_limit("u1", 256));
-        assert!(!groups.enforces_limit("u1", 64));
+        assert_eq!(groups.memory_max("u1"), Some(128 * mib));
+        groups.set_memory_max("u1", 128, 1000 * mib);
+        assert_eq!(groups.memory_max("u1"), Some(256 * mib));
+        groups.set_memory_max("u1", 128, 200 * mib);
+        groups.set_limit("u1", 128);
+        assert_eq!(groups.memory_max("u1"), Some(200 * mib));
+        groups.set_limit("u1", 64);
+        assert_eq!(groups.memory_max("u1"), Some(128 * mib));
+        groups.set_memory_max("u1", 64, 0);
+        assert_eq!(groups.memory_max("u1"), Some(64 * mib));
         write(&groups.tenant("u1").join("memory.max"), "max\n").unwrap();
-        assert!(!groups.enforces_limit("u1", 128));
+        assert_eq!(groups.memory_max("u1"), None);
+    }
+
+    #[test]
+    fn working_set_excludes_inactive_file_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let groups = Cgroups { base: root.path().to_path_buf() };
+        let dir = groups.tenant("u1");
+        std::fs::create_dir_all(&dir).unwrap();
+        write(&dir.join("memory.current"), "1000\n").unwrap();
+        write(&dir.join("memory.stat"), "anon 600\nactive_file 100\ninactive_file 300\n").unwrap();
+        assert_eq!(groups.tenant_working_set("u1"), Some(700));
+        write(&root.path().join("memory.max"), "5000\n").unwrap();
+        write(&root.path().join("memory.current"), "2000\n").unwrap();
+        assert_eq!(groups.node_available(), Some(3000));
     }
 }
 

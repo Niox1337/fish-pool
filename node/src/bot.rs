@@ -144,6 +144,8 @@ pub struct Bot {
     dormant: Mutex<HashMap<String, DormantPlugin>>,
     /// Bumped whenever a plugin leaves `dormant`.
     dormant_gen: watch::Sender<u64>,
+    /// Last LLM failure notice per chat session and kind.
+    notices: Mutex<HashMap<(String, llm::Trouble), Instant>>,
 }
 
 fn log_level(l: &str) -> &'static str {
@@ -185,6 +187,7 @@ impl Bot {
             handlers: Arc::new(Semaphore::new(8)),
             dormant: Mutex::new(HashMap::new()),
             dormant_gen: watch::channel(0).0,
+            notices: Mutex::new(HashMap::new()),
         })
     }
 
@@ -330,13 +333,13 @@ impl Bot {
         let mut rt = self.rt.lock().await;
         if let Some(slot) = rt.plugins.remove(plugin_id) {
             self.logs
-                .warn(&format!("plugin:{}", slot.spec.name), "内存超出配额，插件已停止");
+                .warn(&format!("plugin:{}", slot.spec.name), "内存长时间超出配额，插件已停止");
             Self::stop_slot(slot).await;
         }
         self.set_plugin_status(
             plugin_id,
             "over_quota",
-            "内存超出配额，插件已停止，重启机器人后恢复",
+            "内存长时间超出配额，插件已停止，重启机器人后恢复",
             None,
         );
     }
@@ -574,7 +577,7 @@ impl Bot {
                     self.set_plugin_status(
                         &spec.id,
                         "over_quota",
-                        "内存超出配额，插件已停止，重启机器人后恢复",
+                        "内存长时间超出配额，插件已停止，重启机器人后恢复",
                         None,
                     );
                 } else {
@@ -1139,6 +1142,7 @@ impl Bot {
         }
         let Some(spec) = spec.filter(|l| !l.api_key.is_empty()) else {
             self.logs.warn("llm", "未配置 LLM 密钥，无法回复");
+            self.notify_trouble(target, &ev.unified_msg_origin, llm::Trouble::NoKey).await;
             return;
         };
         let session = &ev.unified_msg_origin;
@@ -1225,6 +1229,9 @@ impl Bot {
                 }
                 Err(e) => {
                     self.logs.error("llm", format!("{e:#}"));
+                    if let Some(t) = llm::trouble(&e) {
+                        self.notify_trouble(target, session, t).await;
+                    }
                     return;
                 }
             };
@@ -1245,6 +1252,23 @@ impl Bot {
         } else if !sent_by_tools {
             self.logs.warn("llm", "模型返回了空回复");
         }
+    }
+
+    /// Tells the chat why there is no reply, at most once per `Trouble::cooldown` for each session and kind.
+    async fn notify_trouble(&self, target: &ReplyTarget, session: &str, trouble: llm::Trouble) {
+        let now = Instant::now();
+        {
+            let mut notices = self.notices.lock().unwrap();
+            let key = (session.to_string(), trouble);
+            if notices.get(&key).is_some_and(|t| now.duration_since(*t) < trouble.cooldown()) {
+                return;
+            }
+            if notices.len() > 1024 {
+                notices.retain(|(_, k), t| now.duration_since(*t) < k.cooldown());
+            }
+            notices.insert(key, now);
+        }
+        self.send_to_target(target, &[Component::plain(trouble.notice())]).await;
     }
 
     /// Function tools of all running plugins. The first plugin, by name, wins a duplicate tool name.
@@ -1424,11 +1448,12 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// True for an HTTP 4xx answer from the provider, which usually means the request shape was rejected.
+/// A 4xx response that a request without tools may avoid.
 fn is_client_error(e: &anyhow::Error) -> bool {
-    let msg = e.to_string();
-    msg.strip_prefix("LLM 返回 4").is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-        && !msg.starts_with("LLM 返回 401")
-        && !msg.starts_with("LLM 返回 429")
+    e.downcast_ref::<llm::ApiError>()
+        .and_then(|a| a.status)
+        .is_some_and(|s| s.is_client_error())
+        && !llm::trouble(e).is_some_and(|t| t.is_account_problem() || t == llm::Trouble::Busy)
 }
 
 fn contexts_to_messages(v: Option<&Value>) -> Vec<ChatMessage> {

@@ -224,7 +224,13 @@ async fn loopback_requires_explicit_fish_dev_and_running_bot() {
     assert_eq!(status, 200);
     let (status, outbox) = call(&base, "GET", "/v1/dev/bots/b/outbox", None).await;
     assert_eq!(status, 200);
-    assert_eq!(outbox["items"], json!([]));
+    let notice = fish_node::llm::Trouble::NoKey.notice();
+    assert_eq!(outbox["items"].as_array().unwrap().len(), 1, "{outbox}");
+    assert_eq!(outbox["items"][0]["chain"][0]["text"], notice, "{outbox}");
+    let (status, _) = call(&base, "POST", path, Some(json!({"text": "hi again", "session_id": "u", "message_id": "m2"}))).await;
+    assert_eq!(status, 200);
+    let (_, outbox) = call(&base, "GET", "/v1/dev/bots/b/outbox", None).await;
+    assert_eq!(outbox["items"].as_array().unwrap().len(), 1, "the notice repeats only after its cooldown: {outbox}");
     let (status, _) = call(
         &base,
         "POST",

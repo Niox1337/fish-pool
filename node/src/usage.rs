@@ -9,10 +9,17 @@ use crate::bot::Bot;
 use crate::model::Quota;
 use crate::node::Node;
 use crate::plugin::install::dir_size;
+use crate::sandbox::{tenant_limit_bytes, BURST_FACTOR};
 use crate::sign::now_ms;
 
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(300);
 pub const OVER_QUOTA_SAMPLES: u32 = 3;
+/// How often kernel-limited tenants are checked for memory bursts.
+pub const BURST_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+/// How long a kernel-limited tenant may stay above its quota before its largest plugin stops.
+pub const BURST_WINDOW: Duration = Duration::from_secs(180);
+/// Node memory that bursts never use.
+const NODE_RESERVE: u64 = 256 * MIB;
 const MIB: u64 = 1024 * 1024;
 const CPU_PLUGIN_ROWS: usize = 20;
 
@@ -80,6 +87,15 @@ pub struct Usage {
     plugin_cpu: Mutex<Option<PluginCpuSample>>,
     cpu_prev: Mutex<HashMap<u32, (u64, Instant)>>,
     over_count: Mutex<HashMap<String, u32>>,
+    /// Kernel-limited tenants above their quota, with the time each went over.
+    over_since: Mutex<HashMap<String, Instant>>,
+}
+
+/// `memory.max` for a tenant with `quota` bytes that uses `working_set` bytes while the node has `available` bytes left.
+/// Half of the node memory above `reserve` is offered on top of the current use, within the quota and `BURST_FACTOR` times the quota.
+pub fn burst_limit(quota: u64, working_set: u64, available: u64, reserve: u64) -> u64 {
+    let spare = available.saturating_sub(reserve) / 2;
+    working_set.saturating_add(spare).clamp(quota, quota * BURST_FACTOR)
 }
 
 impl Usage {
@@ -247,8 +263,8 @@ impl Usage {
         {
             let mut counts = self.over_count.lock().unwrap();
             for (user, (mem, _, quota)) in &per_user {
-                if node.shared.cgroups.as_ref().is_some_and(|cg| cg.enforces_limit(user, *quota)) {
-                    // PSS includes a share of pages that the kernel charges to the fork server.
+                if node.shared.cgroups.as_ref().is_some_and(|cg| cg.memory_max(user).is_some()) {
+                    // Kernel-limited tenants are handled by `enforce_bursts`. PSS includes a share of pages that the kernel charges to the fork server.
                     counts.remove(user);
                     continue;
                 }
@@ -270,6 +286,70 @@ impl Usage {
         for (bot, plugin_id) in to_stop {
             tracing::warn!("memory quota exceeded, stopping plugin {plugin_id} of bot {}", bot.id);
             bot.stop_over_quota(&plugin_id).await;
+        }
+    }
+
+    /// Raises or lowers each kernel-limited tenant's `memory.max` with the node's free memory and stops the
+    /// tenant's largest plugin after it stayed above its quota for `BURST_WINDOW`.
+    pub async fn enforce_bursts(&self, node: &Node) {
+        let Some(cg) = node.shared.cgroups.as_ref() else { return };
+        let bots = node.all();
+        let mut quotas: HashMap<String, u64> = HashMap::new();
+        for bot in &bots {
+            let d = bot.desired.read().unwrap();
+            let q = quotas.entry(d.user_id.clone()).or_insert(0);
+            *q = (*q).max(d.quota.memory_mb);
+        }
+        let available = cg.node_available().unwrap_or(0);
+        let now = Instant::now();
+        let mut started = vec![];
+        let mut expired = vec![];
+        {
+            let mut over = self.over_since.lock().unwrap();
+            over.retain(|u, _| quotas.contains_key(u));
+            for (user, mb) in &quotas {
+                if cg.memory_max(user).is_none() {
+                    continue;
+                }
+                let Some(ws) = cg.tenant_working_set(user) else { continue };
+                let quota = tenant_limit_bytes(*mb);
+                cg.set_memory_max(user, *mb, burst_limit(quota, ws, available, NODE_RESERVE));
+                if ws <= quota {
+                    over.remove(user);
+                    continue;
+                }
+                match over.get(user) {
+                    None => {
+                        over.insert(user.clone(), now);
+                        started.push(user.clone());
+                    }
+                    Some(since) if now.duration_since(*since) >= BURST_WINDOW => {
+                        over.remove(user);
+                        expired.push(user.clone());
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        let minutes = BURST_WINDOW.as_secs() / 60;
+        for user in started {
+            for bot in bots.iter().filter(|b| b.user_id() == user) {
+                bot.logs.warn("core", format!("内存超出配额，正在临时使用节点余量。{minutes} 分钟内回落到配额以内就不会停止插件"));
+            }
+        }
+        for user in expired {
+            let mut largest: Option<(u64, Arc<Bot>, String)> = None;
+            for bot in bots.iter().filter(|b| b.user_id() == user) {
+                for s in self.collect_bot(bot).await {
+                    if s.kind == "plugin" && largest.as_ref().is_none_or(|(m, _, _)| s.memory_bytes > *m) {
+                        largest = Some((s.memory_bytes, bot.clone(), s.plugin_id.clone().unwrap_or_default()));
+                    }
+                }
+            }
+            if let Some((_, bot, plugin_id)) = largest {
+                tracing::warn!("memory burst of {user} lasted {minutes} min, stopping plugin {plugin_id} of bot {}", bot.id);
+                bot.stop_over_quota(&plugin_id).await;
+            }
         }
     }
 
@@ -363,6 +443,20 @@ pub fn spawn_sampler(node: Arc<Node>) {
     });
 }
 
+pub fn spawn_burst_guard(node: Arc<Node>) {
+    if node.shared.cgroups.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(BURST_CHECK_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            node.usage.enforce_bursts(&node).await;
+        }
+    });
+}
+
 /// Returns `(total, used)` system memory in bytes.
 pub async fn system_memory() -> (u64, u64) {
     if cfg!(target_os = "linux") {
@@ -400,6 +494,16 @@ pub async fn system_memory() -> (u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn burst_limit_offers_half_of_the_spare_node_memory() {
+        let q = 100 * MIB;
+        assert_eq!(burst_limit(q, 50 * MIB, 1000 * MIB, 256 * MIB), 2 * q);
+        assert_eq!(burst_limit(q, 50 * MIB, 356 * MIB, 256 * MIB), q);
+        assert_eq!(burst_limit(q, 120 * MIB, 296 * MIB, 256 * MIB), 140 * MIB);
+        assert_eq!(burst_limit(q, 150 * MIB, 100 * MIB, 256 * MIB), 150 * MIB);
+        assert_eq!(burst_limit(q, 10 * MIB, 0, 256 * MIB), q);
+    }
 
     #[test]
     fn proc_parsers() {
