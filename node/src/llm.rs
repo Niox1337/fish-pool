@@ -53,13 +53,13 @@ impl Trouble {
     /// Reply sent to the chat in place of the model's answer.
     pub fn notice(self) -> &'static str {
         match self {
-            Trouble::NoKey => "小鱼还没有配置模型 Key，暂时不能聊天。请小鱼的主人到控制台设置。",
-            Trouble::Balance => "小鱼的模型 Key 余额不足，暂时不能回复。请小鱼的主人充值或更换 Key。",
-            Trouble::BadKey => "小鱼的模型 Key 无效或已过期，暂时不能回复。请小鱼的主人到控制台检查。",
-            Trouble::ModelMissing => "小鱼选用的模型不可用，暂时不能回复。请小鱼的主人到控制台换一个模型。",
-            Trouble::Busy => "模型服务正忙，请稍后再问一次。",
-            Trouble::Unreachable => "暂时连不上模型服务，请稍后再试。",
-            Trouble::Refused => "模型没有回答这条消息，换个说法试试。",
+            Trouble::NoKey => "我还没有接上 AI 模型，暂时没法聊天哦。请小鱼的主人登录 fish.niox.lol，先在「模型 Key」里添加一个 Key，再到「机器人设置」里选上它。",
+            Trouble::Balance => "我用的 AI 模型账户没余额啦，暂时回不了消息。请小鱼的主人给模型 Key 充值，或者登录 fish.niox.lol，在「机器人设置」里换一个有余额的 Key。",
+            Trouble::BadKey => "我用的模型 Key 失效了，可能是填错了、被停用了或者过期了，暂时回不了消息。请小鱼的主人登录 fish.niox.lol，在「模型 Key」里检查或重新添加。",
+            Trouble::ModelMissing => "我选的 AI 模型现在用不了，可能是名字填错了或者已经下线，暂时回不了消息。请小鱼的主人登录 fish.niox.lol，在「机器人设置」里换一个模型。",
+            Trouble::Busy => "AI 模型那边现在太忙了，我排不上队。等一两分钟再来找我吧。",
+            Trouble::Unreachable => "我暂时连不上 AI 模型，可能是对方服务出了点问题。过几分钟再试试吧。",
+            Trouble::Refused => "这条消息被 AI 模型的内容审核拦下了，我没法回答。换个说法再问问吧。",
         }
     }
 
