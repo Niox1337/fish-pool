@@ -78,6 +78,8 @@ export default function LandingSections() {
         </div>
       </section>
 
+      <LandingGroup />
+
       <section id="faq" className="ls-faq" aria-labelledby="ls-faq-title">
         <h2 id="ls-faq-title" className="ls-section-title">
           常见问题
@@ -94,8 +96,6 @@ export default function LandingSections() {
           ))}
         </div>
       </section>
-
-      <LandingGroup />
 
       <section data-loop className="ls-end" aria-labelledby="ls-end-title">
         <Pupil mood="wave" size={144} />
@@ -120,7 +120,6 @@ export default function LandingSections() {
             </a>
           </nav>
         </div>
-        <p className="ls-foot-note">插件由 AstrBot 本体运行，托管班与 AstrBot 官方无关。</p>
       </footer>
     </div>
   )
