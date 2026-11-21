@@ -317,12 +317,12 @@
   8%,
   26%,
   44% {
-    rotate: -18deg;
+    rotate: -16deg;
   }
   17%,
   35%,
   53% {
-    rotate: 10deg;
+    rotate: 4deg;
   }
 }
 @keyframes lp-wave-bob {
