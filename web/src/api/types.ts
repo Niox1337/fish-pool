@@ -26,7 +26,7 @@ export type LlmKey = {
 }
 
 /** One usable event credit, in billing order. */
-export type BalanceCredit = {
+type BalanceCredit = {
   available: string
   amount: string
   spent: string
@@ -97,7 +97,7 @@ export type BotSettings = {
 }
 
 export type BotStatus = 'starting' | 'running' | 'stopped' | 'error'
-export type PlatformKind = 'qq_official' | 'weixin_ilink'
+type PlatformKind = 'qq_official' | 'weixin_ilink'
 
 export type Platform = {
   id: string
@@ -307,7 +307,7 @@ export type AdminOverview = {
   problems: AdminProblem[]
 }
 
-export type SysPluginRef = { user_id: string; bot_id: string; bot_name: string; plugin_id: string; label: string }
+type SysPluginRef = { user_id: string; bot_id: string; bot_name: string; plugin_id: string; label: string }
 
 export type SysProcess = {
   pid: number

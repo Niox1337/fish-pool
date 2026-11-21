@@ -2,6 +2,7 @@ import type { BotStatus, Platform, PluginStatus } from '@/api/types'
 import { Pill } from '@/components/ui'
 import { QqPenguin, WeChatBubble } from '@/components/icons'
 import { cn } from '@/lib/cn'
+import { platformName } from './platform'
 
 const botStatus: Record<BotStatus, { label: string; tone: 'ok' | 'warn' | 'bad' | 'idle' }> = {
   running: { label: '运行中', tone: 'ok' },
@@ -36,8 +37,6 @@ export function PluginStatusPill({ status }: { status: PluginStatus }) {
     </Pill>
   )
 }
-
-export const platformName = { qq_official: 'QQ', weixin_ilink: '微信' } as const
 
 export function PlatformBadge({ platform }: { platform: Platform }) {
   const Icon = platform.kind === 'qq_official' ? QqPenguin : WeChatBubble

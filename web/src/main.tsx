@@ -1,6 +1,6 @@
 import { createRoot, hydrateRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router'
-import { reloadForNewVersion } from './components/ErrorBoundary'
+import { reloadForNewVersion } from './lib/reload'
 import { createQueryClient } from './queryClient'
 import { Root } from './Root'
 import './index.css'

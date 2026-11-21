@@ -290,7 +290,7 @@ pub async fn patch(req: &mut Request, app: &App, bot_id: &str, pid: &str) -> Api
     if let (Some(m), Some(obj)) = (mode, extra.as_object_mut()) {
         obj.insert("mode".into(), json!(m));
     }
-    let (status, detail) = if (enabled != 0 && p.enabled == 0) || (enabled != 0 && mode_changed) {
+    let (status, detail) = if enabled != 0 && (p.enabled == 0 || mode_changed) {
         ("connecting", "")
     } else {
         (p.status.as_str(), p.status_detail.as_str())

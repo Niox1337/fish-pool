@@ -94,9 +94,6 @@
   * {
     scrollbar-color: var(--color-paper-3) transparent;
   }
-  .tnum {
-    font-variant-numeric: tabular-nums;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

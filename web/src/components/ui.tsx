@@ -1,6 +1,5 @@
 import {
   forwardRef,
-  useId,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -28,7 +27,7 @@ const sizes: Record<Size, string> = {
   lg: 'h-12 px-6 text-base gap-2 rounded-2xl [&_svg]:size-5',
 }
 
-export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: Variant
   size?: Size
   loading?: boolean
@@ -112,10 +111,6 @@ export function Field({
   )
 }
 
-export function useFieldId(prefix: string) {
-  return `${prefix}-${useId().replace(/:/g, '')}`
-}
-
 export function Switch({
   checked,
   onCheckedChange,
@@ -140,25 +135,6 @@ export function Switch({
     >
       <SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-[0_1px_3px_rgb(27_33_99/0.3)] transition-transform duration-200 ease-[var(--ease-out-expo)] data-[state=checked]:translate-x-[22px]" />
     </SwitchPrimitive.Root>
-  )
-}
-
-export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return (
-    <section className={cn('rounded-2xl border border-paper-3 bg-cream p-5 shadow-[var(--shadow-soft)] sm:p-6', className)}>
-      {children}
-    </section>
-  )
-}
-
-export function SectionTitle({ children, aside, id }: { children: ReactNode; aside?: ReactNode; id?: string }) {
-  return (
-    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <h2 id={id} className="font-display text-lg font-black text-ink">
-        {children}
-      </h2>
-      {aside}
-    </div>
   )
 }
 

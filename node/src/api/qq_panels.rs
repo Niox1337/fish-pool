@@ -158,7 +158,7 @@ pub(super) async fn create(
     let qq = connect(&node, &bot_id, &platform_id)?;
     let data = json!({"scope": input.scope, "target_type": "all", "panel": panel});
     let result = call(&node, &qq, Method::POST, PANELS, Some(&data)).await?;
-    if !result.get("panel_id").and_then(Value::as_str).is_some_and(|id| !id.is_empty()) {
+    if result.get("panel_id").and_then(Value::as_str).is_none_or(str::is_empty) {
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "qq_panel_upstream", "QQ 未返回面板 ID，请刷新列表确认创建结果"));
     }
     Ok(Json(result))

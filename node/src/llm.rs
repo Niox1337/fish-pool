@@ -824,7 +824,7 @@ mod tests {
         assert!(parse_response(&json!({})).is_err());
     }
 
-    fn tool_request<'a>(spec: &'a LlmSpec, messages: Vec<ChatMessage>, none: bool) -> Value {
+    fn tool_request(spec: &LlmSpec, messages: Vec<ChatMessage>, none: bool) -> Value {
         build_body(&ChatRequest {
             spec,
             model: &spec.model,

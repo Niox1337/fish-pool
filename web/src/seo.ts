@@ -1,10 +1,10 @@
 import { FAQ } from './pages/landing/faq'
 
 export const SITE_URL = 'https://fish.niox.lol'
-export const SITE_NAME = '大肥鱼托管班'
+const SITE_NAME = '大肥鱼托管班'
 const SUFFIX = `｜${SITE_NAME}`
 
-export interface PageSeo {
+interface PageSeo {
   title: string
   description: string
   /** Structured data objects written as JSON-LD. */
@@ -24,7 +24,7 @@ const KEYWORDS = [
   '机器人一键部署',
 ].join(',')
 
-export const OG_IMAGE = `${SITE_URL}/og-image.jpg`
+const OG_IMAGE = `${SITE_URL}/og-image.jpg`
 
 const organization = {
   '@type': 'Organization',

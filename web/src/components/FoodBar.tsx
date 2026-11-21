@@ -5,7 +5,7 @@ export type Serving = { key: string; label: string; bytes: number }
 
 const palette = ['bg-cobalt', 'bg-sky', 'bg-pink', 'bg-star', 'bg-[#8fb3ff]', 'bg-[#e58aa5]', 'bg-[#f2a93b]', 'bg-[#6c7fd8]']
 
-export function servingColor(i: number) {
+function servingColor(i: number) {
   return palette[i % palette.length]
 }
 

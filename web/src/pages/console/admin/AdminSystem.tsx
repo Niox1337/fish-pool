@@ -513,7 +513,7 @@ function Console({ c }: { c: System['console'] }) {
             ['有效登录会话', n(d.sessions_active)],
             ['24 小时内登录', `${n(d.users_login_24h)} 人`],
             ['应当运行的小鱼', n(d.bots_desired_running)],
-            ['等待同步到节点', <span className={d.bots_needs_push ? 'text-bad' : undefined}>{n(d.bots_needs_push)}</span>],
+            ['等待同步到节点', <span key="push" className={d.bots_needs_push ? 'text-bad' : undefined}>{n(d.bots_needs_push)}</span>],
             ['进行中的扫码', n(d.qr_tasks_active)],
           ]} />
         </div>
@@ -539,10 +539,10 @@ function NodeFacts({ node }: { node: AdminSystemNode }) {
     ['响应', `${node.latency_ms} ms`],
     ...(s ? ([
       ['采样', s.sampled_at ? fmtAgo(s.sampled_at) : '尚未采样'],
-      ['版本', <span className="font-mono">{s.version}</span>],
+      ['版本', <span key="version" className="font-mono">{s.version}</span>],
       ['节点程序已运行', since(s.started_at)],
       ['宿主机已运行', fmtDuration(s.host?.uptime_s)],
-      ...(s.host?.kernel ? [['内核', <span className="font-mono">{s.host.kernel}</span>] as [string, ReactNode]] : []),
+      ...(s.host?.kernel ? [['内核', <span key="kernel" className="font-mono">{s.host.kernel}</span>] as [string, ReactNode]] : []),
     ] as [string, ReactNode][]) : [['最后联系', fmtAgo(node.last_seen)] as [string, ReactNode]]),
   ]
   return (

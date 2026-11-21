@@ -17,7 +17,7 @@ const titles: Record<Mode, { h: string; sub: string }> = {
   reset: { h: '找回密码', sub: '往你的邮箱发一个验证码，然后设置新密码。' },
 }
 
-export function normInvite(raw: string): string {
+function normInvite(raw: string): string {
   const s = raw.toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/^FISH/, '')
   const body = s.slice(0, 8)
   if (!body) return raw.toUpperCase().startsWith('F') ? raw.toUpperCase().slice(0, 5) : ''
@@ -35,23 +35,24 @@ function Captcha({
   onId: (id: string) => void
   bump: number
 }) {
-  const [svg, setSvg] = useState<string | null>(null)
   const [n, setN] = useState(0)
+  const request = `${n}:${bump}`
+  const [loaded, setLoaded] = useState<{ request: string; svg: string } | null>(null)
+  const svg = loaded?.request === request ? loaded.svg : null
   useEffect(() => {
     let live = true
-    setSvg(null)
     api
       .captcha()
       .then((c) => {
         if (!live) return
-        setSvg(c.svg)
+        setLoaded({ request, svg: c.svg })
         onId(c.id)
       })
-      .catch(() => live && setSvg(''))
+      .catch(() => live && setLoaded({ request, svg: '' }))
     return () => {
       live = false
     }
-  }, [n, bump, onId])
+  }, [request, onId])
   return (
     <Field label="图形验证码" htmlFor="captcha">
       <div className="flex gap-2">
@@ -121,10 +122,12 @@ export default function AuthPage({ mode }: { mode: Mode }) {
   const next = params.get('next')
   const t = titles[mode]
 
-  useEffect(() => {
+  const [shownMode, setShownMode] = useState(mode)
+  if (shownMode !== mode) {
+    setShownMode(mode)
     setError(null)
     setNeedCaptcha(mode !== 'login')
-  }, [mode])
+  }
 
   if (me && mode !== 'reset') return <Navigate to={next || '/app'} replace />
 

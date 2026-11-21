@@ -93,7 +93,7 @@ const gatewayBaseUrls = [
   'https://api.x.ai/v1',
 ]
 
-export const mockDev = {
+const mockDev = {
   state,
   botLogs,
   qrMode: 'normal' as 'normal' | 'expire' | 'error',

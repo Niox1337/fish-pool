@@ -1336,7 +1336,7 @@ impl Bot {
         let mut owners: HashMap<String, Arc<PluginProc>> = HashMap::new();
         for p in procs {
             for t in p.tools() {
-                let Some(tool) = tool_definition(&t) else { continue };
+                let Some(tool) = tool_definition(t) else { continue };
                 if owners.contains_key(&tool.name) {
                     self.logs.warn(&format!("plugin:{}", p.plugin_name), format!("工具 {} 与其他插件重名，已忽略", tool.name));
                     continue;

@@ -427,10 +427,11 @@ async fn light_plugins_share_a_group_process_and_others_run_alone() {
     wait_status(&node, "pf", &["sleeping"], 20).await;
     let reply = say(&node, "kv b", 3).await;
     assert!(reply.contains("a->b|conf_plugin|True"), "{reply}");
-    let procs = bot.procs.read().unwrap();
-    assert_eq!(procs["pc"].pid, procs["pf"].pid);
-    assert_ne!(procs["pc"].pid, pids[0]);
-    drop(procs);
+    {
+        let procs = bot.procs.read().unwrap();
+        assert_eq!(procs["pc"].pid, procs["pf"].pid);
+        assert_ne!(procs["pc"].pid, pids[0]);
+    }
 
     node.shutdown().await;
 }

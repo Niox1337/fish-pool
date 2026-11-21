@@ -435,6 +435,7 @@ pub async fn launch(
 /// Accepts the plugin connection, sends the config line and waits for `hello`. `memory_byte`
 /// sends the byte that confirms the memory limit first. On failure the plugin is stopped through
 /// `control` and the error downcasts to `LoadError` or `Ungroupable` when the exit code says so.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn connect(
     listener: UnixListener,
     sock: PathBuf,

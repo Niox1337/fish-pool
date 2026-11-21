@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-import time
 import traceback
 from collections import OrderedDict
 from typing import Any

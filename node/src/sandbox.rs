@@ -298,6 +298,25 @@ impl Cgroups {
     }
 }
 
+/// Changes ownership of a directory tree to the plugin uid when configured and running as root.
+pub fn chown_tree(cfg: &Config, path: &Path) {
+    #[cfg(unix)]
+    {
+        let (Some(uid), gid) = (cfg.plugin_uid, cfg.plugin_gid) else {
+            return;
+        };
+        let mut stack = vec![path.to_path_buf()];
+        while let Some(p) = stack.pop() {
+            let _ = std::os::unix::fs::lchown(&p, Some(uid), gid);
+            if p.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+                if let Ok(rd) = std::fs::read_dir(&p) {
+                    stack.extend(rd.flatten().map(|e| e.path()));
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,24 +354,5 @@ mod tests {
         write(&root.path().join("memory.max"), "5000\n").unwrap();
         write(&root.path().join("memory.current"), "2000\n").unwrap();
         assert_eq!(groups.node_available(), Some(3000));
-    }
-}
-
-/// Changes ownership of a directory tree to the plugin uid when configured and running as root.
-pub fn chown_tree(cfg: &Config, path: &Path) {
-    #[cfg(unix)]
-    {
-        let (Some(uid), gid) = (cfg.plugin_uid, cfg.plugin_gid) else {
-            return;
-        };
-        let mut stack = vec![path.to_path_buf()];
-        while let Some(p) = stack.pop() {
-            let _ = std::os::unix::fs::lchown(&p, Some(uid), gid);
-            if p.symlink_metadata().is_ok_and(|m| m.is_dir()) {
-                if let Ok(rd) = std::fs::read_dir(&p) {
-                    stack.extend(rd.flatten().map(|e| e.path()));
-                }
-            }
-        }
     }
 }

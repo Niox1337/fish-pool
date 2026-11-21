@@ -32,3 +32,13 @@ packages = ["fish_sidecar"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# The fixture imports a missing name so the plugin fails to load
+"tests/plugins/broken_plugin/main.py" = ["F401"]

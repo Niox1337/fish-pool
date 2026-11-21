@@ -1,5 +1,5 @@
 import { cn } from '@/lib/cn'
-import type { BotStatus } from '@/api/types'
+import type { Mood } from '@/components/mood'
 // Sprite source: YunYueSama, https://github.com/YunYueSama/codex-deepseek-pet. Resized and converted to WebP. Licence in assets/whale-LICENSE.txt.
 import idle from '@/assets/whale/idle.webp'
 import eat from '@/assets/whale/eat.webp'
@@ -10,17 +10,8 @@ import happy from '@/assets/whale/happy.webp'
 import surprised from '@/assets/whale/surprised.webp'
 import portrait from '@/assets/whale/portrait.webp'
 
-export type Mood = 'idle' | 'eat' | 'sleep' | 'wave' | 'dizzy' | 'happy' | 'surprised' | 'portrait'
-
 const sheets: Partial<Record<Mood, string>> = { idle, eat, sleep, wave }
 const stills: Partial<Record<Mood, string>> = { dizzy, happy, surprised, portrait }
-
-export const statusMood: Record<BotStatus, Mood> = {
-  running: 'idle',
-  starting: 'eat',
-  stopped: 'sleep',
-  error: 'dizzy',
-}
 
 export function Pupil({
   mood,
