@@ -11,6 +11,8 @@ import surprised from '@/assets/whale/surprised.webp'
 import portrait from '@/assets/whale/portrait.webp'
 
 const sheets: Partial<Record<Mood, string>> = { idle, eat, sleep, wave }
+/** Sheets laid out as one row of keyframes and played by their own keyframe animation. */
+const strips: Partial<Record<Mood, string>> = { wave: 'pupil-wave' }
 const stills: Partial<Record<Mood, string>> = { dizzy, happy, surprised, portrait }
 
 export function Pupil({ mood, size = 72, className }: { mood: Mood; size?: number; className?: string }) {
@@ -19,7 +21,7 @@ export function Pupil({ mood, size = 72, className }: { mood: Mood; size?: numbe
     return (
       <span
         aria-hidden
-        className={cn('pupil-sheet inline-block shrink-0', className)}
+        className={cn('pupil-sheet inline-block shrink-0', strips[mood], className)}
         style={{ width: size, height: size, backgroundImage: `url(${sheet})` }}
       />
     )
