@@ -40,7 +40,28 @@ export default function Landing() {
       { rootMargin: '0px 0px -12% 0px' },
     )
     el.querySelectorAll('[data-reveal]').forEach((n) => io.observe(n))
-    return () => io.disconnect()
+    const loops = new IntersectionObserver((entries) => {
+      for (const e of entries) e.target.toggleAttribute('data-off', !e.isIntersecting)
+    })
+    const near = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue
+          e.target.setAttribute('data-seen', '')
+          near.unobserve(e.target)
+        }
+      },
+      { rootMargin: '600px 0px' },
+    )
+    el.querySelectorAll('[data-loop]').forEach((n) => {
+      loops.observe(n)
+      near.observe(n)
+    })
+    return () => {
+      io.disconnect()
+      loops.disconnect()
+      near.disconnect()
+    }
   }, [])
 
   function enroll(e: FormEvent) {
@@ -51,7 +72,7 @@ export default function Landing() {
 
   return (
     <div className="lp" ref={root}>
-      <div className="lp-frame">
+      <div className="lp-frame" data-loop>
         <img className="lp-plate lp-book" src={bookSpread} data-plate="assets/plates/book-spread.png" alt="" />
         <img className="lp-plate lp-next" src={nextSpread} data-plate="assets/plates/next-spread.png" alt="" />
         <div className="lp-nav" />
@@ -71,8 +92,14 @@ export default function Landing() {
             <li>
               <a href="#faq">常见问题</a>
             </li>
+            <li>
+              <a href="#group">加群</a>
+            </li>
           </ul>
         </nav>
+        <a href="#group" className="lp-qq" aria-label="加入 QQ 群">
+          <QqPenguin />
+        </a>
         <Link to={me ? '/app' : '/login'} className="lp-login">
           {me ? '我的小鱼' : '登录'}
         </Link>

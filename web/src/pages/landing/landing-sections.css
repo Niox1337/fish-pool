@@ -149,12 +149,27 @@
   font-size: 14px;
   white-space: nowrap;
 }
-.ls-demo-field span:first-child {
+.ls-demo-prefix {
+  color: var(--color-ink-3);
+}
+.ls-demo-search {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
   color: var(--color-ink-3);
 }
 .ls-demo-typed {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.ls-demo-caret {
+  flex: none;
+  width: 2px;
+  height: 1.2em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--color-sky);
 }
 .ls-demo-add {
   display: inline-flex;
@@ -168,27 +183,40 @@
   font-weight: 900;
   font-size: 16px;
 }
+.ls-demo-add[data-pressed] {
+  translate: 0 2px;
+  filter: brightness(0.94);
+}
 .ls-demo-add svg {
   width: 16px;
   height: 16px;
 }
 
 .ls-shelf {
-  display: grid;
-  gap: 10px;
+  --row: 54px;
+  --gap: 10px;
+  position: relative;
+  height: calc(3 * var(--row) + 2 * var(--gap));
   margin: 0;
   padding: 0;
   list-style: none;
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
-.ls-shelf li {
+.ls-shelf-row {
+  position: absolute;
+  inset: 0 0 auto;
+  box-sizing: border-box;
+  height: var(--row);
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px 10px 10px;
+  padding: 0 14px 0 10px;
   border: 1.5px solid rgb(27 33 99 / 0.14);
   border-radius: 16px;
   background: var(--color-cream);
   box-shadow: 0 2px 0 rgb(27 33 99 / 0.05);
+  transform: translateY(calc(var(--i, 0) * (var(--row) + var(--gap))));
 }
 .ls-spine {
   width: 12px;
@@ -196,9 +224,9 @@
   border-radius: 4px;
   box-shadow: inset -3px 0 0 rgb(0 0 0 / 0.12);
 }
-.ls-spine-blue { background: var(--color-sky); }
-.ls-spine-pink { background: var(--color-pink); }
-.ls-spine-star { background: var(--color-star); }
+.ls-tone-pink { background: var(--color-pink); }
+.ls-tone-star { background: var(--color-star); }
+.ls-tone-lilac { background: #a99cf2; }
 .ls-shelf-name {
   flex: 1;
   font-weight: 700;
@@ -233,24 +261,26 @@
   color: var(--color-ink-2);
 }
 .ls-usage-bar {
-  display: flex;
-  gap: 3px;
+  position: relative;
+  isolation: isolate;
   height: 14px;
   overflow: hidden;
   border-radius: 999px;
+  background: var(--color-paper-3);
 }
-.ls-usage-bar span {
-  flex-basis: 0;
+.ls-seg {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border-right: 3px solid #fff;
+  transform: translateX(calc(var(--end) * 1% - 100%));
 }
 .ls-seg-core { background: var(--color-cobalt); }
 .ls-seg-chat { background: var(--color-sky); }
-.ls-seg-a { background: var(--color-pink); }
-.ls-seg-b { background: var(--color-star); }
-.ls-seg-free { background: var(--color-paper-3); }
 .ls-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.8em, 1fr));
+  gap: 6px 12px;
   margin: 10px 0 0;
   padding: 0;
   list-style: none;
@@ -308,6 +338,10 @@
 .ls-faq {
   max-width: 920px;
 }
+.ls-book,
+.ls-faq {
+  scroll-margin-top: 16px;
+}
 .ls-faq-list {
   display: grid;
   margin-bottom: 48px;
@@ -320,6 +354,7 @@
   border-top: 1.5px dashed rgb(201 138 69 / 0.4);
 }
 .ls-faq-item summary {
+  transition: color 0.2s;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -334,6 +369,12 @@
 .ls-faq-item summary::-webkit-details-marker {
   display: none;
 }
+.ls-faq-item summary:hover {
+  color: var(--color-sky);
+}
+.ls-faq-item summary:hover svg {
+  scale: 1.1;
+}
 .ls-faq-item summary svg {
   flex: none;
   width: 30px;
@@ -342,7 +383,7 @@
   border-radius: 999px;
   background: var(--color-star);
   color: var(--color-star-ink);
-  transition: rotate 0.3s var(--ease-out-expo);
+  transition: rotate 0.3s var(--ease-out-expo), scale 0.2s var(--ease-out-expo);
 }
 .ls-faq-item[open] summary svg {
   rotate: 45deg;
@@ -391,6 +432,10 @@
 .ls-end-cta svg {
   width: 22px;
   height: 22px;
+  transition: translate 0.25s var(--ease-out-expo);
+}
+.ls-end-cta:hover svg {
+  translate: 4px 0;
 }
 
 .ls-foot {
@@ -419,6 +464,15 @@
 }
 .ls-foot a {
   color: #fff;
+  text-decoration: underline;
+  text-decoration-color: rgb(255 255 255 / 0.35);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+  transition: color 0.2s, text-decoration-color 0.2s;
+}
+.ls-foot a:hover {
+  color: var(--color-star);
+  text-decoration-color: currentColor;
 }
 .ls-foot-note {
   margin: 0;
@@ -432,6 +486,12 @@
   }
   .ls-checks {
     padding-right: 64px;
+  }
+}
+
+@media (max-width: 480px) {
+  .ls-demo-prefix {
+    display: none;
   }
 }
 

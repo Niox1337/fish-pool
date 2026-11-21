@@ -1,0 +1,200 @@
+.lg {
+  position: relative;
+  width: 100%;
+  max-width: 920px;
+  margin-inline: auto;
+  padding-top: 92px;
+  scroll-margin-top: 0;
+}
+
+.lg-whale {
+  position: absolute;
+  top: 0;
+  left: clamp(28px, 6vw, 72px);
+  z-index: 0;
+  filter: drop-shadow(0 6px 8px rgb(5 10 60 / 0.35));
+}
+
+.lg-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: clamp(24px, 4vw, 56px);
+  align-items: center;
+  padding: clamp(32px, 4vw, 52px) clamp(24px, 4.5vw, 60px);
+  border-radius: var(--ls-radius);
+  background:
+    repeating-linear-gradient(180deg, transparent 0 33px, rgb(47 91 216 / 0.07) 33px 34px) 0 18px / 100% 100% no-repeat,
+    var(--color-cream);
+  box-shadow: 0 1px 2px rgb(5 10 60 / 0.18), 0 28px 48px -22px rgb(5 10 60 / 0.65);
+  rotate: -0.6deg;
+}
+
+.lg-tape {
+  position: absolute;
+  top: -12px;
+  width: 104px;
+  height: 28px;
+  border-radius: 3px;
+  background:
+    repeating-linear-gradient(135deg, rgb(255 255 255 / 0.32) 0 6px, transparent 6px 12px),
+    rgb(243 166 189 / 0.88);
+  box-shadow: 0 2px 4px rgb(90 20 40 / 0.12);
+  transform-origin: left center;
+}
+.lg-tape-a {
+  right: clamp(110px, 16vw, 170px);
+  rotate: -4deg;
+}
+.lg-tape-b {
+  right: 14px;
+  rotate: 5deg;
+  background:
+    repeating-linear-gradient(135deg, rgb(255 255 255 / 0.4) 0 6px, transparent 6px 12px),
+    rgb(248 201 58 / 0.9);
+}
+
+.lg-title {
+  margin: 0 0 14px;
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: clamp(26px, 2.6vw, 38px);
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.lg-body {
+  margin: 0 0 22px;
+  max-width: 30em;
+  font-size: 17px;
+  line-height: 1.75;
+  text-wrap: pretty;
+}
+.lg-body strong {
+  font-weight: 800;
+  color: var(--color-ink);
+  background: linear-gradient(transparent 58%, rgb(248 201 58 / 0.55) 58% 92%, transparent 92%);
+}
+
+.lg-number {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 20px;
+}
+.lg-number-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-ink-2);
+}
+.lg-number-value {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 24px;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+}
+.lg-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-sky-soft);
+  color: var(--color-sky);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, translate 0.25s var(--ease-out-expo);
+}
+.lg-copy svg {
+  width: 15px;
+  height: 15px;
+}
+.lg-copy:hover {
+  background: var(--color-sky);
+  color: #fff;
+}
+.lg-copy:active {
+  translate: 0 1px;
+}
+
+.lg-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 24px;
+  border: 3px solid #c98a45;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fde27e 0%, #fbd65c 40%, #f9cf4e 100%);
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 18px;
+  text-decoration: none;
+  box-shadow: inset 0 -3px 0 rgb(190 120 20 / 0.22), inset 0 2px 0 rgb(255 255 255 / 0.6), 0 8px 16px -8px rgb(120 70 0 / 0.55);
+  transition: translate 0.25s var(--ease-out-expo), filter 0.2s;
+}
+.lg-open svg {
+  width: 18px;
+  height: 18px;
+  transition: translate 0.25s var(--ease-out-expo);
+}
+.lg-open:hover {
+  translate: 0 -2px;
+  filter: saturate(1.08) brightness(1.03);
+}
+.lg-open:hover svg {
+  translate: 2px -2px;
+}
+.lg-open:active {
+  translate: 0 1px;
+}
+
+.lg-photo {
+  margin: 0;
+  padding: 12px 12px 10px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 2px 3px rgb(27 33 99 / 0.12), 0 18px 30px -16px rgb(27 33 99 / 0.45);
+  rotate: 2.5deg;
+}
+.lg-photo img {
+  display: block;
+  width: clamp(176px, 18vw, 224px);
+  height: auto;
+  border-radius: 6px;
+}
+.lg-photo figcaption {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-ink-2);
+}
+
+@media (max-width: 760px) {
+  .lg {
+    padding-top: 74px;
+  }
+  .lg-whale {
+    width: 132px !important;
+    height: 132px !important;
+  }
+  .lg-card {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: 40px;
+  }
+  .lg-photo {
+    justify-self: center;
+  }
+  .lg-tape-a {
+    right: 120px;
+  }
+}

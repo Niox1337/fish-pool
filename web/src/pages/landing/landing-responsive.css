@@ -17,7 +17,7 @@
     display: grid;
     --lp-gut: clamp(20px, 5vw, 40px);
     --lp-hl-top: clamp(58px, 10vw, 76px);
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     align-items: center;
     column-gap: 12px;
     padding: 12px 16px 56px;
@@ -56,9 +56,30 @@
   .lp-frame .lp-brand::before {
     display: none;
   }
-  .lp-frame .lp-login {
+  .lp-frame .lp-qq {
     grid-row: 1;
     grid-column: 3;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border: 2px solid rgb(255 255 255 / 0.35);
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.1);
+    color: #fff;
+    transition: background-color 0.2s, border-color 0.2s;
+  }
+  .lp-frame .lp-qq:hover {
+    background: rgb(255 255 255 / 0.2);
+    border-color: rgb(255 255 255 / 0.6);
+  }
+  .lp-frame .lp-qq svg {
+    width: 19px;
+    height: 21px;
+  }
+  .lp-frame .lp-login {
+    grid-row: 1;
+    grid-column: 4;
     width: auto;
     height: 40px;
     padding-inline: 18px;

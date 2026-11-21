@@ -108,3 +108,185 @@
     height: auto;
   }
 }
+
+@keyframes lp-sheet-x {
+  to {
+    background-position-x: calc(400% / 3);
+  }
+}
+@keyframes lp-sheet-y {
+  to {
+    background-position-y: calc(800% / 7);
+  }
+}
+@keyframes lp-caret {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes lp-row-in {
+  from {
+    opacity: 0;
+    translate: 0 -12px;
+    scale: 0.96;
+  }
+}
+@keyframes lp-chip-pop {
+  40% {
+    scale: 1.18;
+  }
+}
+@keyframes lp-seg-in {
+  from {
+    transform: translateX(calc(var(--from) * 1% - 100%));
+  }
+}
+@keyframes lp-tape {
+  from {
+    opacity: 0;
+    scale: 0 1;
+  }
+}
+
+/* Sprite sheets load once their region is within 600px of the viewport */
+.lp [data-loop]:not([data-seen]) .pupil-sheet {
+  background-image: none !important;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root:has(.lp) {
+    scroll-behavior: smooth;
+  }
+
+  /* Paused loops while their region is off screen */
+  .lp [data-off] .lp-sparkle,
+  .lp [data-off] .lp-cloud-star,
+  .lp [data-off] .pupil-sheet {
+    animation-play-state: paused;
+  }
+
+  .lp-cloud-star {
+    animation:
+      lp-pop 0.7s var(--ease-out-expo) 0.12s both,
+      lp-twinkle 4.6s ease-in-out 2.4s infinite;
+  }
+
+  /* 4 x 8 sprite sheet played at 8 frames per second */
+  .lp [data-loop] .pupil-sheet {
+    animation:
+      lp-sheet-x 0.5s steps(4, jump-end) infinite,
+      lp-sheet-y 4s steps(8, jump-end) infinite;
+  }
+
+  /* Book pages: checklist rows and the whale follow the page turn */
+  .ls-checks li,
+  .ls-whale {
+    transition:
+      opacity 0.45s ease-out,
+      translate 0.7s var(--ease-out-expo),
+      scale 0.7s var(--ease-out-expo);
+  }
+  .ls-checks li:nth-child(1) { transition-delay: 0.3s; }
+  .ls-checks li:nth-child(2) { transition-delay: 0.4s; }
+  .ls-checks li:nth-child(3) { transition-delay: 0.5s; }
+  .ls-whale {
+    transition-delay: 0.7s;
+  }
+  .lp[data-motion] .ls-book[data-reveal]:not([data-in]) .ls-checks li {
+    opacity: 0;
+    translate: -12px 0;
+  }
+  .lp[data-motion] .ls-book[data-reveal]:not([data-in]) .ls-whale {
+    opacity: 0;
+    translate: 0 18px;
+    scale: 0.85;
+  }
+
+  /* Usage bar fills from the left once the page has turned */
+  .ls-seg {
+    transition: transform 0.7s var(--ease-out-expo);
+  }
+  .lp[data-motion] .ls-book[data-reveal]:not([data-in]) .ls-seg {
+    transform: translateX(-100%);
+  }
+  .lp[data-motion] .ls-book[data-in] .ls-seg {
+    transition-delay: 0.9s;
+  }
+  .lp[data-motion] .ls-book[data-in] .ls-page-demo[data-live] .ls-seg {
+    transition-delay: 0s;
+  }
+  .ls-seg[data-fresh] {
+    animation: lp-seg-in 0.7s var(--ease-out-expo);
+  }
+
+  /* Live plugin sample */
+  .ls-page-demo[data-live] .ls-demo-caret {
+    animation: lp-caret 1s steps(1) infinite;
+  }
+  .ls-demo-add {
+    transition: translate 0.12s ease-out, filter 0.12s ease-out;
+  }
+  .ls-shelf-row {
+    transition:
+      transform 0.6s var(--ease-out-expo),
+      opacity 0.35s ease-out;
+  }
+  .ls-shelf-row[data-leaving] {
+    opacity: 0;
+  }
+  .ls-shelf-row[data-fresh] {
+    animation: lp-row-in 0.6s var(--ease-out-expo);
+  }
+  .ls-page-demo[data-live] .ls-shelf-row:first-child .ls-chip-ok {
+    animation: lp-chip-pop 0.45s var(--ease-out-expo);
+  }
+
+  /* QQ group note: the card is set down, taped, and the QR photo develops */
+  .lg-card {
+    transition:
+      opacity 0.5s ease-out,
+      translate 0.9s var(--ease-out-expo),
+      rotate 0.9s var(--ease-out-expo);
+  }
+  .lg-whale {
+    transition:
+      translate 0.8s var(--ease-out-expo) 0.55s,
+      opacity 0.3s ease-out 0.55s;
+  }
+  .lg-photo {
+    transition:
+      clip-path 0.9s var(--ease-out-expo) 0.35s,
+      filter 0.9s ease-out 0.35s,
+      rotate 0.35s var(--ease-out-expo),
+      scale 0.35s var(--ease-out-expo);
+  }
+  .lg-photo:hover {
+    rotate: 0deg;
+    scale: 1.04;
+  }
+  .lp[data-motion] .lg[data-in] .lg-tape {
+    animation: lp-tape 0.45s var(--ease-out-expo) both;
+  }
+  .lp[data-motion] .lg[data-in] .lg-tape-a {
+    animation-delay: 0.45s;
+  }
+  .lp[data-motion] .lg[data-in] .lg-tape-b {
+    animation-delay: 0.6s;
+  }
+  .lp[data-motion] .lg[data-reveal]:not([data-in]) .lg-card {
+    opacity: 0;
+    translate: 0 36px;
+    rotate: -3.5deg;
+  }
+  .lp[data-motion] .lg[data-reveal]:not([data-in]) .lg-whale {
+    opacity: 0;
+    translate: 0 70px;
+  }
+  .lp[data-motion] .lg[data-reveal]:not([data-in]) .lg-photo {
+    clip-path: inset(0 0 100% 0 round 10px);
+    filter: blur(6px) saturate(0.4);
+  }
+  .lp[data-motion] .lg[data-reveal]:not([data-in]) .lg-tape {
+    opacity: 0;
+  }
+}

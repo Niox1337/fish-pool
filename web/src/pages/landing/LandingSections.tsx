@@ -5,6 +5,8 @@ import whalePortrait from '@/assets/whale/portrait.webp'
 import whaleSurprised from '@/assets/whale/surprised.webp'
 import { Pupil } from '@/components/Pupil'
 import { FAQ } from './faq'
+import LandingGroup from './LandingGroup'
+import PluginDemo from './PluginDemo'
 import './landing-sections.css'
 
 const PLUGIN_MARKET = 'https://cloud.astrbot.app/market'
@@ -61,52 +63,7 @@ export default function LandingSections() {
           </p>
           <p className="ls-body ls-muted">每个插件单独运行，一个插件出问题不会拖累小鱼本体。</p>
         </div>
-        <div className="ls-page ls-page-demo">
-          <span className="ls-demo-tag">示例</span>
-          <div className="ls-demo" aria-hidden>
-            <div className="ls-demo-field">
-              <span>搜索插件 </span>
-              <span className="ls-demo-typed">天气预报</span>
-            </div>
-            <span className="ls-demo-add">
-              <Plus strokeWidth={3} />
-              安装
-            </span>
-          </div>
-          <ol className="ls-shelf" aria-hidden>
-            <li>
-              <span className="ls-spine ls-spine-blue" />
-              <span className="ls-shelf-name">天气预报</span>
-              <span className="ls-chip ls-chip-ok">运行中</span>
-            </li>
-            <li>
-              <span className="ls-spine ls-spine-pink" />
-              <span className="ls-shelf-name">每日一言</span>
-              <span className="ls-chip ls-chip-ok">运行中</span>
-            </li>
-            <li>
-              <span className="ls-spine ls-spine-star" />
-              <span className="ls-shelf-name">群聊小游戏</span>
-              <span className="ls-chip ls-chip-warn">安装中</span>
-            </li>
-          </ol>
-          <div className="ls-usage" aria-hidden>
-            <p className="ls-usage-label">内存用量，按来源</p>
-            <div className="ls-usage-bar">
-              <span style={{ flexGrow: 5 }} className="ls-seg-core" />
-              <span style={{ flexGrow: 2 }} className="ls-seg-chat" />
-              <span style={{ flexGrow: 3 }} className="ls-seg-a" />
-              <span style={{ flexGrow: 1.5 }} className="ls-seg-b" />
-              <span style={{ flexGrow: 6 }} className="ls-seg-free" />
-            </div>
-            <ul className="ls-legend">
-              <li><i className="ls-seg-core" />小鱼本体</li>
-              <li><i className="ls-seg-chat" />聊天记录</li>
-              <li><i className="ls-seg-a" />天气预报</li>
-              <li><i className="ls-seg-b" />每日一言</li>
-            </ul>
-          </div>
-        </div>
+        <PluginDemo />
       </section>
 
       <section className="ls-note" aria-labelledby="ls-invite">
@@ -136,7 +93,9 @@ export default function LandingSections() {
         </div>
       </section>
 
-      <section className="ls-end" aria-labelledby="ls-end-title">
+      <LandingGroup />
+
+      <section data-loop className="ls-end" aria-labelledby="ls-end-title">
         <Pupil mood="wave" size={144} />
         <h2 id="ls-end-title" className="ls-end-title">准备好了就带小鱼来</h2>
         <Link to="/register" className="ls-end-cta">
@@ -151,6 +110,7 @@ export default function LandingSections() {
           <nav aria-label="页脚" className="ls-foot-links">
             <Link to="/about">关于</Link>
             <Link to="/login">登录</Link>
+            <a href="#group">QQ 群</a>
             <a href={PLUGIN_MARKET} target="_blank" rel="noreferrer">
               插件市场
             </a>

@@ -87,6 +87,8 @@
   list-style: none;
 }
 .lp-navlinks a {
+  position: relative;
+  padding-block: 0.3cqw;
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 1.72cqw;
@@ -94,8 +96,25 @@
   text-decoration: none;
   transition: color 0.2s;
 }
+.lp-navlinks a::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 0.16cqw;
+  border-radius: 1px;
+  background: currentColor;
+  scale: 0 1;
+  transition: scale 0.3s var(--ease-out-expo);
+}
 .lp-navlinks a:hover {
   color: var(--color-star);
+}
+.lp-navlinks a:hover::after {
+  scale: 1 1;
+}
+
+.lp-qq {
+  display: none;
 }
 
 .lp-login {
