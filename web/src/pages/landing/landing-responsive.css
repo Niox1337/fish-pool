@@ -136,7 +136,7 @@
     padding-block: 10px 6px;
     align-items: center;
     font-size: clamp(32px, 8.2vw, 58px);
-    -webkit-text-stroke: 0.1em #fff;
+    --lp-outline: 0.1em;
   }
   .lp-frame .lp-subcopy {
     grid-row: 3;
@@ -198,7 +198,7 @@
     margin: 128px 0 34px;
     padding: 0 6px;
     font-size: clamp(30px, 6vw, 42px);
-    -webkit-text-stroke: 0.1em #fff;
+    --lp-outline: 0.1em;
   }
   .lp-frame .lp-steps-cloud {
     grid-row: 7 / 8;

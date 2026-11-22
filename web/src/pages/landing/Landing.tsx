@@ -110,8 +110,12 @@ export default function Landing() {
           <path className="lp-cloud-star-body" d={STAR_PATH} />
         </svg>
         <h1 className="lp-headline">
-          <span>把你的 AI 小鱼</span>
-          <span>送来托管</span>
+          <span className="lp-outline" data-text="把你的 AI 小鱼">
+            把你的 AI 小鱼
+          </span>
+          <span className="lp-outline" data-text="送来托管">
+            送来托管
+          </span>
         </h1>
         <p className="lp-subcopy">
           QQ 扫码就能接入，微信也行。自带模型 Key，
@@ -150,7 +154,9 @@ export default function Landing() {
         <div className="lp-paper lp-paper-steps" aria-hidden />
         <img className="lp-plate lp-steps-cloud" src={stepsCloud} data-plate="assets/plates/steps-cloud.png" alt="" />
         <h2 id="how" className="lp-steps-title">
-          三步开始托管
+          <span className="lp-outline" data-text="三步开始托管">
+            三步开始托管
+          </span>
         </h2>
         <span className="lp-divider" aria-hidden />
         <ol className="contents">
