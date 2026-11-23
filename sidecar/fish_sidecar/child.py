@@ -17,7 +17,7 @@ from astrbot.core.star.star_handler import EventType
 
 from fish_sidecar import astrbot_boot, loader, protocol, runtime
 from fish_sidecar.adapter import LLMError
-from fish_sidecar.dispatch import Dispatcher, describe_error
+from fish_sidecar.dispatch import EVENT_HOOK_KINDS, Dispatcher, describe_error
 
 log = logging.getLogger("astrbot")
 
@@ -126,8 +126,7 @@ class ChildRuntime:
         image_urls: list[str],
         tools: list[dict],
     ) -> dict[str, Any]:
-        req_id = uuid.uuid4().hex
-        message: dict[str, Any] = {"op": "llm", "req_id": req_id}
+        message: dict[str, Any] = {"op": "llm"}
         if prompt is not None:
             message["prompt"] = prompt
         if system_prompt:
@@ -138,16 +137,21 @@ class ChildRuntime:
             message["image_urls"] = image_urls
         if tools:
             message["tools"] = tools
-        future = self.loop.create_future()
-        self.pending[req_id] = future
-        self.write(message)
-        try:
-            reply = await asyncio.wait_for(future, LLM_TIMEOUT_S)
-        finally:
-            self.pending.pop(req_id, None)
+        reply = await self.call_node(message, LLM_TIMEOUT_S)
         if reply.get("error"):
             raise LLMError(str(reply["error"]))
         return reply
+
+    async def call_node(self, message: dict[str, Any], timeout: float) -> dict[str, Any]:
+        """Writes ``message`` with a new ``req_id`` and returns the node reply that carries the same ``req_id``."""
+        req_id = uuid.uuid4().hex
+        future = self.loop.create_future()
+        self.pending[req_id] = future
+        self.write({**message, "req_id": req_id})
+        try:
+            return await asyncio.wait_for(future, timeout)
+        finally:
+            self.pending.pop(req_id, None)
 
     def start_task(self, awaitable: Any, desc: str) -> None:
         if not self.ready:
@@ -254,10 +258,8 @@ class ChildRuntime:
         if self.plugin.command_only_idle:
             self.wake_commands = self.dispatcher.wake_commands()
         handlers = self.dispatcher.descriptors()
-        # The node routes callbacks using the capabilities advertised at startup.
-        self.dispatcher.keep_events_for_model = any(
-            handler["kind"] in {"llm_request", "llm_tool"} for handler in handlers
-        )
+        # Hooks and tools run after the event was handled, so they need the event kept.
+        self.dispatcher.keep_events = any(h["kind"] in EVENT_HOOK_KINDS or h["kind"] == "llm_tool" for h in handlers)
         self.write(
             {
                 "op": "hello",
@@ -294,14 +296,14 @@ class ChildRuntime:
 
     def on_message(self, message: dict[str, Any]) -> None:
         op = message.get("op")
-        if op == "llm_result":
+        if op in ("llm_result", "result_done", "agent_result"):
             future = self.pending.get(str(message.get("req_id")))
             if future is not None and not future.done():
                 future.set_result(message)
         elif op == "event" and self.dispatcher is not None:
             self.spawn(self.dispatcher.handle_event(str(message.get("event_id")), message.get("event") or {}))
-        elif op == "llm_hook" and self.dispatcher is not None:
-            self.spawn(self._llm_hook(str(message.get("event_id")), message.get("request") or {}))
+        elif op == "hook" and self.dispatcher is not None:
+            self.spawn(self._hook(message))
         elif op == "tool_call" and self.dispatcher is not None:
             self.spawn(self._tool_call(message))
         elif op == "config" and self.plugin is not None and self.plugin.config is not None:
@@ -362,14 +364,17 @@ class ChildRuntime:
             reasons.append("线程 " + ", ".join(sorted(threads)[:3]))
         return reasons
 
-    async def _llm_hook(self, event_id: str, request: dict[str, Any]) -> None:
+    async def _hook(self, message: dict[str, Any]) -> None:
         assert self.dispatcher is not None
+        kind = str(message.get("kind"))
         try:
-            result = await self.dispatcher.handle_llm_hook(event_id, request)
+            result = await self.dispatcher.handle_hook(
+                kind, message.get("event_id"), message.get("event"), message.get("payload") or {}
+            )
         except Exception as e:
-            log.error("llm hook failed: %s", describe_error(e))
-            result = request
-        self.write({"op": "llm_hook_result", "event_id": event_id, "request": result})
+            log.error("%s hook failed: %s\n%s", kind, describe_error(e), traceback.format_exc(limit=8))
+            result = {"stopped": False}
+        self.write({"op": "hook_result", "hook_id": message.get("hook_id"), **result})
 
     async def _tool_call(self, message: dict[str, Any]) -> None:
         assert self.dispatcher is not None

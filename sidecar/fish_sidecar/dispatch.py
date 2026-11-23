@@ -8,39 +8,54 @@ import traceback
 from collections import OrderedDict
 from typing import Any
 
+from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
+
+from astrbot.core.agent.message import Message
+from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.agent.tool import FunctionTool
+from astrbot.core.astr_agent_context import AstrAgentContext
 from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult, ResultContentType
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
-from astrbot.core.provider.entities import ProviderRequest
+from astrbot.core.provider.entities import LLMResponse, ProviderRequest
 from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.filter.command_group import CommandGroupFilter
 from astrbot.core.star.filter.event_message_type import EventMessageTypeFilter
 from astrbot.core.star.filter.permission import PermissionTypeFilter
 from astrbot.core.star.filter.platform_adapter_type import PlatformAdapterTypeFilter
 from astrbot.core.star.filter.regex import RegexFilter
+from astrbot.core.star.star import StarMetadata, star_map
 from astrbot.core.star.star_handler import EventType, StarHandlerMetadata, star_handlers_registry
 from astrbot.core.utils.session_waiter import FILTERS, USER_SESSIONS, SessionWaiter
 
-from fish_sidecar import adapter, tools
+from fish_sidecar import adapter, tools, wire
 from fish_sidecar.adapter import build_event
 
 log = logging.getLogger("astrbot")
 
 HOOK_KINDS = {
+    EventType.OnWaitingLLMRequestEvent: "llm_request",
     EventType.OnLLMRequestEvent: "llm_request",
+    EventType.OnLLMResponseEvent: "llm_response",
+    EventType.OnAgentBeginEvent: "agent_begin",
+    EventType.OnAgentDoneEvent: "agent_done",
+    EventType.OnUsingLLMToolEvent: "using_llm_tool",
+    EventType.OnLLMToolRespondEvent: "llm_tool_respond",
     EventType.OnDecoratingResultEvent: "decorating_result",
+    EventType.OnAfterMessageSentEvent: "after_message_sent",
+    EventType.OnPluginErrorEvent: "plugin_error",
+    EventType.OnPluginLoadedEvent: "plugin_loaded",
+    EventType.OnPluginUnloadedEvent: "plugin_unloaded",
     EventType.OnAstrBotLoadedEvent: "on_loaded",
     EventType.OnPlatformLoadedEvent: "platform_loaded",
 }
 
-INERT_EVENT_TYPES = {
-    EventType.OnAgentBeginEvent: "on_agent_begin",
-    EventType.OnAgentDoneEvent: "on_agent_done",
-    EventType.OnUsingLLMToolEvent: "on_using_llm_tool",
-    EventType.OnLLMToolRespondEvent: "on_llm_tool_respond",
-    EventType.OnPluginLoadedEvent: "on_plugin_loaded",
-    EventType.OnPluginUnloadedEvent: "on_plugin_unloaded",
-}
+# Handler kinds whose hooks the node runs with a message event, so the event is kept for them.
+EVENT_HOOK_KINDS = frozenset(HOOK_KINDS.values()) - {"plugin_loaded", "plugin_unloaded", "on_loaded", "platform_loaded"}
+
+# Time the node has to decorate and send one result, or to run one plugin LLM request.
+DELIVER_TIMEOUT_S = 120
+AGENT_TIMEOUT_S = 600
 
 PERMISSION_DENIED = "你没有权限使用这个指令"
 TOOL_SENT_DIRECTLY = "工具已把内容直接发给用户"
@@ -100,6 +115,31 @@ def handler_descriptor(md: StarHandlerMetadata) -> dict[str, Any] | None:
     return out
 
 
+def agent_messages(items: Any) -> list[Message]:
+    """AstrBot agent messages from the node's OpenAI style message list. Invalid entries are skipped."""
+    out: list[Message] = []
+    for item in items if isinstance(items, list) else []:
+        try:
+            out.append(Message.model_validate(item))
+        except Exception:
+            continue
+    return out
+
+
+def tool_images(value: Any) -> list[str]:
+    """Data URLs of the images in an MCP ``CallToolResult``."""
+    out: list[str] = []
+    for item in getattr(value, "content", None) or []:
+        if isinstance(item, ImageContent):
+            out.append(f"data:{item.mimeType or 'image/png'};base64,{item.data}")
+        elif isinstance(item, EmbeddedResource):
+            blob = getattr(item.resource, "blob", None)
+            mime = getattr(item.resource, "mimeType", None) or ""
+            if blob and mime.startswith("image/"):
+                out.append(f"data:{mime};base64,{blob}")
+    return out
+
+
 class Dispatcher:
     """Runs the plugin side of the message pipeline. ``runtime`` provides ``write`` and ``llm``.
 
@@ -113,7 +153,10 @@ class Dispatcher:
         self.plugin_name = plugin_name
         self.module_prefix = module_prefix
         self.events: OrderedDict[str, AstrMessageEvent] = OrderedDict()
-        self.keep_events_for_model = False
+        # Set from the hello handlers. Command-only plugins do not keep events after handling them.
+        self.keep_events = False
+        # Agent run contexts by event id, kept from ``agent_begin`` to ``agent_done``.
+        self.agent_runs: OrderedDict[str, ContextWrapper] = OrderedDict()
         manager = getattr(getattr(instance, "context", None), "platform_manager", None)
         self.platforms = manager if isinstance(manager, adapter.FishPlatformManager) else None
         self.max_events = 512
@@ -164,13 +207,7 @@ class Dispatcher:
         return sorted(commands) or None
 
     def inert_handlers(self) -> list[str]:
-        out = [
-            f"{INERT_EVENT_TYPES[md.event_type]}:{md.handler_name}"
-            for md in self.registry()
-            if md.event_type in INERT_EVENT_TYPES
-        ]
-        out += [f"llm_tool:{name}" for name in tools.inactive_tools(self.module_prefix)]
-        return out
+        return [f"llm_tool:{name}" for name in tools.inactive_tools(self.module_prefix)]
 
     def remember(self, event_id: str, event: AstrMessageEvent) -> None:
         self.events[event_id] = event
@@ -233,7 +270,7 @@ class Dispatcher:
 
     async def handle_event(self, event_id: str, data: dict[str, Any]) -> None:
         event = build_event(data, event_id)
-        if self.keep_events_for_model:
+        if self.keep_events:
             self.remember(event_id, event)
         if self.platforms is not None:
             self.platforms.remember(event.platform_meta)
@@ -281,6 +318,15 @@ class Dispatcher:
             text = traceback.format_exc(limit=8)
             log.error("handler %s failed: %s\n%s", md.handler_name, describe_error(e), text)
             await self.call_hooks(EventType.OnPluginErrorEvent, event, self.plugin_name, md.handler_name, e, text)
+            self.runtime.write(
+                {
+                    "op": "plugin_error",
+                    "event_id": getattr(event, "fish_event_id", None),
+                    "handler": md.handler_name,
+                    "error": describe_error(e),
+                    "traceback": text,
+                }
+            )
         await self.respond(event)
         return requested
 
@@ -300,7 +346,11 @@ class Dispatcher:
         return False
 
     async def respond(self, event: AstrMessageEvent) -> None:
-        """Decorates and sends the pending result, then clears it and keeps the stop flag."""
+        """Hands the pending result to the node, then clears it and keeps the stop flag.
+
+        The node runs the ``decorating_result`` hooks of every plugin, sends the result and
+        runs the ``after_message_sent`` hooks.
+        """
         result = event.get_result()
         if result is None:
             return
@@ -311,75 +361,187 @@ class Dispatcher:
                     parts.extend(chunk.chain)
             result.async_stream = None
             result.chain.extend(parts)
-        if result.chain:
-            await self.call_hooks(EventType.OnDecoratingResultEvent, event)
-            result = event.get_result() or result
         stopped = result.is_stopped()
-        if result.chain:
-            await event.send(result)
-            await self.call_hooks(EventType.OnAfterMessageSentEvent, event)
+        chain = wire.chain_to_wire(result.chain)
+        if chain:
+            event_id = getattr(event, "fish_event_id", None)
+            llm = result.result_content_type == ResultContentType.LLM_RESULT
+            try:
+                await self.runtime.call_node(
+                    {
+                        "op": "result",
+                        "event_id": event_id,
+                        "session": event.unified_msg_origin,
+                        "chain": chain,
+                        "llm": llm,
+                    },
+                    DELIVER_TIMEOUT_S,
+                )
+            except TimeoutError:
+                log.warning("the node did not confirm the reply within %s s", DELIVER_TIMEOUT_S)
+            event._has_send_oper = True
         event.clear_result()
         if stopped:
             event._force_stopped = True
 
     async def run_llm_request(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
-        await self.call_hooks(EventType.OnWaitingLLMRequestEvent, event)
-        await self.call_hooks(EventType.OnLLMRequestEvent, event, req)
-        if event.is_stopped():
-            return
-        try:
-            context = self.instance.context
-            request = {
-                "prompt": req.prompt,
-                "system_prompt": req.system_prompt,
-                "contexts": req.contexts,
-                "image_urls": req.image_urls,
-                "extra_user_content_parts": req.extra_user_content_parts,
-            }
-            if req.func_tool and not req.func_tool.empty():
-                response = await context.tool_loop_agent(
-                    event=event,
-                    chat_provider_id=adapter.PROVIDER_ID,
-                    tools=req.func_tool,
-                    **request,
-                )
-            else:
-                response = await context.get_using_provider().text_chat(
-                    tool_calls_result=req.tool_calls_result,
-                    **request,
-                )
-        except Exception as e:
-            log.error("LLM request failed: %s", describe_error(e))
-            return
-        await self.call_hooks(EventType.OnLLMResponseEvent, event, response)
-        result = MessageEventResult(chain=[Plain(response.completion_text)])
-        result.set_result_content_type(ResultContentType.LLM_RESULT)
-        event.set_result(result)
-        await self.respond(event)
+        """Runs a ``ProviderRequest`` a handler yielded through the node's agent, as AstrBot's main agent does.
 
-    async def handle_llm_hook(self, event_id: str, request: dict[str, Any]) -> dict[str, Any]:
-        """Runs on_llm_request hooks for a node default LLM call.
-
-        shortcut: extra content parts are folded into the prompt as text and images are
-        dropped, extend llm_hook_result with parts when the node supports multimodal hooks.
+        The node runs the LLM hooks and tools of every plugin and sends the reply.
         """
-        req = ProviderRequest(
-            prompt=request.get("prompt"),
-            system_prompt=request.get("system_prompt") or "",
-            contexts=list(request.get("contexts") or []),
-            image_urls=list(request.get("image_urls") or []),
-        )
-        event = self.events.get(event_id)
-        if event is not None:
-            await self.call_hooks(EventType.OnLLMRequestEvent, event, req)
-        out: dict[str, Any] = {
+        event.set_extra("provider_request", req)
+        request: dict[str, Any] = {
+            "op": "agent",
+            "event_id": getattr(event, "fish_event_id", None),
+            "session": event.unified_msg_origin,
             "prompt": adapter.full_prompt(req.prompt, req.extra_user_content_parts),
-            "system_prompt": req.system_prompt,
+            "system_prompt": req.system_prompt or "",
             "contexts": adapter._context_dicts(req.contexts) or [],
+            "image_urls": list(req.image_urls or []),
         }
-        if req.image_urls:
-            out["image_urls"] = req.image_urls
-        return out
+        try:
+            reply = await self.runtime.call_node(request, AGENT_TIMEOUT_S)
+        except TimeoutError:
+            log.error("LLM request failed: the node did not answer within %s s", AGENT_TIMEOUT_S)
+            return
+        if reply.get("error"):
+            log.error("LLM request failed: %s", reply["error"])
+        if reply.get("stopped"):
+            event.stop_event()
+
+    def event_for(self, event_id: Any, data: Any) -> AstrMessageEvent | None:
+        """The event of ``event_id``, built from the node's ``data`` when this process has not seen it."""
+        if not event_id:
+            return None
+        event = self.events.get(str(event_id))
+        if event is None and isinstance(data, dict):
+            event = build_event(data, str(event_id))
+            self.remember(str(event_id), event)
+        return event
+
+    def plugin_metadata(self, info: dict[str, Any]) -> StarMetadata:
+        """The metadata of the plugin a ``plugin_loaded`` or ``plugin_unloaded`` hook is about."""
+        name = str(info.get("name") or "")
+        for md in star_map.values():
+            if md.name == name and (
+                self.module_prefix is None or (md.module_path or "").startswith(self.module_prefix)
+            ):
+                return md
+        return StarMetadata(name=name, version=str(info.get("version") or ""), activated=True)
+
+    def agent_run(self, event_id: str, event: AstrMessageEvent, messages: Any) -> ContextWrapper:
+        """The agent run context of ``event_id``, created on first use, holding ``messages``."""
+        run = self.agent_runs.get(event_id)
+        if run is None:
+            run = ContextWrapper(context=AstrAgentContext(context=self.instance.context, event=event))
+            self.agent_runs[event_id] = run
+            while len(self.agent_runs) > self.max_events:
+                self.agent_runs.popitem(last=False)
+        run.messages = agent_messages(messages)
+        return run
+
+    def hook_tool(self, data: Any) -> FunctionTool:
+        """The function tool a tool hook is about: this plugin's own tool, or a description of another plugin's."""
+        info = data if isinstance(data, dict) else {}
+        name = str(info.get("name") or "")
+        own = tools.find_tool(name, self.module_prefix)
+        if own is not None:
+            return own
+        parameters = info.get("parameters")
+        if not isinstance(parameters, dict) or not parameters:
+            parameters = {"type": "object", "properties": {}}
+        return FunctionTool(name=name, description=str(info.get("description") or name), parameters=parameters)
+
+    async def handle_hook(self, kind: str, event_id: Any, data: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        """Runs this plugin's hooks of one ``kind`` for the node. Returns ``{"payload"?, "stopped"}``.
+
+        ``payload`` carries the values the hooks see. Kinds that let hooks change them
+        return the changed values in ``payload``. ``stopped`` is True when a hook of this
+        call stopped the event.
+        """
+        if kind in ("plugin_loaded", "plugin_unloaded"):
+            md = self.plugin_metadata(payload.get("plugin") or {})
+            etype = EventType.OnPluginLoadedEvent if kind == "plugin_loaded" else EventType.OnPluginUnloadedEvent
+            await self.call_hooks(etype, md)
+            return {"stopped": False}
+        event = self.event_for(event_id, data)
+        if event is None:
+            return {"stopped": False}
+        eid = str(event_id)
+        was_stopped = event.is_stopped()
+        out: dict[str, Any] = {}
+        if kind == "llm_request":
+            req = ProviderRequest(
+                prompt=payload.get("prompt"),
+                system_prompt=payload.get("system_prompt") or "",
+                contexts=list(payload.get("contexts") or []),
+                image_urls=list(payload.get("image_urls") or []),
+            )
+            if payload.get("plugin_request"):
+                if not isinstance(event.get_extra("provider_request"), ProviderRequest):
+                    event.set_extra("provider_request", req)
+            else:
+                event._extras.pop("provider_request", None)
+            await self.call_hooks(EventType.OnWaitingLLMRequestEvent, event)
+            if not event.is_stopped():
+                await self.call_hooks(EventType.OnLLMRequestEvent, event, req)
+            out = {
+                "prompt": adapter.full_prompt(req.prompt, req.extra_user_content_parts),
+                "system_prompt": req.system_prompt,
+                "contexts": adapter._context_dicts(req.contexts) or [],
+                "image_urls": list(req.image_urls or []),
+            }
+        elif kind == "agent_begin":
+            await self.call_hooks(
+                EventType.OnAgentBeginEvent, event, self.agent_run(eid, event, payload.get("messages"))
+            )
+        elif kind == "using_llm_tool":
+            tool = self.hook_tool(payload.get("tool"))
+            await self.call_hooks(EventType.OnUsingLLMToolEvent, event, tool, payload.get("arguments") or {})
+        elif kind == "llm_tool_respond":
+            tool = self.hook_tool(payload.get("tool"))
+            result = CallToolResult(content=[TextContent(type="text", text=str(payload.get("result") or ""))])
+            event.clear_result()
+            await self.call_hooks(EventType.OnLLMToolRespondEvent, event, tool, payload.get("arguments") or {}, result)
+        elif kind == "llm_response":
+            response = LLMResponse(
+                role="assistant",
+                completion_text=str(payload.get("completion_text") or ""),
+                reasoning_content=payload.get("reasoning_content") or "",
+            )
+            await self.call_hooks(EventType.OnLLMResponseEvent, event, response)
+            out = {"completion_text": response.completion_text}
+        elif kind == "agent_done":
+            run = self.agent_run(eid, event, payload.get("messages"))
+            self.agent_runs.pop(eid, None)
+            response = LLMResponse(role="assistant", completion_text=str(payload.get("completion_text") or ""))
+            await self.call_hooks(EventType.OnAgentDoneEvent, event, run, response)
+        elif kind in ("decorating_result", "after_message_sent"):
+            result = MessageEventResult(chain=wire.chain_from_wire(payload.get("chain")))
+            if payload.get("llm"):
+                result.set_result_content_type(ResultContentType.LLM_RESULT)
+            event.set_result(result)
+            if kind == "decorating_result":
+                await self.call_hooks(EventType.OnDecoratingResultEvent, event)
+                decorated = event.get_result()
+                out = {"chain": wire.chain_to_wire(decorated.chain) if decorated is not None else []}
+            else:
+                await self.call_hooks(EventType.OnAfterMessageSentEvent, event)
+            event.clear_result()
+        elif kind == "plugin_error":
+            error = RuntimeError(str(payload.get("error") or ""))
+            await self.call_hooks(
+                EventType.OnPluginErrorEvent,
+                event,
+                str(payload.get("plugin") or ""),
+                str(payload.get("handler") or ""),
+                error,
+                str(payload.get("traceback") or ""),
+            )
+        reply: dict[str, Any] = {"stopped": event.is_stopped() and not was_stopped}
+        if out:
+            reply["payload"] = out
+        return reply
 
     async def handle_tool_call(self, event_id: str, data: dict[str, Any], name: str, arguments: Any) -> dict[str, Any]:
         """Runs an ``llm_tool`` handler and returns ``{"text", "sent"}`` or ``{"error"}``.
@@ -396,6 +558,7 @@ class Dispatcher:
             self.remember(event_id, event)
         args = arguments if isinstance(arguments, dict) else {}
         texts: list[str] = []
+        images: list[str] = []
         sent_before = event._has_send_oper
         event._has_send_oper = False
 
@@ -412,6 +575,7 @@ class Dispatcher:
                 text = tools.result_text(item)
                 if text:
                     texts.append(text)
+                images.extend(tool_images(item))
 
         try:
             ret = tools.invoke(tool, event, self.instance.context, args)
@@ -431,4 +595,7 @@ class Dispatcher:
         text = "\n".join(t for t in texts if t)
         if not text:
             text = TOOL_SENT_DIRECTLY if sent else TOOL_NO_OUTPUT
-        return {"text": text, "sent": sent}
+        out: dict[str, Any] = {"text": text, "sent": sent}
+        if images:
+            out["images"] = images
+        return out

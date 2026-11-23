@@ -70,6 +70,32 @@ pub enum PluginOut {
         level: String,
         message: String,
     },
+    /// A handler result for the node to decorate with every plugin's hooks and send.
+    /// Answered with `result_done`.
+    Result {
+        req_id: String,
+        event_id: Option<String>,
+        session: Option<String>,
+        chain: Vec<Component>,
+        llm: bool,
+    },
+    /// A `ProviderRequest` a handler yielded, run like the default reply. Answered with `agent_result`.
+    Agent {
+        req_id: String,
+        event_id: Option<String>,
+        session: Option<String>,
+        prompt: Option<String>,
+        system_prompt: Option<String>,
+        contexts: Vec<Value>,
+        image_urls: Vec<String>,
+    },
+    /// A handler of the plugin failed. Other plugins' `plugin_error` hooks hear about it.
+    PluginError {
+        event_id: Option<String>,
+        handler: String,
+        error: String,
+        traceback: String,
+    },
 }
 
 pub struct OutMsg {
@@ -124,6 +150,17 @@ fn str_opt(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(|x| x.as_str()).map(str::to_string)
 }
 
+fn str_list(v: &Value, k: &str) -> Vec<String> {
+    v.get(k)
+        .and_then(|c| c.as_array())
+        .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+fn value_list(v: &Value, k: &str) -> Vec<Value> {
+    v.get(k).and_then(Value::as_array).cloned().unwrap_or_default()
+}
+
 /// Parses a plugin to node message into a `PluginOut` request when it is one.
 pub fn parse_out(v: &Value) -> Option<PluginOut> {
     match v.get("op")?.as_str()? {
@@ -140,21 +177,35 @@ pub fn parse_out(v: &Value) -> Option<PluginOut> {
             req_id: str_opt(v, "req_id")?,
             prompt: str_opt(v, "prompt"),
             system_prompt: str_opt(v, "system_prompt"),
-            contexts: v
-                .get("contexts")
-                .and_then(|c| c.as_array())
-                .cloned()
-                .unwrap_or_default(),
-            image_urls: v
-                .get("image_urls")
-                .and_then(|c| c.as_array())
-                .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect())
-                .unwrap_or_default(),
-            tools: v.get("tools").and_then(Value::as_array).cloned().unwrap_or_default(),
+            contexts: value_list(v, "contexts"),
+            image_urls: str_list(v, "image_urls"),
+            tools: value_list(v, "tools"),
         }),
         "log" => Some(PluginOut::Log {
             level: str_opt(v, "level").unwrap_or_else(|| "info".into()),
             message: str_opt(v, "message").unwrap_or_default(),
+        }),
+        "result" => Some(PluginOut::Result {
+            req_id: str_opt(v, "req_id")?,
+            event_id: str_opt(v, "event_id"),
+            session: str_opt(v, "session"),
+            chain: parse_chain(v.get("chain")),
+            llm: v.get("llm").and_then(Value::as_bool).unwrap_or(false),
+        }),
+        "agent" => Some(PluginOut::Agent {
+            req_id: str_opt(v, "req_id")?,
+            event_id: str_opt(v, "event_id"),
+            session: str_opt(v, "session"),
+            prompt: str_opt(v, "prompt"),
+            system_prompt: str_opt(v, "system_prompt"),
+            contexts: value_list(v, "contexts"),
+            image_urls: str_list(v, "image_urls"),
+        }),
+        "plugin_error" => Some(PluginOut::PluginError {
+            event_id: str_opt(v, "event_id"),
+            handler: str_opt(v, "handler").unwrap_or_default(),
+            error: str_opt(v, "error").unwrap_or_default(),
+            traceback: str_opt(v, "traceback").unwrap_or_default(),
         }),
         _ => None,
     }
@@ -190,9 +241,17 @@ impl PluginProc {
         self.waiters.lock().unwrap().remove(event_id);
     }
 
-    /// Runs the plugin's `llm_request` hook and returns the possibly modified request.
-    pub async fn llm_hook(&self, event_id: &str, request: Value, timeout: Duration) -> Option<Value> {
-        let key = format!("hook:{event_id}");
+    /// Runs the plugin's hooks of one `kind` and returns the `hook_result` reply, which may carry a
+    /// changed `payload` and a `stopped` flag. None when the plugin does not answer in time or exits.
+    pub async fn hook(
+        &self,
+        kind: &str,
+        event: Option<(&str, &MessageEvent)>,
+        payload: &Value,
+        timeout: Duration,
+    ) -> Option<Value> {
+        let hook_id = ulid::Ulid::new().to_string().to_lowercase();
+        let key = format!("hook:{hook_id}");
         let (tx, rx) = oneshot::channel();
         self.waiters.lock().unwrap().insert(
             key.clone(),
@@ -201,9 +260,19 @@ impl PluginProc {
                 ..Default::default()
             },
         );
-        self.writer
-            .send(&json!({"op": "llm_hook", "event_id": event_id, "request": request}));
-        let r = tokio::time::timeout(timeout, rx).await.ok().and_then(|r| r.ok());
+        let mut msg = json!({"op": "hook", "hook_id": hook_id, "kind": kind, "payload": payload});
+        if let Some((event_id, ev)) = event {
+            msg["event_id"] = json!(event_id);
+            msg["event"] = json!(ev);
+        }
+        let r = if self.writer.send(&msg) {
+            tokio::select! {
+                r = tokio::time::timeout(timeout, rx) => r.ok().and_then(|r| r.ok()),
+                _ = self.closed.cancelled() => None,
+            }
+        } else {
+            None
+        };
         self.waiters.lock().unwrap().remove(&key);
         r
     }
@@ -617,10 +686,11 @@ pub(crate) async fn connect(
                         }
                     }
                 }
-                "llm_hook_result" => {
-                    if let Some(mut w) = waiters.lock().unwrap().remove(&format!("hook:{event_id}")) {
+                "hook_result" => {
+                    let hook_id = str_opt(&v, "hook_id").unwrap_or_default();
+                    if let Some(mut w) = waiters.lock().unwrap().remove(&format!("hook:{hook_id}")) {
                         if let Some(tx) = w.hook.take() {
-                            let _ = tx.send(v.get("request").cloned().unwrap_or(Value::Null));
+                            let _ = tx.send(v.clone());
                         }
                     }
                 }

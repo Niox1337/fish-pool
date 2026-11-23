@@ -31,9 +31,13 @@ class LlmPlugin(Star):
         except Exception as e:
             yield event.plain_result(f"failed:{type(e).__name__}")
 
+    @filter.on_waiting_llm_request()
+    async def mark_origin(self, event: AstrMessageEvent):
+        event.set_extra("origin", "plugin" if event.get_extra("provider_request") is not None else "chat")
+
     @filter.on_llm_request()
     async def add_persona(self, event: AstrMessageEvent, req: ProviderRequest):
-        req.system_prompt = (req.system_prompt or "") + "|hooked"
+        req.system_prompt = (req.system_prompt or "") + "|hooked:" + str(event.get_extra("origin"))
         event.set_extra("hooked", True)
 
     @filter.on_llm_response()

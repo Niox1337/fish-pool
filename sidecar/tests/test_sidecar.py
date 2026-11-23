@@ -14,7 +14,17 @@ from pathlib import Path
 
 import pytest
 
-from conftest import TIMEOUT, Control, FakeNode, ForkServerProcess, Lines, PluginProc, chain_text, default_llm
+from conftest import (
+    TIMEOUT,
+    Control,
+    FakeNode,
+    ForkServerProcess,
+    Lines,
+    PluginProc,
+    chain_text,
+    default_llm,
+    make_event,
+)
 
 
 def kinds(proc) -> dict[str, str]:
@@ -249,11 +259,12 @@ def test_llm_paths(fork_server, run):
         async with FakeNode(fork_server) as node:
             p = await node.spawn("llm_plugin")
             assert kinds(p)["add_persona"] == "llm_request"
+            assert kinds(p)["mark_origin"] == "llm_request"
 
             r = await p.event("ask what is fish")
-            assert [chain_text(s) for s in r["sends"]] == ["LLM[be short|hooked](what is fish)!"]
+            assert [chain_text(s) for s in r["sends"]] == ["LLM[be short|hooked:plugin](what is fish)!"]
             assert r["done"]["call_llm"] is False
-            assert p.llm_requests[-1]["system_prompt"] == "be short|hooked"
+            assert p.llm_requests[-1]["system_prompt"] == "be short|hooked:plugin"
 
             r = await p.event("chat hi there")
             assert [chain_text(s) for s in r["sends"]] == ["chat:LLM[sys](hi there)"]
@@ -268,7 +279,7 @@ def test_llm_paths(fork_server, run):
             hooked = await p.llm_hook(
                 r["event_id"], {"prompt": "tell me a joke", "system_prompt": "base", "contexts": []}
             )
-            assert hooked == {"prompt": "tell me a joke", "system_prompt": "base|hooked", "contexts": []}
+            assert hooked == {"prompt": "tell me a joke", "system_prompt": "base|hooked:chat", "contexts": []}
 
             unknown = await p.llm_hook("missing", {"prompt": "x", "system_prompt": "s", "contexts": []})
             assert unknown["system_prompt"] == "s"
@@ -893,5 +904,78 @@ def test_group_demotes_a_plugin_that_blocks_the_loop(fork_server, run):
             assert [chain_text(s) for s in r["sends"]] == ["echo:ok"]
             r = await cmd.event("spin 1")
             assert not r["matched"]
+
+    run(scenario())
+
+
+def test_every_hook_kind_runs_for_the_node(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            p = await node.spawn("hooks_plugin")
+            k = kinds(p)
+            assert (k["begin"], k["done"], k["using"], k["responded"], k["response"]) == (
+                "agent_begin",
+                "agent_done",
+                "using_llm_tool",
+                "llm_tool_respond",
+                "llm_response",
+            )
+            assert (k["decorate"], k["sent"], k["on_error"], k["loaded"], k["unloaded"]) == (
+                "decorating_result",
+                "after_message_sent",
+                "plugin_error",
+                "plugin_loaded",
+                "plugin_unloaded",
+            )
+            assert not any("never called" in m["message"] for m in p.logs), p.logs
+
+            r = await p.event("hi there")
+            eid = r["event_id"]
+            await p.llm_hook(eid, {"prompt": "hi there", "system_prompt": "s", "contexts": []})
+            messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "hi there"}]
+            await p.hook("agent_begin", eid, {"messages": messages})
+            tool = {"name": "picture", "description": "Draws", "parameters": {"type": "object", "properties": {}}}
+            await p.hook("using_llm_tool", eid, {"tool": tool, "arguments": {"q": "cat"}})
+            await p.write(
+                {
+                    "op": "tool_call",
+                    "call_id": "t1",
+                    "event_id": eid,
+                    "event": {},
+                    "name": "picture",
+                    "arguments": {"q": "cat"},
+                }
+            )
+            res = await p.recv(lambda m: m.get("op") == "tool_result" and m.get("call_id") == "t1")
+            assert (res["text"], res["images"]) == ("drew cat", ["data:image/png;base64,AAAA"])
+            await p.hook("llm_tool_respond", eid, {"tool": tool, "arguments": {"q": "cat"}, "result": "drew cat"})
+            r = await p.hook("llm_response", eid, {"completion_text": "hello[tag]"})
+            assert r["payload"] == {"completion_text": "hello"}
+            await p.hook("agent_done", eid, {"messages": messages, "completion_text": "hello"})
+            r = await p.hook("decorating_result", eid, {"chain": [{"type": "plain", "text": "hello"}], "llm": True})
+            chain = r["payload"]["chain"]
+            assert chain == [{"type": "plain", "text": "hello"}, {"type": "image", "url": "https://example.com/m.png"}]
+            await p.hook("after_message_sent", eid, {"chain": chain, "llm": True})
+
+            error = {"plugin": "other", "handler": "h", "error": "bad", "traceback": ""}
+            await p.hook("plugin_error", "unseen", error, event=make_event("x"))
+            await p.hook("plugin_loaded", None, {"plugin": {"name": "other", "version": "1"}})
+            await p.hook("plugin_unloaded", None, {"plugin": {"name": "hooks_plugin"}})
+
+            await p.event("boom")
+            assert p.errors[-1]["handler"] == "boom" and "kaboom" in p.errors[-1]["error"]
+
+            r = await p.event("seen")
+            assert chain_text(r["sends"][0]).split(";") == [
+                "begin:2",
+                "using:picture:cat",
+                "respond:picture:drew cat",
+                "done:True:hello",
+                "sent:2",
+                "error:other:h:bad",
+                "loaded:other",
+                "unloaded:hooks_plugin",
+                "error:hooks_plugin:boom:kaboom",
+            ]
 
     run(scenario())

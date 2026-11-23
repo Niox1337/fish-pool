@@ -132,6 +132,10 @@ def default_llm(message: dict) -> dict:
     return {"text": f"LLM[{message.get('system_prompt', '')}]({prompt})"}
 
 
+# Plugin messages the fake node answers by itself while waiting for something else.
+SERVICE_OPS = ("llm", "log", "send_to", "plugin_error", "result", "agent")
+
+
 class PluginProc:
     """Node side of one plugin process socket."""
 
@@ -153,6 +157,7 @@ class PluginProc:
         self.llm_requests: list[dict] = []
         self.logs: list[dict] = []
         self.proactive: list[dict] = []
+        self.errors: list[dict] = []
 
     async def write(self, message: dict) -> None:
         self.writer.write(json.dumps(message, ensure_ascii=False).encode() + b"\n")
@@ -170,7 +175,63 @@ class PluginProc:
         if m.get("op") == "send_to":
             self.proactive.append(m)
             return True
+        if m.get("op") == "plugin_error":
+            self.errors.append(m)
+            return True
+        if m.get("op") == "result":
+            sent = await self.deliver(m.get("event_id"), m.get("chain") or [], bool(m.get("llm")), m.get("session"))
+            await self.reply({"op": "result_done", "req_id": m["req_id"], "sent": sent})
+            return True
+        if m.get("op") == "agent":
+            await self.reply({"op": "agent_result", "req_id": m["req_id"], **(await self.agent(m))})
+            return True
         return False
+
+    async def reply(self, message: dict) -> None:
+        """Answers a plugin request. A plugin that already exited gets no answer."""
+        try:
+            await self.write(message)
+        except ConnectionError:
+            pass
+
+    async def hook(self, kind: str, event_id: str | None, payload: dict, event: dict | None = None) -> dict:
+        """Runs one hook kind in the plugin like the node does and returns the hook_result message."""
+        hook_id = uuid.uuid4().hex[:12]
+        message = {"op": "hook", "hook_id": hook_id, "kind": kind, "event_id": event_id, "payload": payload}
+        if event is not None:
+            message["event"] = event
+        try:
+            await self.write(message)
+            return await self.recv(lambda m: m.get("op") == "hook_result" and m.get("hook_id") == hook_id)
+        except (EOFError, ConnectionError):
+            return {}
+
+    async def deliver(self, event_id: str | None, chain: list, llm: bool, session: str | None = None) -> bool:
+        """Decorates and sends a result like the node does. The send is queued as a ``send`` message."""
+        r = await self.hook("decorating_result", event_id, {"chain": chain, "llm": llm})
+        chain = (r.get("payload") or {}).get("chain", chain)
+        if not chain:
+            return False
+        self.lines.backlog.append({"op": "send", "event_id": event_id, "session": session, "chain": chain})
+        await self.hook("after_message_sent", event_id, {"chain": chain, "llm": llm})
+        return True
+
+    async def agent(self, m: dict) -> dict:
+        """Runs a plugin LLM request like the node's agent, without tools."""
+        event_id = m.get("event_id")
+        request = {k: m[k] for k in ("prompt", "system_prompt", "contexts", "image_urls") if k in m}
+        r = await self.hook("llm_request", event_id, {**request, "plugin_request": True})
+        if r.get("stopped"):
+            return {"stopped": True}
+        hooked = r.get("payload") or request
+        self.llm_requests.append(hooked)
+        reply = self.llm(hooked)
+        if reply.get("error"):
+            return {"error": reply["error"]}
+        r = await self.hook("llm_response", event_id, {"completion_text": reply.get("text", "")})
+        text = (r.get("payload") or {}).get("completion_text", reply.get("text", ""))
+        await self.deliver(event_id, [{"type": "plain", "text": text}], True, m.get("session"))
+        return {}
 
     async def recv(self, pred: Callable[[dict], bool], timeout: float = TIMEOUT) -> dict:
         end = time.monotonic() + timeout
@@ -179,7 +240,7 @@ class PluginProc:
             if remaining <= 0:
                 raise TimeoutError(f"no matching plugin message, backlog={self.lines.backlog}")
             m = await self.lines.next(
-                lambda m: m.get("op") in ("llm", "log", "send_to") or pred(m),
+                lambda m: m.get("op") in SERVICE_OPS or pred(m),
                 remaining,
             )
             await self._service(m)
@@ -195,13 +256,21 @@ class PluginProc:
         while True:
             m = await self.recv(lambda m: m.get("event_id") == event_id and m.get("op") in ("send", "done"))
             if m["op"] == "done":
+                # A plugin cancelled while the node delivers its reply reports done first.
+                late = [b for b in self.lines.backlog if b.get("op") == "send" and b.get("event_id") == event_id]
+                for b in late:
+                    self.lines.backlog.remove(b)
+                sends.extend(late)
                 return {"event_id": event_id, "matched": matched["matched"], "sends": sends, "done": m}
             sends.append(m)
 
     async def llm_hook(self, event_id: str, request: dict) -> dict:
-        await self.write({"op": "llm_hook", "event_id": event_id, "request": request})
-        m = await self.recv(lambda m: m.get("op") == "llm_hook_result" and m.get("event_id") == event_id)
-        return m["request"]
+        """Runs the ``llm_request`` hooks of a default chat reply. Empty image lists are left out."""
+        m = await self.hook("llm_request", event_id, request)
+        out = dict(m.get("payload") or request)
+        if not out.get("image_urls"):
+            out.pop("image_urls", None)
+        return out
 
     async def wait_log(self, needle: str, timeout: float = TIMEOUT) -> dict:
         for m in self.logs:

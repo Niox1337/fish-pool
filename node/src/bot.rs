@@ -124,6 +124,11 @@ struct Runtime {
 const MATCH_WAIT: Duration = Duration::from_secs(2);
 const DONE_WAIT: Duration = Duration::from_secs(120);
 const HOOK_WAIT: Duration = Duration::from_secs(5);
+/// Hook kinds that tell a plugin about other plugins. A plugin with one of them stays running so
+/// it sees every load and unload.
+const LIFECYCLE_HOOKS: [&str; 2] = ["plugin_loaded", "plugin_unloaded"];
+/// Longest wait for one plugin's `decorating_result` hooks, which may render images.
+const DECORATE_WAIT: Duration = Duration::from_secs(30);
 const TOOL_WAIT: Duration = Duration::from_secs(60);
 /// Rounds of tool calls before the model is told to answer without tools.
 const MAX_TOOL_ROUNDS: usize = 5;
@@ -156,7 +161,8 @@ pub struct Bot {
     platforms: RwLock<HashMap<String, PlatformConn>>,
     pub procs: RwLock<HashMap<String, Arc<PluginProc>>>,
     rate: Mutex<RateLimiter>,
-    inflight: Mutex<HashMap<String, (ReplyTarget, Instant)>>,
+    /// Reply target and event of recent inbound messages, by event id.
+    inflight: Mutex<HashMap<String, (ReplyTarget, MessageEvent, Instant)>>,
     over_quota: Mutex<HashSet<String>>,
     /// Plugins that run in their own process even when group processes are enabled.
     // shortcut: kept in memory only, so a node restart tries grouping again, store it in node.db if plugins keep falling back after restarts.
@@ -760,6 +766,10 @@ impl Bot {
         let Some(idle) = idle else {
             return std::future::pending().await;
         };
+        if LIFECYCLE_HOOKS.iter().any(|kind| proc.has_handler(kind)) {
+            self.logs.info(src, "插件会接收其他插件加载和卸载的通知，不会休眠");
+            return std::future::pending().await;
+        }
         let mut reported: Option<String> = None;
         loop {
             let due = *activity.borrow_and_update() + idle;
@@ -807,7 +817,8 @@ impl Bot {
     }
 
     /// Registers a running process when given one and takes the plugin out of `dormant`.
-    fn leave_dormant(&self, plugin_id: &str, proc: Option<Arc<PluginProc>>) {
+    /// Returns true when the plugin was dormant.
+    fn leave_dormant(&self, plugin_id: &str, proc: Option<Arc<PluginProc>>) -> bool {
         let was_dormant = {
             let mut procs = self.procs.write().unwrap();
             if let Some(p) = proc {
@@ -818,6 +829,7 @@ impl Bot {
         if was_dormant.is_some() {
             self.dormant_gen.send_modify(|g| *g += 1);
         }
+        was_dormant.is_some()
     }
 
     /// Wakes plugins that may handle this message and returns the running plugins.
@@ -871,6 +883,8 @@ impl Bot {
         out_tx: mpsc::Sender<OutMsg>,
     ) {
         let mut attempt = 0u32;
+        // False only right after waking from sleep with the same config.
+        let mut announce_load = true;
         let shared = self.shared.clone();
         loop {
             if cancel.is_cancelled() {
@@ -996,6 +1010,10 @@ impl Bot {
             };
             let mut activity = proc.activity.subscribe();
             self.leave_dormant(&spec.id, Some(proc.clone()));
+            let info = plugin_info(&proc, &spec.id);
+            if announce_load {
+                self.plugin_lifecycle("plugin_loaded", info.clone());
+            }
             let version = Some(proc.hello.version.clone())
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| spec.version.clone());
@@ -1027,6 +1045,9 @@ impl Bot {
                 if procs.get(&spec.id).is_some_and(|p| p.proc_id == proc_id) {
                     procs.remove(&spec.id);
                 }
+            }
+            if !matches!(outcome, PluginExit::Sleep) {
+                self.plugin_lifecycle("plugin_unloaded", info.clone());
             }
             match outcome {
                 PluginExit::Stop | PluginExit::Reload => {
@@ -1060,6 +1081,7 @@ impl Bot {
                         .info(&src, format!("{minutes} 分钟未收到{trigger}，插件已休眠"));
                     let detail = format!("空闲休眠中，收到{trigger}时自动唤醒");
                     self.set_plugin_status(&spec.id, "sleeping", &detail, Some(version));
+                    let mut reconfigured = false;
                     let wake_reason = loop {
                         tokio::select! {
                             _ = cancel.cancelled() => break None,
@@ -1068,6 +1090,7 @@ impl Bot {
                                 if updated.is_err() {
                                     break None;
                                 }
+                                reconfigured = true;
                                 if command_only {
                                     break Some("配置已更新，正在唤醒插件");
                                 }
@@ -1076,9 +1099,15 @@ impl Bot {
                     };
                     let Some(wake_reason) = wake_reason else {
                         self.leave_dormant(&spec.id, None);
+                        self.plugin_lifecycle("plugin_unloaded", info);
                         return;
                     };
                     self.logs.info(&src, wake_reason);
+                    // A sleeping plugin counts as loaded, so only a config change reloads it.
+                    if reconfigured {
+                        self.plugin_lifecycle("plugin_unloaded", info);
+                    }
+                    announce_load = reconfigured;
                     attempt = 0;
                 }
                 PluginExit::Failed(code) => {
@@ -1163,15 +1192,23 @@ impl Bot {
         (d.settings.clone(), d.llm.clone())
     }
 
-    fn remember_target(&self, event_id: &str, t: ReplyTarget) {
+    fn remember_target(&self, event_id: &str, t: ReplyTarget, ev: &MessageEvent) {
         let mut g = self.inflight.lock().unwrap();
         if g.len() > 128 {
-            g.retain(|_, (_, at)| at.elapsed() < INFLIGHT_TTL);
+            g.retain(|_, (_, _, at)| at.elapsed() < INFLIGHT_TTL);
             if g.len() > 512 {
                 g.clear();
             }
         }
-        g.insert(event_id.to_string(), (t, Instant::now()));
+        g.insert(event_id.to_string(), (t, ev.clone(), Instant::now()));
+    }
+
+    fn inflight_event(&self, event_id: &str) -> Option<(ReplyTarget, MessageEvent)> {
+        self.inflight
+            .lock()
+            .unwrap()
+            .get(event_id)
+            .map(|(t, ev, _)| (t.clone(), ev.clone()))
     }
 
     pub fn build_event(&self, ib: &Inbound, settings: &BotSettings) -> Option<MessageEvent> {
@@ -1228,7 +1265,7 @@ impl Bot {
             session_id: ib.session_id.clone(),
             msg_id: Some(ib.msg_id.clone()),
         };
-        self.remember_target(&event_id, target.clone());
+        self.remember_target(&event_id, target.clone(), &ev);
 
         let procs = self.awake_procs(&ev).await;
         let results = futures_util::future::join_all(procs.iter().map(|p| {
@@ -1257,8 +1294,7 @@ impl Bot {
         }
     }
 
-    // shortcut: decorating_result handlers are not invoked on the default reply,
-    // upgrade when the plugin protocol gains a result hook op.
+    /// Answers a message no plugin handled with the persona and the chat history.
     async fn default_chat(
         &self,
         ev: &MessageEvent,
@@ -1295,32 +1331,120 @@ impl Bot {
         } else {
             s.persona.system_prompt.clone()
         };
-        let mut request = json!({
+        let request = json!({
             "prompt": ev.message_str,
             "system_prompt": system_prompt,
             "contexts": history.iter().map(|(r, c)| json!({"role": r, "content": c})).collect::<Vec<_>>(),
+            "image_urls": [],
         });
-        let mut hooks: Vec<Arc<PluginProc>> = self
+        let Ok(reply) = self.run_agent(ev, event_id, target, s, &spec, request, false).await else {
+            return;
+        };
+        if !reply.text.is_empty() {
+            let prompt = reply.prompt.unwrap_or_else(|| ev.message_str.clone());
+            let _ = self.shared.conv.append(&self.id, session, "user", &prompt);
+            let _ = self.shared.conv.append(&self.id, session, "assistant", &reply.text);
+            self.deliver(Some((event_id, ev)), target, vec![Component::plain(reply.text)], true)
+                .await;
+        } else if !reply.sent_by_tools {
+            self.logs.warn("llm", "模型返回了空回复");
+        }
+    }
+
+    /// Running plugins that have `kind` hooks, highest priority first.
+    fn hook_procs(&self, kind: &str) -> Vec<Arc<PluginProc>> {
+        let mut procs: Vec<Arc<PluginProc>> = self
             .procs
             .read()
             .unwrap()
             .values()
-            .filter(|p| p.has_handler("llm_request"))
+            .filter(|p| p.has_handler(kind))
             .cloned()
             .collect();
-        hooks.sort_by_key(|p| -p.handler_priority("llm_request"));
-        for p in hooks {
-            if let Some(r) = p.llm_hook(event_id, request.clone(), HOOK_WAIT).await {
-                if r.is_object() {
-                    request = r;
+        procs.sort_by_key(|p| -p.handler_priority(kind));
+        procs
+    }
+
+    /// Runs the `kind` hooks of every running plugin in priority order, skipping `skip_plugin`.
+    /// Each plugin sees the payload as the plugins before it left it. When `stoppable`, a plugin
+    /// that stops the event ends the run. Returns the final payload and whether a plugin stopped
+    /// the event.
+    async fn run_hooks(
+        &self,
+        kind: &str,
+        event: Option<(&str, &MessageEvent)>,
+        mut payload: Value,
+        wait: Duration,
+        stoppable: bool,
+        skip_plugin: Option<&str>,
+    ) -> (Value, bool) {
+        let mut stopped = false;
+        for p in self.hook_procs(kind) {
+            if skip_plugin == Some(p.plugin_id.as_str()) {
+                continue;
+            }
+            let Some(r) = p.hook(kind, event, &payload, wait).await else {
+                if !p.closed.is_cancelled() {
+                    self.logs.warn(
+                        &format!("plugin:{}", p.plugin_name),
+                        format!("{kind} 钩子超过 {} 秒没有返回", wait.as_secs()),
+                    );
+                }
+                continue;
+            };
+            if let (Some(changed), Some(current)) =
+                (r.get("payload").and_then(Value::as_object), payload.as_object_mut())
+            {
+                for (k, v) in changed {
+                    current.insert(k.clone(), v.clone());
+                }
+            }
+            if r.get("stopped").and_then(Value::as_bool) == Some(true) {
+                stopped = true;
+                if stoppable {
+                    break;
                 }
             }
         }
-        let prompt = request
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&ev.message_str)
-            .to_string();
+        (payload, stopped)
+    }
+
+    /// Runs one LLM turn the way AstrBot's main agent does. The `llm_request` hooks may change
+    /// the request, then the model answers with every plugin's tools, and the `agent_begin`,
+    /// `using_llm_tool`, `llm_tool_respond`, `llm_response` and `agent_done` hooks run around it.
+    /// `request` holds `prompt`, `system_prompt`, `contexts` and `image_urls`.
+    /// Fails with None when a hook stopped the request, or with the error of the model call.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_agent(
+        &self,
+        ev: &MessageEvent,
+        event_id: &str,
+        target: &ReplyTarget,
+        s: &BotSettings,
+        spec: &LlmSpec,
+        mut request: Value,
+        plugin_request: bool,
+    ) -> Result<AgentReply, Option<String>> {
+        let event = Some((event_id, ev));
+        let session = &ev.unified_msg_origin;
+        request["plugin_request"] = json!(plugin_request);
+        let (request, stopped) = self
+            .run_hooks("llm_request", event, request, HOOK_WAIT, true, None)
+            .await;
+        if stopped {
+            return Err(None);
+        }
+        let prompt = request.get("prompt").and_then(Value::as_str).map(str::to_string);
+        let contexts = request
+            .get("contexts")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let image_urls: Vec<String> = request
+            .get("image_urls")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
         let mut messages = vec![];
         if let Some(sp) = request
             .get("system_prompt")
@@ -1329,8 +1453,10 @@ impl Bot {
         {
             messages.push(ChatMessage::new("system", sp));
         }
-        messages.extend(contexts_to_messages(request.get("contexts")));
-        messages.push(ChatMessage::new("user", prompt.clone()));
+        messages.extend(llm::plugin_contexts(spec, &contexts));
+        if prompt.is_some() || !image_urls.is_empty() || contexts.is_empty() {
+            messages.push(ChatMessage::new("user", prompt.clone().unwrap_or_default()));
+        }
         let model = if s.llm.model.is_empty() {
             spec.model.clone()
         } else {
@@ -1338,14 +1464,25 @@ impl Bot {
         };
         let (tools, owners) = self.collect_tools();
         let mut tools_on = !tools.is_empty();
+        let mut images_on = true;
+        let mut image_turns: Vec<usize> = vec![];
         let mut sent_by_tools = false;
         let mut text = String::new();
+        self.run_hooks(
+            "agent_begin",
+            event,
+            json!({"messages": messages.iter().map(message_json).collect::<Vec<_>>()}),
+            HOOK_WAIT,
+            true,
+            None,
+        )
+        .await;
         for round in 0..=MAX_TOOL_ROUNDS {
             let req = ChatRequest {
-                spec: &spec,
+                spec,
                 model: &model,
                 messages: messages.clone(),
-                image_urls: vec![],
+                image_urls: image_urls.clone(),
                 temperature: s.llm.temperature,
                 max_tokens: s.llm.max_tokens.max(16),
                 tools: if tools_on { tools.clone() } else { vec![] },
@@ -1353,6 +1490,15 @@ impl Bot {
             };
             let reply = match llm::chat_reply(&self.shared.http, req).await {
                 Ok(r) => r,
+                Err(e) if !image_turns.is_empty() && is_client_error(&e) => {
+                    self.logs
+                        .warn("llm", format!("模型不接受工具返回的图片，这次不带图片继续: {e:#}"));
+                    for i in image_turns.drain(..).rev() {
+                        messages.remove(i);
+                    }
+                    images_on = false;
+                    continue;
+                }
                 Err(e) if tools_on && round == 0 && is_client_error(&e) => {
                     self.logs
                         .warn("llm", format!("模型不接受插件工具，这次不带工具回复: {e:#}"));
@@ -1364,7 +1510,7 @@ impl Bot {
                     if let Some(t) = llm::trouble(&e) {
                         self.notify_trouble(target, session, t).await;
                     }
-                    return;
+                    return Err(Some(format!("{e:#}")));
                 }
             };
             if !tools_on || reply.tool_calls.is_empty() {
@@ -1374,23 +1520,182 @@ impl Bot {
             messages.push(ChatMessage::assistant_raw(
                 reply.raw.unwrap_or_else(|| json!({"role": "assistant"})),
             ));
+            let mut images: Vec<Value> = vec![];
             for call in reply.tool_calls {
-                let result = self
+                let tool = tools
+                    .iter()
+                    .find(|t| t.name == call.name)
+                    .map(|t| json!({"name": t.name, "description": t.description, "parameters": t.parameters}))
+                    .unwrap_or_else(|| json!({"name": call.name}));
+                self.run_hooks(
+                    "using_llm_tool",
+                    event,
+                    json!({"tool": tool, "arguments": call.arguments}),
+                    HOOK_WAIT,
+                    true,
+                    None,
+                )
+                .await;
+                let out = self
                     .run_tool(&owners, ev, event_id, &call.name, &call.arguments, &mut sent_by_tools)
                     .await;
+                self.run_hooks(
+                    "llm_tool_respond",
+                    event,
+                    json!({"tool": tool, "arguments": call.arguments, "result": out.text}),
+                    HOOK_WAIT,
+                    true,
+                    None,
+                )
+                .await;
                 messages.push(ChatMessage::tool_result(
                     &call.id,
-                    truncate_chars(&result, MAX_TOOL_RESULT_CHARS),
+                    truncate_chars(&out.text, MAX_TOOL_RESULT_CHARS),
                 ));
+                if images_on {
+                    for url in out.images.into_iter().take(MAX_TOOL_IMAGES) {
+                        images.push(json!({"type": "text", "text": format!("[Image from tool '{}']", call.name)}));
+                        images.push(json!({"type": "image_url", "image_url": {"url": url}}));
+                    }
+                }
+            }
+            if !images.is_empty() {
+                let turn = json!({"role": "user", "content": images});
+                for m in llm::plugin_contexts(spec, &[turn]) {
+                    image_turns.push(messages.len());
+                    messages.push(m);
+                }
             }
         }
+        let (response, _) = self
+            .run_hooks(
+                "llm_response",
+                event,
+                json!({"completion_text": text}),
+                HOOK_WAIT,
+                true,
+                None,
+            )
+            .await;
+        let text = response
+            .get("completion_text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if !text.is_empty() {
-            let _ = self.shared.conv.append(&self.id, session, "user", &prompt);
-            let _ = self.shared.conv.append(&self.id, session, "assistant", &text);
-            self.send_to_target(target, &[Component::plain(text)]).await;
-        } else if !sent_by_tools {
-            self.logs.warn("llm", "模型返回了空回复");
+            messages.push(ChatMessage::new("assistant", text.clone()));
         }
+        self.run_hooks(
+            "agent_done",
+            event,
+            json!({"messages": messages.iter().map(message_json).collect::<Vec<_>>(), "completion_text": text}),
+            HOOK_WAIT,
+            true,
+            None,
+        )
+        .await;
+        Ok(AgentReply {
+            prompt,
+            text,
+            sent_by_tools,
+        })
+    }
+
+    /// Sends a result the way AstrBot's result decorate and respond stages do. The
+    /// `decorating_result` hooks of every plugin may change the chain, then the chain is sent
+    /// and the `after_message_sent` hooks run. Without an event the chain is sent as it is.
+    /// Returns true when something was sent.
+    async fn deliver(
+        &self,
+        event: Option<(&str, &MessageEvent)>,
+        target: &ReplyTarget,
+        mut chain: Vec<Component>,
+        llm: bool,
+    ) -> bool {
+        if event.is_some() {
+            let (payload, _) = self
+                .run_hooks(
+                    "decorating_result",
+                    event,
+                    json!({"chain": chain, "llm": llm}),
+                    DECORATE_WAIT,
+                    false,
+                    None,
+                )
+                .await;
+            if let Ok(decorated) = serde_json::from_value::<Vec<Component>>(payload["chain"].clone()) {
+                chain = decorated;
+            }
+        }
+        if chain.is_empty() {
+            return false;
+        }
+        self.send_to_target(target, &chain).await;
+        if event.is_some() {
+            self.run_hooks(
+                "after_message_sent",
+                event,
+                json!({"chain": chain, "llm": llm}),
+                HOOK_WAIT,
+                true,
+                None,
+            )
+            .await;
+        }
+        true
+    }
+
+    /// Runs a `ProviderRequest` a plugin handler yielded and sends the reply. Returns the `agent_result` message.
+    #[allow(clippy::too_many_arguments)]
+    async fn plugin_agent(
+        &self,
+        req_id: &str,
+        event_id: Option<String>,
+        prompt: Option<String>,
+        system_prompt: Option<String>,
+        contexts: Vec<Value>,
+        image_urls: Vec<String>,
+    ) -> Value {
+        let Some((event_id, (target, ev))) = event_id.and_then(|id| self.inflight_event(&id).map(|e| (id, e))) else {
+            return json!({"op": "agent_result", "req_id": req_id, "error": "这条消息已过期，无法再请求模型"});
+        };
+        let (s, spec) = self.settings();
+        let Some(spec) = spec.filter(|l| !l.api_key.is_empty()) else {
+            return json!({"op": "agent_result", "req_id": req_id, "error": "未配置 LLM 密钥"});
+        };
+        let request = json!({
+            "prompt": prompt,
+            "system_prompt": system_prompt.unwrap_or_default(),
+            "contexts": contexts,
+            "image_urls": image_urls,
+        });
+        match self.run_agent(&ev, &event_id, &target, &s, &spec, request, true).await {
+            Ok(reply) => {
+                if !reply.text.is_empty() {
+                    self.deliver(
+                        Some((&event_id, &ev)),
+                        &target,
+                        vec![Component::plain(reply.text)],
+                        true,
+                    )
+                    .await;
+                }
+                json!({"op": "agent_result", "req_id": req_id})
+            }
+            Err(None) => json!({"op": "agent_result", "req_id": req_id, "stopped": true}),
+            Err(Some(e)) => json!({"op": "agent_result", "req_id": req_id, "error": e}),
+        }
+    }
+
+    /// Tells running plugins that `proc`'s plugin was loaded or unloaded.
+    /// Runs the `kind` lifecycle hooks of running plugins in the background. `plugin` is the
+    /// `plugin_info` of the plugin that was loaded or unloaded.
+    fn plugin_lifecycle(self: &Arc<Self>, kind: &'static str, plugin: Value) {
+        let bot = self.clone();
+        tokio::spawn(async move {
+            bot.run_hooks(kind, None, json!({"plugin": plugin}), HOOK_WAIT, false, None)
+                .await
+        });
     }
 
     /// Tells the chat why there is no reply, at most once per `Trouble::cooldown` for each session and kind.
@@ -1436,7 +1741,7 @@ impl Bot {
         (defs, owners)
     }
 
-    /// Runs one tool call and returns the text handed back to the model.
+    /// Runs one tool call and returns the text and images handed back to the model.
     async fn run_tool(
         &self,
         owners: &HashMap<String, Arc<PluginProc>>,
@@ -1445,9 +1750,9 @@ impl Bot {
         name: &str,
         arguments: &Value,
         sent: &mut bool,
-    ) -> String {
+    ) -> ToolOutput {
         let Some(p) = owners.get(name) else {
-            return format!("没有名为 {name} 的工具");
+            return format!("没有名为 {name} 的工具").into();
         };
         let src = format!("plugin:{}", p.plugin_name);
         self.logs.info(&src, format!("模型调用工具 {name}"));
@@ -1462,9 +1767,22 @@ impl Bot {
         }
         if let Some(err) = v.get("error").and_then(Value::as_str) {
             self.logs.warn(&src, format!("工具 {name} 出错: {err}"));
-            return err.to_string();
+            return err.into();
         }
-        v.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
+        ToolOutput {
+            text: v.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+            images: v
+                .get("images")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|u| u.starts_with("data:image/") || u.starts_with("https://"))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
     }
 
     async fn send_to_target(&self, t: &ReplyTarget, chain: &[Component]) {
@@ -1486,7 +1804,7 @@ impl Bot {
 
     fn target_for(&self, event_id: Option<&str>, session: Option<&str>) -> Option<ReplyTarget> {
         if let Some(id) = event_id {
-            if let Some((t, _)) = self.inflight.lock().unwrap().get(id) {
+            if let Some((t, _, _)) = self.inflight.lock().unwrap().get(id) {
                 return Some(t.clone());
             }
         }
@@ -1563,12 +1881,127 @@ impl Bot {
                 };
                 m.writer.send(&reply);
             }
+            PluginOut::Result {
+                req_id,
+                event_id,
+                session,
+                chain,
+                llm,
+            } => {
+                let sent = match self.target_for(event_id.as_deref(), session.as_deref()) {
+                    Some(t) => {
+                        let ev = event_id
+                            .as_deref()
+                            .and_then(|id| self.inflight_event(id).map(|(_, ev)| (id, ev)));
+                        self.deliver(ev.as_ref().map(|(id, ev)| (*id, ev)), &t, chain, llm)
+                            .await
+                    }
+                    None => {
+                        self.logs.warn(&src, "无法确定回复目标，消息未发送");
+                        false
+                    }
+                };
+                m.writer
+                    .send(&json!({"op": "result_done", "req_id": req_id, "sent": sent}));
+            }
+            PluginOut::Agent {
+                req_id,
+                event_id,
+                session: _,
+                prompt,
+                system_prompt,
+                contexts,
+                image_urls,
+            } => {
+                let reply = self
+                    .plugin_agent(&req_id, event_id, prompt, system_prompt, contexts, image_urls)
+                    .await;
+                m.writer.send(&reply);
+            }
+            PluginOut::PluginError {
+                event_id,
+                handler,
+                error,
+                traceback,
+            } => {
+                let Some((id, (_, ev))) = event_id.and_then(|id| self.inflight_event(&id).map(|e| (id, e))) else {
+                    return;
+                };
+                let payload =
+                    json!({"plugin": m.plugin_name, "handler": handler, "error": error, "traceback": traceback});
+                self.run_hooks(
+                    "plugin_error",
+                    Some((&id, &ev)),
+                    payload,
+                    HOOK_WAIT,
+                    true,
+                    Some(&m.plugin_id),
+                )
+                .await;
+            }
         }
     }
 
     #[cfg(test)]
     pub(crate) fn platforms_len(&self) -> usize {
         self.platforms.read().unwrap().len()
+    }
+}
+
+/// The `plugin` payload of lifecycle hooks.
+fn plugin_info(proc: &PluginProc, plugin_id: &str) -> Value {
+    let name = if proc.hello.name.is_empty() {
+        &proc.plugin_name
+    } else {
+        &proc.hello.name
+    };
+    json!({"id": plugin_id, "name": name, "version": proc.hello.version})
+}
+
+/// Images a tool may hand to the model in one call.
+const MAX_TOOL_IMAGES: usize = 4;
+
+/// What one LLM turn produced.
+struct AgentReply {
+    /// The user prompt after the `llm_request` hooks.
+    prompt: Option<String>,
+    /// The reply after the `llm_response` hooks.
+    text: String,
+    /// True when a tool already sent something to the chat.
+    sent_by_tools: bool,
+}
+
+/// What a tool call hands back to the model.
+struct ToolOutput {
+    text: String,
+    /// `data:` or `https:` URLs of images the tool returned.
+    images: Vec<String>,
+}
+
+impl From<String> for ToolOutput {
+    fn from(text: String) -> Self {
+        ToolOutput { text, images: vec![] }
+    }
+}
+
+impl From<&str> for ToolOutput {
+    fn from(text: &str) -> Self {
+        text.to_string().into()
+    }
+}
+
+/// The OpenAI style form of a message, as AstrBot's agent hooks see it.
+fn message_json(m: &ChatMessage) -> Value {
+    match &m.raw {
+        Some(raw) if raw.is_object() => raw.clone(),
+        Some(Value::Array(blocks)) => {
+            let text: String = blocks.iter().filter_map(|b| b["text"].as_str()).collect();
+            json!({"role": m.role, "content": text})
+        }
+        _ => match &m.tool_call_id {
+            Some(id) => json!({"role": "tool", "tool_call_id": id, "content": m.content}),
+            None => json!({"role": m.role, "content": m.content}),
+        },
     }
 }
 
@@ -1611,26 +2044,6 @@ fn is_client_error(e: &anyhow::Error) -> bool {
         .and_then(|a| a.status)
         .is_some_and(|s| s.is_client_error())
         && !llm::trouble(e).is_some_and(|t| t.is_account_problem() || t == llm::Trouble::Busy)
-}
-
-fn contexts_to_messages(v: Option<&Value>) -> Vec<ChatMessage> {
-    v.and_then(|c| c.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| {
-                    let role = m.get("role")?.as_str()?;
-                    if !matches!(role, "user" | "assistant" | "system") {
-                        return None;
-                    }
-                    let content = match m.get("content")? {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    Some(ChatMessage::new(role, content))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1804,15 +2217,5 @@ mod tests {
         d.running = false;
         bot.apply(d).await;
         assert_eq!(bot.status_json()["status"], "stopped");
-    }
-
-    #[test]
-    fn contexts_conversion() {
-        let v = json!([{"role": "user", "content": "a"}, {"role": "tool", "content": "x"}, {"role": "assistant", "content": [1]}]);
-        let m = contexts_to_messages(Some(&v));
-        assert_eq!(
-            m,
-            vec![ChatMessage::new("user", "a"), ChatMessage::new("assistant", "[1]")]
-        );
     }
 }

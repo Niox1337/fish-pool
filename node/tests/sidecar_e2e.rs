@@ -82,8 +82,16 @@ async fn next_send(rx: &mut mpsc::Receiver<OutMsg>) -> (Option<String>, Vec<Comp
             .await
             .expect("plugin output")
             .expect("channel open");
-        if let PluginOut::Send { session, chain, .. } = m.msg {
-            return (session, chain);
+        match m.msg {
+            PluginOut::Send { session, chain, .. } => return (session, chain),
+            PluginOut::Result {
+                req_id, session, chain, ..
+            } => {
+                m.writer
+                    .send(&serde_json::json!({"op": "result_done", "req_id": req_id, "sent": true}));
+                return (session, chain);
+            }
+            _ => {}
         }
     }
 }
@@ -439,6 +447,148 @@ async fn light_plugins_share_a_group_process_and_others_run_alone() {
         assert_eq!(procs["pc"].pid, procs["pf"].pid);
         assert_ne!(procs["pc"].pid, pids[0]);
     }
+
+    node.shutdown().await;
+}
+
+/// Serves `/v1/chat/completions`: a request that offers tools and has no tool result yet gets a
+/// `picture` tool call, others the text reply `hi [tag]`. Returns the base URL and the request
+/// bodies it received.
+async fn fake_llm() -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
+    use axum::{extract::State, routing::post, Json, Router};
+    type Seen = Arc<std::sync::Mutex<Vec<Value>>>;
+    async fn reply(State(seen): State<Seen>, Json(body): Json<Value>) -> Json<Value> {
+        let call_tool = body["tools"].as_array().is_some_and(|t| !t.is_empty())
+            && !body["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool");
+        seen.lock().unwrap().push(body);
+        let message = if call_tool {
+            json!({"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function",
+                "function": {"name": "picture", "arguments": "{\"q\": \"cat\"}"}}]})
+        } else {
+            json!({"role": "assistant", "content": "hi [tag]"})
+        };
+        Json(json!({"choices": [{"index": 0, "message": message, "finish_reason": "stop"}]}))
+    }
+    let seen: Seen = Arc::default();
+    let app = Router::new()
+        .route("/v1/chat/completions", post(reply))
+        .with_state(seen.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}/v1"), seen)
+}
+
+#[tokio::test]
+async fn default_reply_runs_every_plugin_hook() {
+    let Some(python) = sidecar_python() else { return };
+    let dir = tempfile::Builder::new().prefix("fn").tempdir_in("/tmp").unwrap();
+    let mut cfg = node_config(dir.path());
+    cfg.dev_services = true;
+    let hooks = json!({"id": "ph", "name": "hooks_plugin", "repo_url": "https://github.com/x/hooks", "version": "1", "enabled": true, "config": {}});
+    let asker = json!({"id": "pl", "name": "llm_plugin", "repo_url": "https://github.com/x/llm", "version": "1", "enabled": true, "config": {}});
+    preinstall(&cfg, &hooks);
+    preinstall(&cfg, &asker);
+    let (base_url, requests) = fake_llm().await;
+    let node = Node::new(cfg, Some(command(&python))).unwrap();
+    let desired = serde_json::from_value(json!({
+        "bot_id": "b1", "user_id": "u1", "name": "小鱼", "running": true,
+        "platforms": [], "plugins": [hooks, asker],
+        "llm": {"base_url": base_url, "model": "m", "api_key": "k"}
+    }))
+    .unwrap();
+    node.put(desired).await.unwrap();
+    wait_status(&node, "ph", &["running"], 30).await;
+    wait_status(&node, "pl", &["running"], 30).await;
+
+    // the tool image reaches the model, llm_response strips the tag and decorating_result adds an image
+    let reply = say(&node, "draw a cat", 1).await;
+    assert!(reply.contains("hi ") && !reply.contains("[tag]"), "{reply}");
+    assert!(reply.contains("https://example.com/m.png"), "{reply}");
+    let first = requests.lock().unwrap()[0].to_string();
+    assert!(first.contains("|hooked:chat"), "{first}");
+    let second = requests.lock().unwrap()[1].to_string();
+    assert!(second.contains("drew cat"), "{second}");
+    assert!(second.contains("data:image/png;base64,AAAA"), "{second}");
+
+    let seen = say(&node, "seen", 2).await;
+    for part in [
+        "loaded:",
+        "begin:2",
+        "using:picture:cat",
+        "respond:picture:drew cat",
+        "done:True:hi ",
+        "sent:2",
+    ] {
+        assert!(seen.contains(part), "{part} missing in {seen}");
+    }
+
+    // a ProviderRequest a command yields runs through the main agent with every plugin's hooks
+    let asked = say(&node, "ask hello", 3).await;
+    assert!(
+        asked.contains("hi") && asked.contains("https://example.com/m.png"),
+        "{asked}"
+    );
+    let last = requests.lock().unwrap().last().unwrap().to_string();
+    assert!(
+        last.contains("be short|hooked:plugin") && last.contains("hello"),
+        "{last}"
+    );
+
+    node.shutdown().await;
+}
+
+/// True when the `seen` reply of hooks_plugin lists `entry`.
+fn has(seen: &str, entry: &str) -> bool {
+    seen.split(['"', ';']).any(|part| part == entry)
+}
+
+#[tokio::test]
+async fn plugin_with_lifecycle_hooks_stays_awake_and_sees_loads() {
+    let Some(python) = sidecar_python() else { return };
+    let dir = tempfile::Builder::new().prefix("fl").tempdir_in("/tmp").unwrap();
+    let mut cfg = node_config(dir.path());
+    cfg.dev_services = true;
+    cfg.plugin_idle_sleep = Some(Duration::from_secs(2));
+    let hooks = json!({"id": "ph", "name": "hooks_plugin", "repo_url": "https://github.com/x/hooks", "version": "1", "enabled": true, "config": {}});
+    let echo = json!({"id": "echo", "name": "cmd_plugin", "repo_url": "https://github.com/x/cmd", "version": "1", "enabled": true, "config": {}});
+    preinstall(&cfg, &hooks);
+    preinstall(&cfg, &echo);
+    let node = Node::new(cfg, Some(command(&python))).unwrap();
+    let desired = |plugins: Vec<&Value>| {
+        serde_json::from_value(json!({
+            "bot_id": "b1", "user_id": "u1", "name": "小鱼", "running": true,
+            "platforms": [], "plugins": plugins
+        }))
+        .unwrap()
+    };
+    node.put(desired(vec![&hooks, &echo])).await.unwrap();
+    wait_status(&node, "echo", &["sleeping"], 30).await;
+    assert_eq!(plugin_status(&node, "ph")["status"], "running");
+    let seen = say(&node, "seen", 1).await;
+    assert!(has(&seen, "loaded:hooks_plugin"), "{seen}");
+
+    // a sleeping plugin reloads when it wakes with a new config
+    wait_status(&node, "echo", &["sleeping"], 30).await;
+    node.get("b1").unwrap().reload_plugin("echo").await.unwrap();
+    assert!(say(&node, "echo hi", 2).await.contains("echo:hi"));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let seen = say(&node, "seen", 3).await;
+    assert!(
+        has(&seen, "unloaded:cmd_plugin") && has(&seen, "loaded:cmd_plugin"),
+        "{seen}"
+    );
+
+    // removing a sleeping plugin unloads it
+    wait_status(&node, "echo", &["sleeping"], 30).await;
+    node.put(desired(vec![&hooks])).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let seen = say(&node, "seen", 4).await;
+    assert!(
+        has(&seen, "unloaded:cmd_plugin") && !has(&seen, "loaded:cmd_plugin"),
+        "{seen}"
+    );
+    assert_eq!(plugin_status(&node, "ph")["status"], "running");
 
     node.shutdown().await;
 }

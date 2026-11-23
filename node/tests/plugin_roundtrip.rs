@@ -92,12 +92,24 @@ fn fake_plugin(stream: UnixStream, proc_id: String, ctrl: Arc<Mutex<UnixStream>>
                     _ => write_line(&w, &json!({"op": "matched", "event_id": event_id, "matched": false})),
                 }
             }
-            "llm_hook" => {
-                let mut req = v["request"].clone();
-                req["system_prompt"] = json!(format!("{} [hooked]", req["system_prompt"].as_str().unwrap_or("")));
+            "hook" => {
+                let sys = v["payload"]["system_prompt"].as_str().unwrap_or("");
                 write_line(
                     &w,
-                    &json!({"op": "llm_hook_result", "event_id": event_id, "request": req}),
+                    &json!({"op": "plugin_error", "event_id": event_id, "handler": "h", "error": "e", "traceback": "tb"}),
+                );
+                write_line(
+                    &w,
+                    &json!({"op": "result", "req_id": "q1", "event_id": event_id, "chain": [{"type": "plain", "text": "r"}], "llm": true}),
+                );
+                write_line(
+                    &w,
+                    &json!({"op": "agent", "req_id": "q2", "event_id": event_id, "prompt": "p", "contexts": [{"role": "user", "content": "c"}], "image_urls": ["https://x/a.png"]}),
+                );
+                write_line(
+                    &w,
+                    &json!({"op": "hook_result", "hook_id": v["hook_id"], "stopped": v["kind"] == "llm_request" && event_id == "e3",
+                        "payload": {"system_prompt": format!("{sys} [hooked]")}}),
                 );
             }
             "llm_result" => {
@@ -288,16 +300,42 @@ async fn plugin_round_trip_through_sidecar_protocol() {
     let (m, _d) = proc.dispatch("e2", &event("something else"));
     assert!(!tokio::time::timeout(Duration::from_secs(2), m).await.unwrap().unwrap());
 
-    // llm request hook
+    // hook with the service ops a plugin may send while handling it
+    let ev = event("hooked");
     let hooked = proc
-        .llm_hook(
-            "e3",
-            json!({"prompt": "p", "system_prompt": "sys", "contexts": []}),
+        .hook(
+            "llm_request",
+            Some(("e3", &ev)),
+            &json!({"prompt": "p", "system_prompt": "sys", "contexts": []}),
             Duration::from_secs(2),
         )
         .await
         .expect("hook result");
-    assert_eq!(hooked["system_prompt"], "sys [hooked]");
+    assert_eq!(hooked["payload"]["system_prompt"], "sys [hooked]");
+    assert_eq!(hooked["stopped"], true);
+    let err = next_out(&mut out_rx).await;
+    assert!(
+        matches!(&err.msg, PluginOut::PluginError { event_id: Some(e), handler, error, traceback }
+        if e == "e3" && handler == "h" && error == "e" && traceback == "tb")
+    );
+    let res = next_out(&mut out_rx).await;
+    assert!(
+        matches!(&res.msg, PluginOut::Result { req_id, event_id: Some(e), session: None, chain, llm: true }
+        if req_id == "q1" && e == "e3" && chain.len() == 1)
+    );
+    let agent = next_out(&mut out_rx).await;
+    assert!(
+        matches!(&agent.msg, PluginOut::Agent { req_id, prompt: Some(p), system_prompt: None, contexts, image_urls, .. }
+        if req_id == "q2" && p == "p" && contexts.len() == 1 && image_urls == &["https://x/a.png"])
+    );
+    let plain = proc
+        .hook("plugin_loaded", None, &json!({}), Duration::from_secs(2))
+        .await
+        .expect("hook result");
+    assert_eq!(plain["stopped"], false);
+    for _ in 0..3 {
+        next_out(&mut out_rx).await;
+    }
 
     // config update
     proc.writer()
