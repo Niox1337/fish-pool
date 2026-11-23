@@ -18,7 +18,6 @@ use crate::model::{
 };
 use crate::pipeline::{is_listed, wake, RateLimiter};
 use crate::platform::{loopback, qq, weixin, Inbound, PlatformConn, StatusSink};
-use crate::plugin::group::has_own_packages;
 use crate::plugin::install::Installer;
 use crate::plugin::proc::EXIT_UNGROUPABLE;
 use crate::plugin::{
@@ -938,8 +937,8 @@ impl Bot {
             };
             let _ = std::fs::create_dir_all(&inst.data);
             chown_tree(&shared.cfg, &inst.data);
-            let grouped =
-                !self.solo.lock().unwrap().contains(&spec.id) && !has_own_packages(inst.site_packages.as_deref());
+            // The group process checks that the plugin's own packages fit with the other plugins in it.
+            let grouped = !self.solo.lock().unwrap().contains(&spec.id);
             let workdir = Groups::workdir(&shared.cfg.bot_dir(&user, &self.id));
             if grouped {
                 let _ = std::fs::create_dir_all(&workdir);

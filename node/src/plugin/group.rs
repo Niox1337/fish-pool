@@ -32,17 +32,6 @@ const READY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Time an unloaded slot has to end before the whole group process is killed.
 const UNLOAD_GRACE: Duration = Duration::from_secs(10);
 
-/// True when the plugin venv has packages of its own, beyond the ones the sidecar provides.
-pub fn has_own_packages(site_packages: Option<&Path>) -> bool {
-    let Some(dir) = site_packages else { return false };
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .flatten()
-            .any(|e| e.file_name().to_string_lossy().ends_with(".dist-info")),
-        Err(_) => dir.exists(),
-    }
-}
-
 struct Host {
     proc_id: String,
     bot_id: String,
@@ -131,6 +120,7 @@ impl Groups {
                 "plugin_dir": spec.plugin_dir,
                 "plugin_name": spec.plugin_name,
                 "data_dir": spec.data_dir,
+                "venv_site_packages": spec.venv_site_packages,
                 "socket": sock,
             }));
             host
@@ -375,24 +365,5 @@ impl LaunchControl for SlotControl {
 
     fn forget(&self) {
         self.groups.forget(&self.proc_id);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn own_packages_are_dist_info_dirs() {
-        let dir = std::env::temp_dir().join(format!("fish-group-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("_virtualenv")).unwrap();
-        std::fs::write(dir.join("_virtualenv.pth"), "").unwrap();
-        assert!(!has_own_packages(None));
-        assert!(!has_own_packages(Some(&dir)));
-        std::fs::create_dir_all(dir.join("httpx-0.27.0.dist-info")).unwrap();
-        assert!(has_own_packages(Some(&dir)));
-        assert!(!has_own_packages(Some(&dir.join("missing"))));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

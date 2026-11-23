@@ -15,7 +15,7 @@ from typing import Any
 
 from astrbot.core.star.star_handler import EventType
 
-from fish_sidecar import astrbot_boot, loader, protocol, runtime
+from fish_sidecar import astrbot_boot, loader, memory, protocol, runtime
 from fish_sidecar.adapter import LLMError
 from fish_sidecar.dispatch import EVENT_HOOK_KINDS, Dispatcher, describe_error
 
@@ -296,6 +296,8 @@ class ChildRuntime:
 
     def on_message(self, message: dict[str, Any]) -> None:
         op = message.get("op")
+        if op != "idle_check":
+            memory.touch()
         if op in ("llm_result", "result_done", "agent_result"):
             future = self.pending.get(str(message.get("req_id")))
             if future is not None and not future.done():
@@ -435,6 +437,7 @@ class ChildRuntime:
             return EXIT_LOAD_FAILED
         self.hello()
         self.ready = True
+        memory.start(self.loop)
         for awaitable, desc in self.queued_tasks:
             self.spawn(self._guard(awaitable, desc))
         self.queued_tasks.clear()

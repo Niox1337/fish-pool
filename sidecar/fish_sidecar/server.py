@@ -46,6 +46,9 @@ PRELOAD = (
     "pydantic",
     "yaml",
     "PIL.Image",
+    "ctypes",
+    "tzlocal",
+    "apscheduler.executors.asyncio",
     "astrbot",
     "astrbot.core",
     "astrbot.api",
@@ -68,6 +71,9 @@ PRELOAD = (
     "fish_sidecar.loader",
     "fish_sidecar.dispatch",
     "fish_sidecar.child",
+    "fish_sidecar.group",
+    "fish_sidecar.memory",
+    "fish_sidecar.template",
 )
 KILL_GRACE_S = 5.0
 SHUTDOWN_GRACE_S = 5.0
@@ -115,6 +121,13 @@ def preload() -> list[str]:
             else:
                 os.environ["OPENBLAS_NUM_THREADS"] = openblas_threads
     try:
+        # The local time zone is read once and cached, and the first read imports the zone database.
+        import tzlocal
+
+        tzlocal.get_localzone()
+    except Exception as e:
+        failed.append(f"time zone: {e}")
+    try:
         astrbot_boot.install_log_sink()
     except Exception as e:
         failed.append(f"log sink: {e}")
@@ -147,6 +160,10 @@ def preload() -> list[str]:
         failed.append("threads started during preload: " + ", ".join(extra))
     gc.collect()
     gc.freeze()
+    # Children inherit the heap, so free memory returned here is not copied into each of them.
+    from fish_sidecar import memory
+
+    memory.trim()
     if warm_faiss:
         try:
             if len(os.listdir("/proc/self/task")) != 1:

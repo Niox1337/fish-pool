@@ -473,7 +473,12 @@ class GroupConn:
         await self.writer.drain()
 
     async def load_raw(
-        self, plugin: str, config: dict | None = None, plugin_dir: str | None = None, data_dir: str | None = None
+        self,
+        plugin: str,
+        config: dict | None = None,
+        plugin_dir: str | None = None,
+        data_dir: str | None = None,
+        venv: str | None = None,
     ) -> tuple[str, Lines, asyncio.StreamWriter]:
         """Sends load and the config line. Returns the slot proc_id and its socket."""
         proc_id = uuid.uuid4().hex[:8]
@@ -493,6 +498,7 @@ class GroupConn:
                 "plugin_dir": plugin_dir or str(PLUGINS_DIR / plugin),
                 "plugin_name": plugin,
                 "data_dir": data_dir or os.path.join(self.node.tmp, proc_id, "data"),
+                "venv_site_packages": venv,
                 "socket": sock,
             }
         )

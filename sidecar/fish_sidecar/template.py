@@ -151,6 +151,11 @@ _RANDOM_FUNCS = (
 _SYSRANDOM_METHODS = ("random", "getrandbits", "randbytes")
 # Modules whose random state each plugin process seeds again after the fork.
 _RESEEDED = ("numpy.random",)
+# Functions, as (module, name), that use random values only as keys inside the process, so plugin
+# processes that share one value behave the same as processes with their own.
+_PROCESS_LOCAL_RANDOM = {("opentelemetry.context", "create_key")}
+# Modules between a random source and the code that asked for the value.
+_RANDOM_PLUMBING = ("uuid", "random", "secrets", __name__)
 PR_SET_DUMPABLE = 4
 # Seconds added on both sides of the import window when matching clock readings.
 CLOCK_SLACK_S = 1.0
@@ -245,7 +250,7 @@ class ImportWatch:
         def random_guard(original: Any, label: str) -> Any:
             def wrapper(*args: Any, **kw: Any) -> Any:
                 watch = _watch
-                if watch is not None and not _called_from_reseeded():
+                if watch is not None and not _called_from_reseeded() and not _process_local_random():
                     watch.note(f"导入时生成了随机数 ({label})")
                 return original(*args, **kw)
 
@@ -420,6 +425,17 @@ def _called_from_reseeded() -> bool:
     return _called_from(_RESEEDED, 3)
 
 
+def _process_local_random() -> bool:
+    """True when the nearest caller outside ``_RANDOM_PLUMBING`` is in ``_PROCESS_LOCAL_RANDOM``."""
+    frame = sys._getframe(2)
+    while frame is not None:
+        module = frame.f_globals.get("__name__", "")
+        if module not in _RANDOM_PLUMBING:
+            return (module, frame.f_code.co_name) in _PROCESS_LOCAL_RANDOM
+        frame = frame.f_back
+    return False
+
+
 def reseed() -> None:
     """Seeds the random state of ``_RESEEDED`` modules from the operating system."""
     np_random = sys.modules.get("numpy.random")
@@ -561,6 +577,9 @@ def prepare(spec: dict[str, Any], workdir: str) -> dict[str, Any]:
     preimported = (package, main)
     gc.collect()
     gc.freeze()
+    from fish_sidecar import memory
+
+    memory.trim()
     return {"op": "ready"}
 
 

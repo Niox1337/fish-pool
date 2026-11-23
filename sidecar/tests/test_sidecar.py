@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -702,6 +703,21 @@ def test_import_that_cannot_be_shared_loads_directly(fork_server, run, plugin, c
     run(scenario())
 
 
+@pytest.mark.skipif(not TEMPLATES, reason="templates need Linux")
+def test_process_local_random_keys_share_the_template(fork_server, run):
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            procs = [await node.spawn("otel_plugin", share_key="otel-1") for _ in range(2)]
+            assert len(node.control.templates) == 1
+            replies = [chain_text((await p.event("key"))["sends"][0]).split("|") for p in procs]
+            assert replies[0][0] == replies[1][0]
+            assert replies[0][1] != replies[1][1]
+            for p in procs:
+                assert not [m for m in p.logs if "未与其他机器人共享导入" in m.get("message", "")]
+
+    run(scenario())
+
+
 def test_direct_plugin_keeps_preloaded_objects_frozen(fork_server, run):
     async def scenario():
         async with FakeNode(fork_server) as node:
@@ -889,6 +905,70 @@ def test_group_sends_unsuitable_plugins_back(fork_server, run):
     run(scenario())
 
 
+def make_venv(root: str, files: dict[str, str], dists: dict[str, str]) -> str:
+    """Writes a site-packages dir with ``files`` and a dist-info dir for each distribution name and version."""
+    site = os.path.join(root, "lib", "site-packages")
+    os.makedirs(site)
+    files = {"_virtualenv.py": "", "_virtualenv.pth": "import _virtualenv\n", **files}
+    for rel, text in files.items():
+        os.makedirs(os.path.dirname(os.path.join(site, rel)), exist_ok=True)
+        Path(site, rel).write_text(text)
+    for name, version in dists.items():
+        info = Path(site, f"{name}-{version}.dist-info")
+        info.mkdir()
+        (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
+        tops = sorted({rel.split("/")[0].removesuffix(".py") for rel in files if not rel.startswith("_virtualenv")})
+        (info / "top_level.txt").write_text("\n".join(tops) + "\n")
+    return site
+
+
+def test_group_takes_plugins_whose_own_packages_fit(fork_server, run):
+    import importlib.metadata
+
+    yaml_version = importlib.metadata.version("PyYAML")
+
+    async def scenario():
+        async with FakeNode(fork_server) as node:
+            group = await node.group()
+            first = make_venv(os.path.join(node.tmp, "va"), {"fishvenvdep.py": "VALUE = 'a'\n"}, {"fishvenvdep": "1.0"})
+            a = await group.load("venv_plugin", venv=first)
+            r = await a.event("dep")
+            assert chain_text(r["sends"][0]) == "a"
+            same = make_venv(
+                os.path.join(node.tmp, "vs"), {"yaml/__init__.py": "", "other.py": ""}, {"PyYAML": yaml_version}
+            )
+            same_plugin = await group.load("cmd_plugin", venv=same)
+            r = await same_plugin.event("echo hi")
+            assert r["sends"]
+            for files, dists, needle in [
+                ({"yaml/__init__.py": ""}, {"PyYAML": "0.0.1"}, "PyYAML 0.0.1"),
+                ({"fishvenvdep.py": "VALUE = 'x'\n"}, {"fishvenvdep": "2.0"}, "fishvenvdep 2.0"),
+                ({"extra.pth": "import os\n"}, {}, "extra.pth"),
+            ]:
+                venv = make_venv(tempfile.mkdtemp(dir=node.tmp), files, dists)
+                proc_id, lines, _ = await group.load_raw("cmd_plugin", venv=venv)
+                exited = await group.exited(proc_id)
+                assert exited["code"] == 4, (needle, exited)
+                logs = []
+                try:
+                    while True:
+                        logs.append(await lines.next(timeout=2))
+                except (EOFError, TimeoutError):
+                    pass
+                assert any(needle in m.get("message", "") for m in logs), (needle, logs)
+
+            await a.write({"op": "shutdown"})
+            assert (await group.exited(a.proc_id))["code"] == 0
+            second = make_venv(
+                os.path.join(node.tmp, "vb"), {"fishvenvdep.py": "VALUE = 'b'\n"}, {"fishvenvdep": "2.0"}
+            )
+            b = await group.load("venv_plugin", venv=second)
+            r = await b.event("dep")
+            assert chain_text(r["sends"][0]) == "b"
+
+    run(scenario())
+
+
 def test_group_demotes_a_plugin_that_blocks_the_loop(fork_server, run):
     async def scenario():
         async with FakeNode(fork_server) as node:
@@ -979,3 +1059,14 @@ def test_every_hook_kind_runs_for_the_node(fork_server, run):
             ]
 
     run(scenario())
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="malloc_trim needs glibc")
+def test_idle_trim_returns_freed_heap():
+    from fish_sidecar import memory
+
+    blocks = [bytes(512) for _ in range(100_000)]
+    del blocks
+    assert memory.free_heap_bytes() > 0
+    assert memory.collect_and_trim(min_free=0)
+    assert not memory.collect_and_trim(min_free=1 << 60)

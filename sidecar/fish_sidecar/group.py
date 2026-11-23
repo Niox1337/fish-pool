@@ -5,7 +5,7 @@ process connects to the spawn ``socket``, reads the memory limit byte when
 ``wait_for_memory_limit`` is set and sends ``{"op": "ready"}``. Control ops from
 the node:
 
-- ``{"op": "load", "proc_id", "plugin_dir", "plugin_name", "data_dir", "socket"}``
+- ``{"op": "load", "proc_id", "plugin_dir", "plugin_name", "data_dir", "socket", "venv_site_packages"}``
   starts a slot. The slot connects to its own ``socket`` and speaks the plugin
   process protocol of ``fish_sidecar.child``, starting with the config line.
 - ``{"op": "unload", "proc_id"}`` stops a slot.
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import importlib.metadata
 import importlib.util
 import io
 import logging
@@ -163,12 +164,76 @@ def module_conflicts(plugin_dir: Path) -> list[str]:
     return out
 
 
+# Entries of a uv venv that every venv has.
+VENV_BUILTINS = {"_virtualenv"}
+
+
+def venv_modules(site_packages: Path) -> set[str]:
+    """Top level modules in ``site_packages``, without the entries every venv has."""
+    names: set[str] = set()
+    for entry in site_packages.iterdir():
+        name = entry.name
+        if entry.is_dir():
+            if "." in name or name == "__pycache__":
+                continue
+        elif name.endswith(".py"):
+            name = name[:-3]
+        elif name.endswith(".so"):
+            name = name.split(".", 1)[0]
+        else:
+            continue
+        if name.isidentifier() and name not in VENV_BUILTINS:
+            names.add(name)
+    return names
+
+
+def _venv_versions(site_packages: Path) -> dict[str, tuple[str, str]]:
+    """Distribution name and version of each top level module the venv installs."""
+    out: dict[str, tuple[str, str]] = {}
+    for dist in importlib.metadata.distributions(path=[str(site_packages)]):
+        name, version = dist.metadata["Name"] or "", dist.version or ""
+        tops = set((dist.read_text("top_level.txt") or "").split())
+        for file in dist.files or []:
+            first = file.parts[0] if file.parts else ""
+            if first and not first.endswith((".dist-info", ".data")) and first != "..":
+                tops.add(first.split(".", 1)[0] if first.endswith((".py", ".so")) else first)
+        for top in tops:
+            out[top] = (name, version)
+    return out
+
+
+def venv_conflicts(site_packages: Path) -> list[str]:
+    """Problems that keep the venv's packages from sharing a process with other code: startup files,
+    and top level modules that already resolve outside the venv to a different version."""
+    out = sorted(p.name for p in site_packages.glob("*.pth") if p.stem not in VENV_BUILTINS)
+    if out:
+        return [f"启动文件 {', '.join(out)}"]
+    versions: dict[str, tuple[str, str]] | None = None
+    for name in sorted(venv_modules(site_packages)):
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            spec = None
+        if spec is None:
+            continue
+        if versions is None:
+            versions = _venv_versions(site_packages)
+        dist, version = versions.get(name, ("", ""))
+        try:
+            same = bool(dist) and importlib.metadata.version(dist) == version
+        except importlib.metadata.PackageNotFoundError:
+            same = False
+        if not same:
+            out.append(f"{dist or name} {version}".strip())
+    return out
+
+
 def _owned(path: str | None, prefix: str) -> bool:
     return bool(path) and (path == prefix or path.startswith(prefix + "."))
 
 
-def purge(package: str, plugin_dir: Path) -> None:
-    """Removes a plugin's modules, handlers, tools and metadata from the process registries."""
+def purge(package: str, plugin_dir: Path, site_packages: str | None = None) -> None:
+    """Removes a plugin's modules, venv modules, handlers, tools and metadata from the process registries."""
     from astrbot.core.provider.register import llm_tools
     from astrbot.core.star.star import star_map, star_registry
     from astrbot.core.star.star_handler import star_handlers_registry
@@ -183,9 +248,18 @@ def purge(package: str, plugin_dir: Path) -> None:
     star_registry[:] = [m for m in star_registry if not _owned(m.module_path, package)]
     for key in [k for k in sys.modules if _owned(k, package)]:
         del sys.modules[key]
-    entry = str(plugin_dir)
-    while entry in sys.path:
-        sys.path.remove(entry)
+    entries = [str(plugin_dir)]
+    if site_packages:
+        venv = os.path.realpath(site_packages) + os.sep
+        for key, module in list(sys.modules.items()):
+            origin = getattr(module, "__file__", None)
+            if origin and os.path.realpath(origin).startswith(venv):
+                del sys.modules[key]
+        entries.append(site_packages)
+    for entry in entries:
+        while entry in sys.path:
+            sys.path.remove(entry)
+    importlib.invalidate_caches()
 
 
 class _ContextStream(io.TextIOBase):
@@ -309,6 +383,7 @@ class SlotRuntime(ChildRuntime):
         self.stderr: _LineWriter | None = None
         self.debug = bool(spec.get("debug"))
         self.package: str | None = None
+        self.venv: str | None = None
         self.forced_code: int | None = None
 
     def attach(self) -> None:
@@ -358,8 +433,19 @@ class SlotRuntime(ChildRuntime):
         conflicts = module_conflicts(self.plugin_dir)
         if conflicts:
             raise Ungroupable("模块名与已加载的代码重名: " + ", ".join(conflicts))
+        venv = self.spec.get("venv_site_packages")
+        if venv and Path(venv).is_dir():
+            conflicts = venv_conflicts(Path(venv))
+            if conflicts:
+                raise Ungroupable("依赖与同进程的其他代码不兼容: " + ", ".join(conflicts))
+        else:
+            venv = None
         self.enter_root()
         self.package = f"{loader.PACKAGE_ROOT}.{loader.safe_identifier(self.plugin_name)}"
+        self.venv = venv
+        if venv:
+            # The venv modules have names no other code in the process uses, or the same version, so the venv goes last.
+            sys.path.append(venv)
         loader.add_import_paths(self.plugin_dir, None)
         return loader.import_plugin_package(self.plugin_dir, self.plugin_name)
 
@@ -421,7 +507,7 @@ class SlotRuntime(ChildRuntime):
             except Exception as e:
                 log.debug("database close failed: %s", e)
         if self.package is not None:
-            purge(self.package, self.plugin_dir)
+            purge(self.package, self.plugin_dir, self.venv)
 
 
 class GroupHost:
@@ -490,6 +576,7 @@ class GroupHost:
             "plugin_dir": message["plugin_dir"],
             "plugin_name": message.get("plugin_name"),
             "data_dir": message.get("data_dir"),
+            "venv_site_packages": message.get("venv_site_packages"),
             "socket": message["socket"],
             "debug": message.get("debug"),
             "config_on_socket": True,
