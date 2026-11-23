@@ -210,9 +210,15 @@ export type UsageSource = {
   plugin_id: string | null
   label: string
   memory_bytes: number
+  /** Files the account owns, counted against the storage quota. */
   storage_bytes: number
+  /** Shared code and dependency install of a plugin. Not counted against the quota. */
+  deps_bytes?: number
   cpu_percent: number
 }
+
+/** One stored chat session, keyed by `platform_id:MessageType:session_id`. */
+export type ConversationSession = { session: string; messages: number; bytes: number; last_ts: number }
 
 export type Usage = {
   quota: { memory_mb: number; storage_mb: number }

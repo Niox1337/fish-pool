@@ -95,7 +95,12 @@ function Breakdown({ groups }: { groups: Group[] }) {
                       </span>
                     </th>
                     <td className="px-2 py-2 text-right tabular-nums text-ink">{fmtBytes(s.memory_bytes)}</td>
-                    <td className="px-2 py-2 text-right tabular-nums text-ink">{fmtBytes(s.storage_bytes)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums text-ink">
+                      {fmtBytes(s.storage_bytes)}
+                      {(s.deps_bytes ?? 0) > 0 && (
+                        <span className="hidden text-[12px] leading-tight whitespace-nowrap text-ink-3 sm:block">依赖 {fmtBytes(s.deps_bytes)}</span>
+                      )}
+                    </td>
                     <td className="py-2 pr-3 pl-2 text-right tabular-nums text-ink-2 sm:pr-4">{fmtCpu(s.cpu_percent)}</td>
                   </tr>
                 )
@@ -249,7 +254,7 @@ export function UsageView({ usage, bots, quota }: { usage: Usage; bots?: Bot[]; 
           )}
         </div>
         <p className="text-[13px] leading-relaxed text-ink-2">
-          内存持续超额会停用占用最大的插件。存储超额时，请先清理插件或聊天记录，再安装新插件。
+          内存持续超额会停用占用最大的插件。存储只算插件数据和聊天记录，插件的代码和依赖由大家共用，单独列出，不计入额度。存储超额时，可以在小鱼的「存储」页清理插件数据或聊天记录，再安装新插件。
         </p>
       </section>
 

@@ -23,6 +23,7 @@ class ManagersPlugin(Star):
         super().__init__(context)
         context.register_provider(TestEmbedding({"id": "fixture-embedding"}, {}))
         assert any(profile["id"] == "default" for profile in context.astrbot_config_mgr.get_conf_list())
+        assert isinstance(context.provider_manager.personas, list)
 
     @filter.command("open_empty_kb")
     async def open_empty_kb(self, event: AstrMessageEvent):
@@ -48,6 +49,7 @@ class ManagersPlugin(Star):
     @filter.command("managers")
     async def managers(self, event: AstrMessageEvent):
         persona = await self.context.persona_manager.get_persona("fish-teacher")
+        assert "fish-teacher" in [p["name"] for p in self.context.provider_manager.personas]
         config = self.context.astrbot_config_mgr.get_conf_info(event.unified_msg_origin)
         assert self.context.get_config(event.unified_msg_origin) is self.context.astrbot_config_mgr.confs[config["id"]]
         notes = await self.context.kb_manager.retrieve("Where do fish sleep?", ["Fish notes"])

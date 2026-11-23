@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import * as Tabs from '@radix-ui/react-tabs'
-import { ArrowUpCircle, Ellipsis, RotateCw, Search, Settings2, Trash2 } from 'lucide-react'
+import { ArrowUpCircle, Ellipsis, Eraser, RotateCw, Search, Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/api/client'
 import { useBotMutation, useBots, useMe, useUsage } from '@/api/hooks'
@@ -18,8 +18,13 @@ import { schemaFields } from './schema'
 const menuItem =
   'flex min-h-10 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-sm text-ink outline-none data-highlighted:bg-paper-2 data-disabled:cursor-not-allowed data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0'
 
-function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: number | null }) {
+type PluginUsage = { memory: number; data: number; deps: number }
+
+function PluginRow({ bot, plugin, usage }: { bot: Bot; plugin: Plugin; usage: PluginUsage | null }) {
   const [confirm, setConfirm] = useState(false)
+  const [clearConfirm, setClearConfirm] = useState(false)
+  const [disableConfirm, setDisableConfirm] = useState(false)
+  const [disableMode, setDisableMode] = useState<'only' | 'clear'>('only')
   const [config, setConfig] = useState(false)
   const configButton = useRef<HTMLButtonElement>(null)
   const actionsButton = useRef<HTMLButtonElement>(null)
@@ -28,17 +33,39 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
   const upgrade = useBotMutation(bot.id, () => api.upgradePlugin(bot.id, plugin.id))
   const reload = useBotMutation(bot.id, () => api.reloadPlugin(bot.id, plugin.id))
   const remove = useBotMutation(bot.id, () => api.deletePlugin(bot.id, plugin.id))
+  const clear = useBotMutation(bot.id, () => api.clearPluginData(bot.id, plugin.id))
   const name = plugin.display_name || plugin.name
   const enabled = toggle.isPending && toggle.variables !== undefined ? toggle.variables : plugin.enabled
   const installing = plugin.status === 'installing'
   const troubled = plugin.status === 'error' || plugin.status === 'over_quota'
-  const busy = toggle.isPending || upgrade.isPending || reload.isPending || remove.isPending
+  const busy = toggle.isPending || upgrade.isPending || reload.isPending || remove.isPending || clear.isPending
+  const dataSize = usage ? fmtBytes(usage.data) : null
   const hasConfig = schemaFields(plugin.schema ?? {}).some(([, field]) => !field.invisible)
   const canReload = enabled && bot.status === 'running' && !installing && plugin.status !== 'over_quota'
 
   function reloadPlugin() {
     reload.mutate(undefined, {
       onSuccess: () => toast.success(`${name} 正在重载`),
+      onError: (error) => showError(error),
+    })
+  }
+
+  function setEnabled(value: boolean, then?: () => void) {
+    toggle.mutate(value, {
+      onSuccess: () => {
+        toast.success(value ? `${name} 已启用` : `${name} 已停用`)
+        then?.()
+      },
+      onError: (error) => showError(error),
+    })
+  }
+
+  function clearData(onDone?: () => void) {
+    clear.mutate(undefined, {
+      onSuccess: () => {
+        onDone?.()
+        toast.success(`已清除 ${name} 的数据`)
+      },
       onError: (error) => showError(error),
     })
   }
@@ -52,10 +79,11 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
             <PluginStatusPill status={plugin.status} />
           </div>
           {plugin.description && <p className="mt-1 max-w-prose text-sm leading-relaxed wrap-anywhere text-ink-2">{plugin.description}</p>}
-          {(plugin.version || memory != null) && (
+          {(plugin.version || usage) && (
             <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-ink-3 tabular-nums">
               {plugin.version && <span>{plugin.version}</span>}
-              {memory != null && <span>内存 {fmtBytes(memory)}</span>}
+              {usage && <span>内存 {fmtBytes(usage.memory)}</span>}
+              {usage && <span>数据 {fmtBytes(usage.data)}</span>}
             </p>
           )}
         </div>
@@ -64,12 +92,7 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
             checked={enabled}
             disabled={busy || installing}
             label={`启用 ${name}`}
-            onCheckedChange={(value) =>
-              toggle.mutate(value, {
-                onSuccess: () => toast.success(value ? `${name} 已启用` : `${name} 已停用`),
-                onError: (error) => showError(error),
-              })
-            }
+            onCheckedChange={(value) => (value ? setEnabled(true) : setDisableConfirm(true))}
           />
           {hasConfig && (
             <Button
@@ -118,6 +141,9 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
                 >
                   <ArrowUpCircle aria-hidden /> 更新
                 </DropdownMenu.Item>
+                <DropdownMenu.Item className={menuItem} disabled={busy || installing} onSelect={() => setClearConfirm(true)}>
+                  <Eraser aria-hidden /> 清除数据
+                </DropdownMenu.Item>
                 <DropdownMenu.Label className="px-2.5 py-1 text-xs leading-relaxed wrap-anywhere text-ink-3">
                   {plugin.author && <span className="block">作者 {plugin.author}</span>}
                   {plugin.commit && <span className="block font-mono">提交 {plugin.commit.slice(0, 7)}</span>}
@@ -148,6 +174,42 @@ function PluginRow({ bot, plugin, memory }: { bot: Bot; plugin: Plugin; memory: 
       {config && (
         <PluginSettings bot={bot} plugin={plugin} onClose={() => setConfig(false)} returnFocus={() => configButton.current?.focus()} />
       )}
+      <ConfirmDialog
+        open={disableConfirm}
+        onOpenChange={setDisableConfirm}
+        title={`停用 ${name}？`}
+        body={
+          <p>
+            停用后插件的数据会留着，重新启用时接着用。也可以顺便清除数据{dataSize ? `，释放 ${dataSize} 存储` : ''}。
+          </p>
+        }
+        secondaryLabel="只停用"
+        secondaryLoading={toggle.isPending && disableMode === 'only'}
+        onSecondary={() => {
+          setDisableMode('only')
+          setEnabled(false, () => setDisableConfirm(false))
+        }}
+        confirmLabel="停用并清除数据"
+        loading={(toggle.isPending && disableMode === 'clear') || clear.isPending}
+        onConfirm={() => {
+          setDisableMode('clear')
+          setEnabled(false, () => clearData(() => setDisableConfirm(false)))
+        }}
+      />
+      <ConfirmDialog
+        open={clearConfirm}
+        onOpenChange={setClearConfirm}
+        returnFocus={() => actionsButton.current?.focus()}
+        title={`清除 ${name} 的数据？`}
+        body={
+          <p>
+            会删除这个插件保存的全部数据{dataSize ? `（${dataSize}）` : ''}，比如收藏、记忆和缓存。插件设置会保留，正在运行的插件会自动重启。删除后无法恢复。
+          </p>
+        }
+        confirmLabel="清除数据"
+        loading={clear.isPending}
+        onConfirm={() => clearData(() => setClearConfirm(false))}
+      />
       <ConfirmDialog
         open={confirm}
         onOpenChange={setConfirm}
@@ -186,9 +248,10 @@ export default function Plugins({ bot }: { bot: Bot }) {
         [plugin.display_name, plugin.name, plugin.description, plugin.author].some((part) => part.toLowerCase().includes(query)),
       )
     : bot.plugins
-  const mem = (pid: string) => {
+  const pluginUsage = (pid: string): PluginUsage | null => {
     if (!usage.data) return null
-    return usage.data.sources.find((s) => s.bot_id === bot.id && s.plugin_id === pid)?.memory_bytes ?? 0
+    const s = usage.data.sources.find((x) => x.bot_id === bot.id && x.plugin_id === pid)
+    return { memory: s?.memory_bytes ?? 0, data: s?.storage_bytes ?? 0, deps: s?.deps_bytes ?? 0 }
   }
   function installed() {
     setTab('installed')
@@ -239,7 +302,7 @@ export default function Plugins({ bot }: { bot: Bot }) {
         ) : visible.length > 0 ? (
           <ul className="divide-y divide-paper-3 rounded-2xl border border-paper-3 bg-cream">
             {visible.map((plugin) => (
-              <PluginRow key={plugin.id} bot={bot} plugin={plugin} memory={mem(plugin.id)} />
+              <PluginRow key={plugin.id} bot={bot} plugin={plugin} usage={pluginUsage(plugin.id)} />
             ))}
           </ul>
         ) : (

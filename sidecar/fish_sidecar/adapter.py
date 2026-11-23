@@ -251,17 +251,32 @@ class FishProvider(Provider):
 class FishProviderManager:
     """Provider registry with the fish chat provider as the only chat model."""
 
-    def __init__(self, llm_tools: Any, config: AstrBotConfigManager) -> None:
+    def __init__(self, llm_tools: Any, config: AstrBotConfigManager, persona_mgr: Any = None) -> None:
+        self.persona_mgr = persona_mgr
+        self.default_persona_name = getattr(persona_mgr, "default_persona", "default")
         self.provider = FishProvider()
         self.provider_insts: list[Provider] = [self.provider]
         self.tts_provider_insts: list = []
         self.stt_provider_insts: list = []
         self.embedding_provider_insts: list = []
         self.rerank_provider_insts: list = []
+        self.decision_provider_insts: list = []
         self.inst_map: dict[str, Any] = {PROVIDER_ID: self.provider}
         self.llm_tools = llm_tools
         self.acm = config
         self.curr_provider_inst = self.provider
+
+    @property
+    def persona_configs(self) -> list:
+        return getattr(self.persona_mgr, "persona_v3_config", [])
+
+    @property
+    def personas(self) -> list:
+        return getattr(self.persona_mgr, "personas_v3", [])
+
+    @property
+    def selected_default_persona(self) -> Any:
+        return getattr(self.persona_mgr, "selected_default_persona_v3", None)
 
     def get_using_provider(
         self, provider_type: ProviderType = ProviderType.CHAT_COMPLETION, umo: str | None = None
@@ -331,11 +346,11 @@ async def build_context() -> FishContext:
     sp = getattr(current, "sp", None) or core.sp
     router = UmopConfigRouter(sp)
     config = astrbot_config_mgr.AstrBotConfigManager(core.astrbot_config, router, sp)
-    provider_manager = FishProviderManager(llm_tools, config)
     await router.initialize()
     await config.initialize()
     persona = PersonaManager(db, config)
     await persona.initialize()
+    provider_manager = FishProviderManager(llm_tools, config, persona)
 
     # These paths were captured when AstrBot was imported in the fork server.
     astrbot_config_mgr.DEFAULT_CONFIG_CONF_INFO["path"] = core.astrbot_config.config_path

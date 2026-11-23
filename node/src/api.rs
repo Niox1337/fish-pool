@@ -60,6 +60,14 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/v1/bots/{bot_id}/status", get(bot_status))
         .route("/v1/bots/{bot_id}/logs", get(bot_logs))
         .route("/v1/bots/{bot_id}/plugins/{plugin_id}/reload", post(reload_plugin))
+        .route(
+            "/v1/bots/{bot_id}/plugins/{plugin_id}/clear-data",
+            post(clear_plugin_data),
+        )
+        .route(
+            "/v1/bots/{bot_id}/conversations",
+            get(list_conversations).delete(delete_conversations),
+        )
         .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-webhook", post(qq_webhook))
         .route(
             "/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels",
@@ -170,6 +178,59 @@ async fn reload_plugin(State(node): State<Arc<Node>>, Path((bot_id, plugin_id)):
     bot.reload_plugin(&plugin_id)
         .await
         .map_err(|error| ApiError::new(StatusCode::CONFLICT, "plugin_reload_unavailable", error))?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn clear_plugin_data(
+    State(node): State<Arc<Node>>,
+    Path((bot_id, plugin_id)): Path<(String, String)>,
+) -> ApiResult {
+    let bot = node.get(&bot_id).ok_or_else(ApiError::not_found)?;
+    bot.clear_plugin_data(&plugin_id)
+        .await
+        .map_err(|error| ApiError::new(StatusCode::CONFLICT, "plugin_clear_failed", error))?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn list_conversations(State(node): State<Arc<Node>>, Path(bot_id): Path<String>) -> ApiResult {
+    node.get(&bot_id).ok_or_else(ApiError::not_found)?;
+    let conv = node.shared.conv.clone();
+    let id = bot_id.clone();
+    let rows = tokio::task::spawn_blocking(move || conv.sessions(&id))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(session, messages, bytes, last_ts)| {
+            json!({"session": session, "messages": messages, "bytes": bytes, "last_ts": last_ts})
+        })
+        .collect();
+    Ok(Json(json!({"items": items})))
+}
+
+#[derive(Deserialize)]
+struct ConversationQuery {
+    session: Option<String>,
+}
+
+/// Deletes one session when `session` is given, otherwise every session of the bot.
+async fn delete_conversations(
+    State(node): State<Arc<Node>>,
+    Path(bot_id): Path<String>,
+    Query(q): Query<ConversationQuery>,
+) -> ApiResult {
+    node.get(&bot_id).ok_or_else(ApiError::not_found)?;
+    let conv = node.shared.conv.clone();
+    let id = bot_id.clone();
+    let session = q.session.filter(|s| !s.is_empty());
+    tokio::task::spawn_blocking(move || match session {
+        Some(s) => conv.delete_session(&id, &s).map(|_| ()),
+        None => conv.delete_bot(&id),
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
     Ok(Json(json!({"ok": true})))
 }
 

@@ -205,6 +205,9 @@ export function ConfirmDialog({
   loading,
   tone = 'danger',
   returnFocus,
+  secondaryLabel,
+  onSecondary,
+  secondaryLoading,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -215,6 +218,10 @@ export function ConfirmDialog({
   loading?: boolean
   tone?: 'danger' | 'primary'
   returnFocus?: () => void
+  /** Optional middle action, shown between cancel and confirm. */
+  secondaryLabel?: string
+  onSecondary?: () => void
+  secondaryLoading?: boolean
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -235,11 +242,16 @@ export function ConfirmDialog({
           <Dialog.Description asChild>
             <div className="mt-2 text-[15px] leading-relaxed text-ink-2">{body}</div>
           </Dialog.Description>
-          <div className="mt-6 flex justify-end gap-2">
+          <div className="mt-6 flex flex-wrap justify-end gap-2">
             <Dialog.Close asChild>
               <Button variant="ghost">先不了</Button>
             </Dialog.Close>
-            <Button variant={tone === 'danger' ? 'danger' : 'primary'} loading={loading} onClick={onConfirm}>
+            {secondaryLabel && onSecondary && (
+              <Button variant="secondary" loading={secondaryLoading} disabled={loading} onClick={onSecondary}>
+                {secondaryLabel}
+              </Button>
+            )}
+            <Button variant={tone === 'danger' ? 'danger' : 'primary'} loading={loading} disabled={secondaryLoading} onClick={onConfirm}>
               {confirmLabel}
             </Button>
           </div>

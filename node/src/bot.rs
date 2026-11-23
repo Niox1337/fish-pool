@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Config;
+use crate::config::{safe_name, Config};
 use crate::events::Events;
 use crate::llm::{self, ChatMessage, ChatRequest, ToolDef};
 use crate::logs::LogBuffer;
@@ -306,6 +306,7 @@ impl Bot {
                 self.logs.info("core", "机器人已停止");
             }
             self.stop_locked(rt).await;
+            self.prune_plugin_dirs(&d).await;
             self.set_bot_status("stopped", "");
             return;
         }
@@ -315,6 +316,7 @@ impl Bot {
         }
         self.reconcile_platforms(rt, &d);
         self.reconcile_plugins(rt, &d).await;
+        self.prune_plugin_dirs(&d).await;
         let detail = if d.platforms.iter().any(|p| p.enabled) {
             ""
         } else {
@@ -655,6 +657,60 @@ impl Bot {
                 },
             );
         }
+    }
+
+    /// Removes plugin directories of this bot that no plugin in `d` uses, then unused shared installs.
+    /// Callers have stopped every plugin whose directory is removed.
+    async fn prune_plugin_dirs(self: &Arc<Self>, d: &DesiredBot) {
+        let root = self.shared.cfg.bot_dir(&d.user_id, &d.bot_id).join("plugins");
+        let keep: HashSet<String> = d.plugins.iter().map(|p| safe_name(&p.name)).collect();
+        let Ok(mut rd) = tokio::fs::read_dir(&root).await else {
+            return;
+        };
+        let mut removed = false;
+        while let Ok(Some(e)) = rd.next_entry().await {
+            let name = e.file_name().to_string_lossy().to_string();
+            if keep.contains(&name) {
+                continue;
+            }
+            if tokio::fs::remove_dir_all(e.path()).await.is_ok() {
+                tracing::info!(bot = %d.bot_id, "removed directory of uninstalled plugin {name}");
+                removed = true;
+            }
+        }
+        if removed {
+            self.shared.gc_shared_plugins().await;
+        }
+    }
+
+    /// Stops the plugin, deletes its data directory and starts it again when it is enabled.
+    pub async fn clear_plugin_data(self: &Arc<Self>, id: &str) -> Result<(), &'static str> {
+        let mut rt = self.rt.lock().await;
+        let d = self.desired.read().unwrap().clone();
+        let spec = d.plugins.iter().find(|p| p.id == id).ok_or("插件不存在")?;
+        if let Some(slot) = rt.plugins.remove(id) {
+            Self::stop_slot(slot).await;
+        }
+        let data = self
+            .shared
+            .cfg
+            .plugin_dir(&d.user_id, &d.bot_id, &spec.name)
+            .join("data");
+        let result = match tokio::fs::remove_dir_all(&data).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => {
+                tracing::warn!(bot = %self.id, "clear plugin data: {e}");
+                Err("删除插件数据失败，请稍后重试")
+            }
+        };
+        if result.is_ok() {
+            self.logs.info(&format!("plugin:{}", spec.name), "插件数据已清除");
+        }
+        if d.running {
+            self.reconcile_plugins(&mut rt, &d).await;
+        }
+        result
     }
 
     pub async fn reload_plugin(&self, id: &str) -> Result<(), &'static str> {
@@ -1684,6 +1740,38 @@ mod tests {
         assert!(bot
             .build_event(&inbound("hi", MessageType::Group, true), &d.settings)
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn removed_and_cleared_plugin_files_are_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = test_shared(dir.path());
+        let mut d = DesiredBot {
+            bot_id: "b".into(),
+            user_id: "u".into(),
+            running: false,
+            ..Default::default()
+        };
+        d.plugins.push(PluginSpec {
+            id: "kept".into(),
+            name: "kept_plugin".into(),
+            enabled: false,
+            ..Default::default()
+        });
+        let kept = shared.cfg.plugin_dir("u", "b", "kept_plugin");
+        let gone = shared.cfg.plugin_dir("u", "b", "gone_plugin");
+        for p in [&kept, &gone] {
+            std::fs::create_dir_all(p.join("data")).unwrap();
+            std::fs::write(p.join("data").join("x"), b"1").unwrap();
+        }
+        let bot = Bot::new(shared, d.clone());
+        bot.apply(d).await;
+        assert!(!gone.exists());
+        assert!(kept.join("data").join("x").exists());
+        bot.clear_plugin_data("kept").await.unwrap();
+        assert!(kept.exists());
+        assert!(!kept.join("data").exists());
+        assert!(bot.clear_plugin_data("missing").await.is_err());
     }
 
     #[tokio::test]

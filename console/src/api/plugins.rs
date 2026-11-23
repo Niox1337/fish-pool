@@ -430,6 +430,25 @@ pub async fn reload(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiRes
     }
 }
 
+/// Deletes the plugin's data directory on the node. The plugin restarts when it is running.
+pub async fn clear_data(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let bot = app.owned_bot(&user, bot_id).await?;
+    let plugin = plugin_by_id(app, &bot.id, pid).await?;
+    let client = app.node_client(&bot.node_id).await?;
+    let path = format!("/v1/bots/{}/plugins/{}/clear-data", bot.id, plugin.id);
+    match client.call(Method::Post, &path, None, PUSH_TIMEOUT_MS).await {
+        Ok(_) => Ok(Reply::json(ok_json())),
+        Err(NodeError::Status(409, message)) => Err(ApiError::conflict("plugin_clear_failed", message)),
+        Err(e) if e.is_not_found() => Err(ApiError::conflict(
+            "plugin_clear_failed",
+            "节点上还没有这条小鱼，请先启动一次",
+        )),
+        Err(NodeError::Unreachable(_)) => Err(ApiError::node_unreachable()),
+        Err(error) => Err(ApiError::new(502, "node_error", error.detail())),
+    }
+}
+
 pub async fn delete(req: &Request, app: &App, bot_id: &str, pid: &str) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;
     let bot = app.owned_bot(&user, bot_id).await?;

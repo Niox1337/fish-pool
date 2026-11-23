@@ -9,6 +9,7 @@ import type {
   Invite,
   Bot,
   BotSettings,
+  ConversationSession,
   CreateBotInput,
   KeyBalance,
   GatewayAccount,
@@ -128,6 +129,10 @@ export const api = {
     patch<Plugin>(`/bots/${id}/plugins/${pid}`, b),
   upgradePlugin: (id: string, pid: string) => post<Plugin>(`/bots/${id}/plugins/${pid}/update`),
   reloadPlugin: (id: string, pid: string) => post<{ ok: true }>(`/bots/${id}/plugins/${pid}/reload`),
+  clearPluginData: (id: string, pid: string) => post<{ ok: true }>(`/bots/${id}/plugins/${pid}/clear-data`),
+  conversations: (id: string) => get<{ items: ConversationSession[] }>(`/bots/${id}/conversations`),
+  clearConversations: (id: string, session?: string) =>
+    del<{ ok: true }>(`/bots/${id}/conversations${session ? `?session=${encodeURIComponent(session)}` : ''}`),
   deletePlugin: (id: string, pid: string) => del<{ ok: true }>(`/bots/${id}/plugins/${pid}`),
 
   usage: () => get<Usage>('/usage'),

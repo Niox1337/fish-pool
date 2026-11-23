@@ -10,6 +10,7 @@ export const keys = {
   gateway: ['gateway'] as const,
   usage: ['usage'] as const,
   logs: (id: string) => ['logs', id] as const,
+  conversations: (id: string) => ['conversations', id] as const,
   admin: ['admin'] as const,
 }
 
@@ -66,6 +67,10 @@ export function useLogs(id: string) {
   return useQuery({ queryKey: keys.logs(id), queryFn: () => api.logs(id), refetchInterval: 4000 })
 }
 
+export function useConversations(id: string) {
+  return useQuery({ queryKey: keys.conversations(id), queryFn: () => api.conversations(id) })
+}
+
 export function useBotMutation<TArgs>(botId: string, fn: (args: TArgs) => Promise<unknown>) {
   const qc = useQueryClient()
   return useMutation({
@@ -74,6 +79,7 @@ export function useBotMutation<TArgs>(botId: string, fn: (args: TArgs) => Promis
       qc.invalidateQueries({ queryKey: keys.bot(botId) })
       qc.invalidateQueries({ queryKey: keys.bots })
       qc.invalidateQueries({ queryKey: keys.usage })
+      qc.invalidateQueries({ queryKey: keys.conversations(botId) })
     },
   })
 }

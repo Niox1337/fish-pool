@@ -125,6 +125,8 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Delete, ["bots", id]) => bots::delete(&req, app, id).await,
         (Post, ["bots", id, action @ ("start" | "stop" | "restart")]) => bots::lifecycle(&req, app, id, action).await,
         (Get, ["bots", id, "logs"]) => bots::logs(&req, app, id).await,
+        (Get, ["bots", id, "conversations"]) => bots::conversations(&req, app, id).await,
+        (Delete, ["bots", id, "conversations"]) => bots::clear_conversations(&req, app, id).await,
 
         (Post, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr"]) => {
             platforms::qr_start(&req, app, id, kind).await
@@ -148,6 +150,7 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Patch, ["bots", id, "plugins", pid]) => plugins::patch(&mut req, app, id, pid).await,
         (Post, ["bots", id, "plugins", pid, "update"]) => plugins::update(&req, app, id, pid).await,
         (Post, ["bots", id, "plugins", pid, "reload"]) => plugins::reload(&req, app, id, pid).await,
+        (Post, ["bots", id, "plugins", pid, "clear-data"]) => plugins::clear_data(&req, app, id, pid).await,
         (Delete, ["bots", id, "plugins", pid]) => plugins::delete(&req, app, id, pid).await,
 
         (Get, ["usage"]) => usage::get(&req, app).await,

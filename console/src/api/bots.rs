@@ -272,6 +272,50 @@ pub async fn proxy_logs(req: &Request, app: &App, bot: &BotRow) -> ApiResult<Rep
     }
 }
 
+/// Lists the bot's conversation sessions stored on its node.
+pub async fn conversations(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let bot = app.owned_bot(&user, id).await?;
+    let client = app.node_client(&bot.node_id).await?;
+    match client
+        .call(Method::Get, &format!("/v1/bots/{}/conversations", bot.id), None, 8_000)
+        .await
+    {
+        Ok(v) => Ok(Reply::json(json!({
+            "items": v.get("items").cloned().unwrap_or_else(|| json!([])),
+        }))),
+        Err(e) if e.is_not_found() => Ok(Reply::json(json!({"items": []}))),
+        Err(NodeError::Unreachable(_)) => Err(ApiError::node_unreachable()),
+        Err(e) => Err(ApiError::new(502, "node_error", e.detail())),
+    }
+}
+
+/// Deletes the conversation session named by the `session` query parameter, or every session without it.
+pub async fn clear_conversations(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let bot = app.owned_bot(&user, id).await?;
+    let session = req
+        .url()?
+        .query_pairs()
+        .find(|(k, _)| k == "session")
+        .map(|(_, v)| v.into_owned())
+        .filter(|s| !s.is_empty());
+    let mut path = format!("/v1/bots/{}/conversations", bot.id);
+    if let Some(s) = session {
+        let q: String = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("session", &s)
+            .finish();
+        path = format!("{path}?{q}");
+    }
+    let client = app.node_client(&bot.node_id).await?;
+    match client.call(Method::Delete, &path, None, 8_000).await {
+        Ok(_) => Ok(Reply::json(ok_json())),
+        Err(e) if e.is_not_found() => Ok(Reply::json(ok_json())),
+        Err(NodeError::Unreachable(_)) => Err(ApiError::node_unreachable()),
+        Err(e) => Err(ApiError::new(502, "node_error", e.detail())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

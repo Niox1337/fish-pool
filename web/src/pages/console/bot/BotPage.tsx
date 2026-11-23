@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import * as SettingsTabs from '@radix-ui/react-tabs'
 import { Link, Navigate, NavLink, useParams } from 'react-router'
-import { ChevronLeft, LayoutGrid, Link2, Play, Puzzle, RotateCw, ScrollText, Settings2, Square } from 'lucide-react'
+import { ChevronLeft, HardDrive, LayoutGrid, Link2, Play, Puzzle, RotateCw, ScrollText, Settings2, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, ApiError } from '@/api/client'
 import { useBot, useBotMutation } from '@/api/hooks'
@@ -18,12 +18,14 @@ import Persona from './Persona'
 import QqPanels from './QqPanels'
 import Plugins from './Plugins'
 import Logs from './Logs'
+import Storage from './Storage'
 
 const TABS = [
   { key: 'overview', label: '概览', icon: LayoutGrid },
   { key: 'connect', label: '接入', icon: Link2 },
   { key: 'persona', label: '机器人设置', icon: Settings2 },
   { key: 'plugins', label: '插件', icon: Puzzle },
+  { key: 'storage', label: '存储', icon: HardDrive },
   { key: 'logs', label: '日志', icon: ScrollText },
 ] as const
 type TabKey = (typeof TABS)[number]['key']
@@ -226,6 +228,7 @@ function BotView() {
         </SettingsTabs.Root>
       )}
       {active === 'plugins' && <Plugins bot={b} />}
+      {active === 'storage' && <Storage bot={b} />}
       {active === 'logs' && <Logs bot={b} />}
     </>
   )

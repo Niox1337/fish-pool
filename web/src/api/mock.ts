@@ -11,6 +11,7 @@ import type {
   QqPanelRecord,
   Quota,
   Usage,
+  ConversationSession,
   User,
 } from './types'
 
@@ -292,6 +293,23 @@ function err(status: number, code: string, message: string) {
 }
 const ok = (data: unknown) => new Response(JSON.stringify(data), { status: 200 })
 
+const conversations = new Map<string, ConversationSession[]>()
+const clearedPlugins = new Set<string>()
+
+function mockSessions(botId: string, platformId: string): ConversationSession[] {
+  let list = conversations.get(botId)
+  if (!list) {
+    list = [
+      { session: `${platformId}:GroupMessage:739215804`, messages: 200, bytes: 1.4 * MB, last_ts: now() - 3 * 60_000 },
+      { session: `${platformId}:GroupMessage:118830276`, messages: 146, bytes: 0.9 * MB, last_ts: now() - 2 * 3600_000 },
+      { session: `${platformId}:FriendMessage:2108511981`, messages: 58, bytes: 0.3 * MB, last_ts: now() - 26 * 3600_000 },
+      { session: `gone:FriendMessage:95501123`, messages: 12, bytes: 0.05 * MB, last_ts: now() - 9 * 86400_000 },
+    ]
+    conversations.set(botId, list)
+  }
+  return list
+}
+
 function usage(): Usage {
   const sources: Usage['sources'] = []
   for (const b of state.bots) {
@@ -310,7 +328,7 @@ function usage(): Usage {
       plugin_id: null,
       label: '聊天记录',
       memory_bytes: 0,
-      storage_bytes: 3.1 * MB,
+      storage_bytes: (conversations.get(b.id) ?? mockSessions(b.id, b.platforms[0]?.id ?? 'p1')).reduce((n, x) => n + x.bytes, 0),
       cpu_percent: 0,
     })
     for (const p of b.plugins) {
@@ -321,7 +339,8 @@ function usage(): Usage {
         plugin_id: p.id,
         label: p.display_name,
         memory_bytes: p.enabled ? mem : 0,
-        storage_bytes: mem * 2.4,
+        storage_bytes: clearedPlugins.has(p.id) ? 4 * 1024 : mem * 0.12,
+        deps_bytes: mem * 3.2,
         cpu_percent: p.enabled ? 1.2 : 0,
       })
     }
@@ -659,6 +678,26 @@ export async function mockFetch(method: string, path: string, body: any): Promis
         })
     }, 5000)
     return ok(p)
+  }
+  r = m(/^\/bots\/(\w+)\/conversations(?:\?.*)?$/)
+  if (r) {
+    const b = findBot(r[1])!
+    const list = mockSessions(b.id, b.platforms[0]?.id ?? 'p1')
+    if (method === 'DELETE') {
+      const session = new URL(path, 'http://x').searchParams.get('session')
+      conversations.set(b.id, session ? list.filter((x) => x.session !== session) : [])
+      return ok({ ok: true })
+    }
+    return ok({ items: list })
+  }
+  r = m(/^\/bots\/(\w+)\/plugins\/(\w+)\/clear-data$/)
+  if (r) {
+    const b = findBot(r[1])!
+    const p = b.plugins.find((x) => x.id === r![2])
+    if (!p) return err(404, 'not_found', '插件不存在')
+    clearedPlugins.add(p.id)
+    pushLog(b.id, { level: 'info', source: `plugin:${p.name}`, message: '插件数据已清除' })
+    return ok({ ok: true })
   }
   r = m(/^\/bots\/(\w+)\/plugins\/(\w+)(?:\/(update|reload))?$/)
   if (r) {

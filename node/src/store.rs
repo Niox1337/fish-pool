@@ -216,6 +216,34 @@ impl ConvDb {
             .execute("DELETE FROM messages WHERE bot_id = ?1", params![bot_id])?;
         Ok(())
     }
+
+    /// Sessions of a bot as `(session, messages, bytes, last_ts)`, most recent first. Bytes use the
+    /// same estimate as `bot_bytes`.
+    pub fn sessions(&self, bot_id: &str) -> Result<Vec<(String, u64, u64, i64)>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare(
+            "SELECT session, COUNT(*), SUM(LENGTH(CAST(content AS BLOB)) + LENGTH(session) + LENGTH(role) + 48),
+                    MAX(ts)
+             FROM messages WHERE bot_id = ?1 GROUP BY session ORDER BY MAX(ts) DESC",
+        )?;
+        let rows = stmt.query_map(params![bot_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)? as u64,
+                r.get::<_, i64>(2)? as u64,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Deletes one session of a bot and returns the number of removed messages.
+    pub fn delete_session(&self, bot_id: &str, session: &str) -> Result<usize> {
+        Ok(self.conn.lock().unwrap().execute(
+            "DELETE FROM messages WHERE bot_id = ?1 AND session = ?2",
+            params![bot_id, session],
+        )?)
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +292,23 @@ mod tests {
         assert!(db.bot_bytes("b") > 0);
         db.delete_bot("b").unwrap();
         assert_eq!(db.bot_bytes("b"), 0);
+    }
+
+    #[test]
+    fn conv_sessions_and_delete_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConvDb::open(&dir.path().join("c.db")).unwrap();
+        db.append("b", "p:GroupMessage:g1", "user", "hi").unwrap();
+        db.append("b", "p:GroupMessage:g1", "assistant", "hello").unwrap();
+        db.append("b", "p:FriendMessage:u1", "user", "yo").unwrap();
+        db.append("other", "p:GroupMessage:g1", "user", "keep").unwrap();
+        let sessions = db.sessions("b").unwrap();
+        assert_eq!(sessions.len(), 2);
+        let g1 = sessions.iter().find(|s| s.0 == "p:GroupMessage:g1").unwrap();
+        assert_eq!(g1.1, 2);
+        assert_eq!(sessions.iter().map(|s| s.2).sum::<u64>(), db.bot_bytes("b"));
+        assert_eq!(db.delete_session("b", "p:GroupMessage:g1").unwrap(), 2);
+        assert_eq!(db.sessions("b").unwrap().len(), 1);
+        assert_eq!(db.recent("other", "p:GroupMessage:g1", 10).unwrap().len(), 1);
     }
 }

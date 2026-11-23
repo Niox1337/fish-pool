@@ -30,7 +30,10 @@ pub struct Source {
     pub plugin_id: Option<String>,
     pub label: String,
     pub memory_bytes: u64,
+    /// Files the tenant owns, counted against the storage quota.
     pub storage_bytes: u64,
+    /// Apparent size of the shared code and dependency install a plugin uses. Not counted against the quota.
+    pub deps_bytes: u64,
     pub cpu_percent: f64,
 }
 
@@ -156,6 +159,7 @@ impl Usage {
                 label: "核心连接".into(),
                 memory_bytes: bot.core_memory_bytes(),
                 storage_bytes: 0,
+                deps_bytes: 0,
                 cpu_percent: 0.0,
             },
             Source {
@@ -165,6 +169,7 @@ impl Usage {
                 label: "对话记录".into(),
                 memory_bytes: 0,
                 storage_bytes: bot.shared.conv.bot_bytes(&bot.id),
+                deps_bytes: 0,
                 cpu_percent: 0.0,
             },
         ];
@@ -184,10 +189,11 @@ impl Usage {
         for (spec, pid) in plugins.into_iter().zip(pids) {
             let dir = bot.shared.cfg.plugin_dir(&user, &bot.id, &spec.name);
             let shared = bot.shared.clone();
-            // Each bot is charged the full size of the shared install it uses, as if it had its own copy.
-            let storage = tokio::task::spawn_blocking(move || dir_size(&dir) + shared.installer.shared_size(&dir))
-                .await
-                .unwrap_or(0);
+            // The bot's plugin directory holds its data. The shared install is reported separately.
+            let (storage, deps) =
+                tokio::task::spawn_blocking(move || (dir_size(&dir), shared.installer.shared_size(&dir)))
+                    .await
+                    .unwrap_or((0, 0));
             let (mem, cpu) = match measured.get(&pid) {
                 Some(v) => *v,
                 None => {
@@ -209,6 +215,7 @@ impl Usage {
                 },
                 memory_bytes: mem,
                 storage_bytes: storage,
+                deps_bytes: deps,
                 cpu_percent: cpu,
             });
         }

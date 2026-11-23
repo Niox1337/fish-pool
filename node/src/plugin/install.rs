@@ -282,6 +282,9 @@ pub struct Installed {
     pub share_key: String,
 }
 
+/// Largest shared install (code and dependencies) that a build may produce.
+pub const MAX_SHARED_INSTALL_BYTES: u64 = 1024 * 1024 * 1024;
+
 pub struct Installer {
     pub http: reqwest::Client,
     pub uv: String,
@@ -574,6 +577,15 @@ impl Installer {
         cmd.args(["-m", "compileall", "-q", "-j", "0"]).arg(&src);
         if self.run(cmd, logs, source, Duration::from_secs(120)).await.is_err() {
             logs.warn(source, "部分插件源码无法预编译，加载时会再次编译");
+        }
+        let size = dir_size(&entry);
+        if size > MAX_SHARED_INSTALL_BYTES {
+            let _ = std::fs::remove_dir_all(&entry);
+            return Err(anyhow!(
+                "插件代码和依赖共 {} MB，超过单个插件 {} MB 的上限",
+                size / (1024 * 1024),
+                MAX_SHARED_INSTALL_BYTES / (1024 * 1024)
+            ));
         }
         std::fs::write(entry.join(SHARED_MARKER), b"{}")?;
         Ok(())
