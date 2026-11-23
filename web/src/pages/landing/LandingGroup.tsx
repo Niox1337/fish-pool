@@ -20,7 +20,7 @@ export default function LandingGroup() {
             来班级群里聊聊
           </h2>
           <p className="lg-body">
-            想直接聊？加入<strong>大肥鱼开发交流群</strong>，用手机 QQ 扫一扫二维码，或者搜索群号。
+            加入<strong>大肥鱼开发交流群</strong>，用手机 QQ 扫一扫二维码，或者搜索群号。
           </p>
           <div className="lg-number">
             <span className="lg-number-label">群号</span>

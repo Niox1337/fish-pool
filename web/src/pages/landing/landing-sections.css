@@ -149,9 +149,6 @@
   font-size: 14px;
   white-space: nowrap;
 }
-.ls-demo-prefix {
-  color: var(--color-ink-3);
-}
 .ls-demo-search {
   flex: none;
   width: 16px;
@@ -499,12 +496,6 @@
   }
   .ls-checks {
     padding-right: 64px;
-  }
-}
-
-@media (max-width: 480px) {
-  .ls-demo-prefix {
-    display: none;
   }
 }
 

@@ -130,7 +130,6 @@ export default function PluginDemo() {
       <div className="ls-demo" aria-hidden>
         <div className="ls-demo-field">
           <Search className="ls-demo-search" strokeWidth={2.4} />
-          <span className="ls-demo-prefix">搜索插件 </span>
           <span className="ls-demo-typed">{typed}</span>
           <span className="ls-demo-caret" />
         </div>

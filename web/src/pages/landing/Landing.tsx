@@ -118,7 +118,7 @@ export default function Landing() {
           </span>
         </h1>
         <p className="lp-subcopy">
-          QQ 扫码就能接入，微信也行。自带模型 Key，
+          QQ 和微信扫码直接部署。可以用自己的模型 Key，
           <br />
           装上 AstrBot 插件，服务器交给我们照看。
         </p>
