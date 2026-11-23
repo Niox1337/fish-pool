@@ -249,6 +249,13 @@ impl Cgroups {
         }
     }
 
+    /// Processes the kernel killed because the tenant reached its `memory.max`. None when the group is missing.
+    pub fn oom_kills(&self, user_id: &str) -> Option<u64> {
+        let text = std::fs::read_to_string(self.tenant(user_id).join("memory.events")).ok()?;
+        text.lines()
+            .find_map(|l| l.strip_prefix("oom_kill ")?.trim().parse().ok())
+    }
+
     /// Memory the kernel charges to the tenant minus reclaimable inactive file cache, in bytes.
     pub fn tenant_working_set(&self, user_id: &str) -> Option<u64> {
         working_set(&self.tenant(user_id))
@@ -322,6 +329,18 @@ pub fn chown_tree(cfg: &Config, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oom_kills_reads_the_tenant_events() {
+        let root = tempfile::tempdir().unwrap();
+        let groups = Cgroups {
+            base: root.path().to_path_buf(),
+        };
+        assert_eq!(groups.oom_kills("u1"), None);
+        std::fs::create_dir_all(groups.tenant("u1")).unwrap();
+        write(&groups.tenant("u1").join("memory.events"), "low 0\noom 3\noom_kill 2\n").unwrap();
+        assert_eq!(groups.oom_kills("u1"), Some(2));
+    }
 
     #[test]
     fn tenant_limit_keeps_a_burst_within_the_quota_range() {

@@ -1070,3 +1070,17 @@ def test_idle_trim_returns_freed_heap():
     assert memory.free_heap_bytes() > 0
     assert memory.collect_and_trim(min_free=0)
     assert not memory.collect_and_trim(min_free=1 << 60)
+
+
+def test_group_scan_skips_files_the_plugin_cannot_import(tmp_path):
+    from fish_sidecar import group
+
+    (tmp_path / "main.py").write_text("x = 1\n")
+    scripts = tmp_path / "webui" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "build-font.py").write_text("import subprocess\n")
+    (tmp_path / "my-tools").mkdir()
+    (tmp_path / "my-tools" / "run.py").write_text("import subprocess\n")
+    assert group.static_blockers(tmp_path) == []
+    (scripts / "build_font.py").write_text("import subprocess\n")
+    assert group.static_blockers(tmp_path) == ["子进程 (webui/scripts/build_font.py)"]

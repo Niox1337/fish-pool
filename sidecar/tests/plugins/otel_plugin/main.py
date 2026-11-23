@@ -1,4 +1,5 @@
 import uuid
+import wsgiref.handlers  # noqa: F401
 
 from opentelemetry.context import create_key
 

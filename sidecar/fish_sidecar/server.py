@@ -49,6 +49,8 @@ PRELOAD = (
     "ctypes",
     "tzlocal",
     "apscheduler.executors.asyncio",
+    # BaseHandler copies os.environ when the module is imported.
+    "wsgiref.handlers",
     "astrbot",
     "astrbot.core",
     "astrbot.api",

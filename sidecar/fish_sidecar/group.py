@@ -112,7 +112,10 @@ SKIPPED_DIRS = {"tests", "test", "docs", "examples"}
 
 
 def _scanned(rel: Path) -> bool:
+    """True for files the plugin can import: every directory and the file stem are identifiers."""
     if any(part.startswith((".", "__pycache__")) or part in SKIPPED_DIRS for part in rel.parts[:-1]):
+        return False
+    if not all(part.isidentifier() for part in (*rel.parts[:-1], rel.stem)):
         return False
     name = rel.name
     return not (name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py")

@@ -957,6 +957,7 @@ impl Bot {
                 share_key: Some(inst.share_key.clone()),
             };
             let tenant = shared.cgroups.as_ref().map(|cg| (cg, user.as_str()));
+            let ooms_before = shared.cgroups.as_ref().and_then(|cg| cg.oom_kills(&user));
             let launched = tokio::select! {
                 _ = cancel.cancelled() => {
                     shared.kill_proc(&proc_id).await;
@@ -997,7 +998,10 @@ impl Bot {
                     if grouped {
                         self.solo.lock().unwrap().insert(spec.id.clone());
                     }
-                    let msg = format!("{e:#}");
+                    let mut msg = format!("{e:#}");
+                    if let Some(note) = self.oom_note(&user, ooms_before) {
+                        msg = format!("{msg}。{note}");
+                    }
                     self.logs.error(&src, format!("启动失败: {msg}"));
                     self.set_plugin_status(&spec.id, "error", &msg, None);
                     if !Self::sleep_or_cancel(&cancel, restart_backoff(attempt)).await {
@@ -1126,6 +1130,10 @@ impl Bot {
                         .unwrap()
                         .clone()
                         .unwrap_or_else(|| format!("插件进程退出 (code {code})"));
+                    let detail = match self.oom_note(&user, ooms_before).filter(|_| code < 0) {
+                        Some(note) => format!("{detail}。{note}"),
+                        None => detail,
+                    };
                     self.logs.error(&src, format!("{detail}，稍后自动重启"));
                     self.set_plugin_status(&spec.id, "error", &detail, None);
                     if started.elapsed() > Duration::from_secs(600) {
@@ -1348,6 +1356,21 @@ impl Bot {
         } else if !reply.sent_by_tools {
             self.logs.warn("llm", "模型返回了空回复");
         }
+    }
+
+    /// Explains a plugin exit when the kernel killed a process of `user` for memory after `before` was read.
+    fn oom_note(&self, user: &str, before: Option<u64>) -> Option<String> {
+        let cg = self.shared.cgroups.as_ref()?;
+        if cg.oom_kills(user)? <= before? {
+            return None;
+        }
+        let limit = cg
+            .memory_max(user)
+            .map(|b| format!(" {} MB", b / (1024 * 1024)))
+            .unwrap_or_default();
+        Some(format!(
+            "这个用户的插件合计超过了内存上限{limit}，系统终止了占用较多的插件进程。可以停用部分插件或提高内存配额"
+        ))
     }
 
     /// Running plugins that have `kind` hooks, highest priority first.

@@ -208,7 +208,7 @@ export default function Persona({
           <RangeField
             id={ids.turns}
             label="记住几轮对话"
-            hint="如果安装了记忆管理插件，建议设为 0 轮。"
+            hint="记忆插件只负责长期记忆，近几轮对话仍要靠这里，设为 0 轮时小鱼记不住上一句话。"
             value={s.llm.context_turns}
             min={0}
             max={100}
