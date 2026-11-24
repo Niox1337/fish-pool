@@ -268,7 +268,20 @@ class Dispatcher:
             activated.append((md, event._extras.pop("parsed_params", {}) or {}))
         return activated, None
 
+    def sync_admins(self, admins: Any) -> None:
+        """Sets AstrBot's global ``admins_id`` to the bot admins carried by an event."""
+        if not isinstance(admins, list):
+            return
+        manager = getattr(getattr(self.instance, "context", None), "astrbot_config_mgr", None)
+        config = getattr(manager, "default_conf", None)
+        if not isinstance(config, dict):
+            return
+        ids = [str(a) for a in admins]
+        if config.get("admins_id") != ids:
+            config["admins_id"] = ids
+
     async def handle_event(self, event_id: str, data: dict[str, Any]) -> None:
+        self.sync_admins(data.get("admins", []))
         event = build_event(data, event_id)
         if self.keep_events:
             self.remember(event_id, event)

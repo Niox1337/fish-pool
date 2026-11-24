@@ -8,16 +8,18 @@ import { keys, useBotMutation, useLlmKeys } from '@/api/hooks'
 import { providerForEndpoint } from '@/api/modelProviders'
 import type { Bot, BotSettings } from '@/api/types'
 import { Button, Field, Input, Skeleton, Textarea } from '@/components/ui'
+import { cn } from '@/lib/cn'
 import { useFieldId } from '@/lib/fieldId'
+import { RecentPicker } from './RecentPicker'
 import { ChipsInput, RangeField, Select, SwitchRow } from './shared'
 import { useErrorToast } from './errors'
 import ModelField from '../ModelField'
 
 const PROMPT_LIMIT = 8000
 
-function Block({ title, children }: { title: string; children: ReactNode }) {
+function Block({ title, children, className }: { title: string; children: ReactNode; className?: string }) {
   return (
-    <section className="rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6">
+    <section className={cn('rounded-2xl border border-paper-3 bg-cream p-5 sm:p-6', className)}>
       <h2 className="font-display text-lg font-black text-ink">{title}</h2>
       <div className="mt-5 grid gap-5">{children}</div>
     </section>
@@ -25,6 +27,22 @@ function Block({ title, children }: { title: string; children: ReactNode }) {
 }
 
 const intOk = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max
+
+const sidCode = <code className="rounded bg-paper-3/60 px-1 font-mono text-[12px] text-ink">/sid</code>
+
+const sidSteps: ReactNode[] = [
+  <>用要设为管理员的号给小鱼私聊发送 {sidCode}。在群里要先 @ 小鱼。</>,
+  <>小鱼会回复「你的账号」。QQ 官方机器人看到的账号是一串字母和数字，不是 QQ 号。</>,
+  <>把账号填到下面，QQ 前面加上 qq:，微信加上 weixin:。也可以从最近聊天里直接选。</>,
+]
+
+const accountPrefix: Record<string, string> = { qq_official: 'qq', weixin_ilink: 'weixin' }
+
+/** Formats an account id as a `platform:account` admin or block list entry. */
+function accountEntry(id: string, platformKind: string) {
+  const prefix = accountPrefix[platformKind]
+  return prefix ? `${prefix}:${id}` : id
+}
 
 export default function Persona({
   bot,
@@ -231,6 +249,43 @@ export default function Persona({
         </Field>
       </Block>
 
+      <Block title="管理员" className="lg:col-span-2">
+        <p className="-mt-2 text-sm leading-relaxed text-ink-2">
+          管理员可以使用小鱼和所有插件的管理指令。这里填好后，插件自己的管理员设置一般可以留空。
+        </p>
+        <ol className="grid gap-3 sm:grid-cols-3">
+          {sidSteps.map((step, index) => (
+            <li key={index} className="flex gap-3 rounded-xl border border-paper-3 bg-paper/50 p-3 text-[13px] leading-relaxed text-ink-2">
+              <span
+                aria-hidden
+                className="grid size-6 shrink-0 place-items-center rounded-full bg-sky-soft text-xs font-black text-sky tabular-nums"
+              >
+                {index + 1}
+              </span>
+              <span>{step}</span>
+            </li>
+          ))}
+        </ol>
+        <Field label="管理员账号" htmlFor={ids.admins} hint="格式为「平台:账号」，按回车或逗号添加。">
+          <div className="grid gap-2">
+            <ChipsInput
+              id={ids.admins}
+              label="管理员"
+              value={s.behavior.admins}
+              onChange={(admins) => set('behavior', { admins })}
+              placeholder="qq:账号"
+            />
+            <RecentPicker
+              bot={bot}
+              kind="user"
+              values={s.behavior.admins}
+              format={accountEntry}
+              onAdd={(entry) => set('behavior', { admins: [...s.behavior.admins, entry] })}
+            />
+          </div>
+        </Field>
+      </Block>
+
       <details className="group rounded-2xl border border-paper-3 bg-cream lg:col-span-2">
         <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 font-display text-base font-black text-ink sm:px-6 [&::-webkit-details-marker]:hidden">
           回复规则
@@ -264,23 +319,23 @@ export default function Persona({
               onChange={(reply_in_group_without_at) => set('behavior', { reply_in_group_without_at })}
             />
           </div>
-          <Field label="管理员" htmlFor={ids.admins} hint="可用管理指令。格式为「平台:账号」。">
-            <ChipsInput
-              id={ids.admins}
-              label="管理员"
-              value={s.behavior.admins}
-              onChange={(admins) => set('behavior', { admins })}
-              placeholder="qq:12345"
-            />
-          </Field>
-          <Field label="黑名单" htmlFor={ids.block} hint="格式为「平台:账号」。">
-            <ChipsInput
-              id={ids.block}
-              label="黑名单"
-              value={s.behavior.blocklist}
-              onChange={(blocklist) => set('behavior', { blocklist })}
-              placeholder="qq:67890"
-            />
+          <Field label="黑名单" htmlFor={ids.block} hint="格式为「平台:账号」，账号可以在聊天里发送 /sid 查看。">
+            <div className="grid gap-2">
+              <ChipsInput
+                id={ids.block}
+                label="黑名单"
+                value={s.behavior.blocklist}
+                onChange={(blocklist) => set('behavior', { blocklist })}
+                placeholder="qq:账号"
+              />
+              <RecentPicker
+                bot={bot}
+                kind="user"
+                values={s.behavior.blocklist}
+                format={accountEntry}
+                onAdd={(entry) => set('behavior', { blocklist: [...s.behavior.blocklist, entry] })}
+              />
+            </div>
           </Field>
           <Field label="每分钟回复上限" htmlFor={ids.rate} error={rateErr || undefined}>
             <Input

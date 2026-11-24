@@ -187,6 +187,13 @@ const samplePlugin = (name: string, display: string, mem: number): Plugin => ({
     chance: { type: 'float', description: '随机接话概率', slider: { min: 0, max: 1, step: 0.05 }, default: 0.1 },
     intro: { type: 'text', description: '自我介绍', hint: '有人发 /介绍 时回复这段话', obvious_hint: true, default: '' },
     keywords: { type: 'list', description: '触发关键词', default: ['早安', '晚安'] },
+    session_list: {
+      type: 'list',
+      description: '私聊会话 UMO 列表',
+      hint: '格式: {platform_name}:FriendMessage:{session_id}，可通过 /sid 指令获取',
+      default: [],
+    },
+    admin_users: { type: 'list', description: '插件管理员', default: [] },
     api: {
       type: 'object',
       description: '图源接口',
@@ -678,6 +685,23 @@ export async function mockFetch(method: string, path: string, body: any): Promis
         })
     }, 5000)
     return ok(p)
+  }
+  r = m(/^\/bots\/(\w+)\/recent$/)
+  if (r) {
+    const b = findBot(r[1])!
+    const pid = b.platforms[0]?.id ?? 'p1'
+    const friend = `${pid}:FriendMessage:5FCD19F6930E90B91C40F2E24A5C40AD`
+    const group = `${pid}:GroupMessage:C1A7E0D29B3F4A6E8D5C2B1A09F8E7D6`
+    return ok({
+      sessions: [
+        { id: friend, origin: friend, last_ts: now() - 4 * 60_000 },
+        { id: group, origin: group, last_ts: now() - 52 * 60_000 },
+      ],
+      users: [
+        { id: '5FCD19F6930E90B91C40F2E24A5C40AD', origin: friend, last_ts: now() - 4 * 60_000 },
+        { id: '8B2E6F1A4C9D3E7B5A0F2C8D6E1B4A93', origin: group, last_ts: now() - 52 * 60_000 },
+      ],
+    })
   }
   r = m(/^\/bots\/(\w+)\/conversations(?:\?.*)?$/)
   if (r) {

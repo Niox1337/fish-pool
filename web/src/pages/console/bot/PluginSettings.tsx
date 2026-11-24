@@ -4,6 +4,7 @@ import { api, ApiError } from '@/api/client'
 import { useBotMutation } from '@/api/hooks'
 import type { Bot, Plugin } from '@/api/types'
 import { Button, Sheet } from '@/components/ui'
+import { RecentBotProvider } from './RecentPicker'
 import { SchemaForm } from './SchemaForm'
 import { ActionError } from './shared'
 import { withDefaults, type Obj } from './schema'
@@ -99,7 +100,9 @@ export function PluginSettings({
       >
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-8 sm:py-6">
           <fieldset disabled={save.isPending} className="min-w-0">
-            <SchemaForm key={formVersion} schema={snapshot.schema} value={value} onChange={setValue} onValidity={setValidity} />
+            <RecentBotProvider bot={bot}>
+              <SchemaForm key={formVersion} schema={snapshot.schema} value={value} onChange={setValue} onValidity={setValidity} />
+            </RecentBotProvider>
           </fieldset>
         </div>
         <footer className="grid shrink-0 gap-3 border-t border-paper-3 bg-cream px-5 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-8">

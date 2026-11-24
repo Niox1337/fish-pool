@@ -10,6 +10,7 @@ import type {
   Bot,
   BotSettings,
   ConversationSession,
+  RecentChats,
   CreateBotInput,
   KeyBalance,
   GatewayAccount,
@@ -131,6 +132,7 @@ export const api = {
   reloadPlugin: (id: string, pid: string) => post<{ ok: true }>(`/bots/${id}/plugins/${pid}/reload`),
   clearPluginData: (id: string, pid: string) => post<{ ok: true }>(`/bots/${id}/plugins/${pid}/clear-data`),
   conversations: (id: string) => get<{ items: ConversationSession[] }>(`/bots/${id}/conversations`),
+  recent: (id: string) => get<RecentChats>(`/bots/${id}/recent`),
   clearConversations: (id: string, session?: string) =>
     del<{ ok: true }>(`/bots/${id}/conversations${session ? `?session=${encodeURIComponent(session)}` : ''}`),
   deletePlugin: (id: string, pid: string) => del<{ ok: true }>(`/bots/${id}/plugins/${pid}`),

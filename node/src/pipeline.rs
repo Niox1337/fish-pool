@@ -27,6 +27,22 @@ pub fn identity_matches(entry: &str, platform_kind: &str, id: &str) -> bool {
     }
 }
 
+/// Account ids of the entries that apply to `platform_kind`: bare entries and entries with one of its prefixes.
+pub fn listed_ids(list: &[String], platform_kind: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in list.iter().map(|e| e.trim()).filter(|e| !e.is_empty()) {
+        let id = match entry.split_once(':') {
+            Some((p, rest)) if prefixes(platform_kind).iter().any(|x| x.eq_ignore_ascii_case(p)) => rest,
+            Some(_) => continue,
+            None => entry,
+        };
+        if !id.is_empty() && !out.iter().any(|x| x == id) {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
 pub fn is_listed(list: &[String], platform_kind: &str, ids: &[&str]) -> bool {
     list.iter()
         .any(|e| ids.iter().any(|id| identity_matches(e, platform_kind, id)))
@@ -96,6 +112,16 @@ mod tests {
 
     fn behavior() -> Behavior {
         Behavior::default()
+    }
+
+    #[test]
+    fn listed_ids_keep_entries_of_the_platform() {
+        let list: Vec<String> = ["qq:A1", "B2", "weixin:W3", "qq_official:A1", " ", "QQ:C4"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(listed_ids(&list, PLATFORM_QQ), vec!["A1", "B2", "C4"]);
+        assert_eq!(listed_ids(&list, PLATFORM_WEIXIN), vec!["B2", "W3"]);
     }
 
     #[test]

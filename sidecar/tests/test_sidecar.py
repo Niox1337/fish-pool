@@ -300,6 +300,11 @@ def test_conf_schema_kv_and_hooks(fork_server, run):
             r = await p.event("conf")
             assert chain_text(r["sends"][0]) == "yo|3|False|7~"
 
+            r = await p.event("admins", admins=["A1", "B2"])
+            assert chain_text(r["sends"][0]) == "A1,B2~"
+            r = await p.event("admins")
+            assert chain_text(r["sends"][0]) == "-~"
+
             r = await p.event("kv a")
             assert chain_text(r["sends"][0]) == "none->a|conf_plugin|True~"
             r = await p.event("kv b")

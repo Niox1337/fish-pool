@@ -126,6 +126,7 @@ pub async fn handle(mut req: Request, app: &App) -> ApiResult<Reply> {
         (Post, ["bots", id, action @ ("start" | "stop" | "restart")]) => bots::lifecycle(&req, app, id, action).await,
         (Get, ["bots", id, "logs"]) => bots::logs(&req, app, id).await,
         (Get, ["bots", id, "conversations"]) => bots::conversations(&req, app, id).await,
+        (Get, ["bots", id, "recent"]) => bots::recent(&req, app, id).await,
         (Delete, ["bots", id, "conversations"]) => bots::clear_conversations(&req, app, id).await,
 
         (Post, ["bots", id, "platforms", kind @ ("qq" | "weixin"), "qr"]) => {

@@ -290,6 +290,26 @@ pub async fn conversations(req: &Request, app: &App, id: &str) -> ApiResult<Repl
     }
 }
 
+/// Lists the sessions and senders that recently messaged the bot, as recorded on its node.
+pub async fn recent(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
+    let user = app.current_user(req).await?;
+    let bot = app.owned_bot(&user, id).await?;
+    let client = app.node_client(&bot.node_id).await?;
+    let empty = || json!({"sessions": [], "users": []});
+    match client
+        .call(Method::Get, &format!("/v1/bots/{}/recent", bot.id), None, 8_000)
+        .await
+    {
+        Ok(v) => Ok(Reply::json(json!({
+            "sessions": v.get("sessions").cloned().unwrap_or_else(|| json!([])),
+            "users": v.get("users").cloned().unwrap_or_else(|| json!([])),
+        }))),
+        Err(e) if e.is_not_found() => Ok(Reply::json(empty())),
+        Err(NodeError::Unreachable(_)) => Err(ApiError::node_unreachable()),
+        Err(e) => Err(ApiError::new(502, "node_error", e.detail())),
+    }
+}
+
 /// Deletes the conversation session named by the `session` query parameter, or every session without it.
 pub async fn clear_conversations(req: &Request, app: &App, id: &str) -> ApiResult<Reply> {
     let user = app.current_user(req).await?;

@@ -17,6 +17,10 @@ class ConfPlugin(Star):
             f"{self.config['greeting']}|{self.config.get('times')}|{self.config.get('enabled')}|{nested.get('level')}"
         )
 
+    @filter.command("admins")
+    async def admins(self, event: AstrMessageEvent):
+        yield event.plain_result(",".join(self.context.get_config().get("admins_id", [])) or "-")
+
     @filter.command("kv")
     async def kv(self, event: AstrMessageEvent, value: str):
         old = await self.get_kv_data("last", "none")

@@ -155,6 +155,20 @@ pub struct ConvDb {
 
 /// Number of messages kept per session. Older rows are pruned on insert.
 pub const KEEP_PER_SESSION: i64 = 200;
+/// Number of recently seen sessions and senders kept per bot and kind.
+pub const KEEP_SEEN: i64 = 100;
+
+/// A session or sender that recently messaged a bot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seen {
+    /// `session` or `user`.
+    pub kind: String,
+    /// Unified origin of a session, or the sender's platform account id.
+    pub id: String,
+    /// Unified origin of the session the entry was last seen in.
+    pub origin: String,
+    pub ts: i64,
+}
 
 impl ConvDb {
     pub fn open(path: &Path) -> Result<Self> {
@@ -163,7 +177,11 @@ impl ConvDb {
             "CREATE TABLE IF NOT EXISTS messages(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id TEXT NOT NULL, session TEXT NOT NULL,
                 role TEXT NOT NULL, content TEXT NOT NULL, ts INTEGER NOT NULL);
-             CREATE INDEX IF NOT EXISTS messages_bot_session ON messages(bot_id, session, id);",
+             CREATE INDEX IF NOT EXISTS messages_bot_session ON messages(bot_id, session, id);
+             CREATE TABLE IF NOT EXISTS seen(
+                bot_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL,
+                origin TEXT NOT NULL, ts INTEGER NOT NULL, seq INTEGER NOT NULL,
+                PRIMARY KEY(bot_id, kind, id));",
         )?;
         Ok(ConvDb { conn: Mutex::new(conn) })
     }
@@ -244,6 +262,46 @@ impl ConvDb {
             params![bot_id, session],
         )?)
     }
+
+    /// Records that a session or sender messaged a bot, keeping the newest `KEEP_SEEN` entries per kind.
+    pub fn touch_seen(&self, bot_id: &str, kind: &str, id: &str, origin: &str) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute(
+            "INSERT INTO seen(bot_id, kind, id, origin, ts, seq)
+             VALUES(?1, ?2, ?3, ?4, ?5, (SELECT COALESCE(MAX(seq), 0) + 1 FROM seen WHERE bot_id = ?1))
+             ON CONFLICT(bot_id, kind, id) DO UPDATE SET origin = excluded.origin, ts = excluded.ts, seq = excluded.seq",
+            params![bot_id, kind, id, origin, now_ms()],
+        )?;
+        c.execute(
+            "DELETE FROM seen WHERE bot_id = ?1 AND kind = ?2 AND id NOT IN (
+                SELECT id FROM seen WHERE bot_id = ?1 AND kind = ?2 ORDER BY seq DESC LIMIT ?3)",
+            params![bot_id, kind, KEEP_SEEN],
+        )?;
+        Ok(())
+    }
+
+    /// Recently seen sessions and senders of a bot, most recent first.
+    pub fn seen(&self, bot_id: &str) -> Result<Vec<Seen>> {
+        let c = self.conn.lock().unwrap();
+        let mut stmt = c.prepare("SELECT kind, id, origin, ts FROM seen WHERE bot_id = ?1 ORDER BY seq DESC")?;
+        let rows = stmt.query_map(params![bot_id], |r| {
+            Ok(Seen {
+                kind: r.get(0)?,
+                id: r.get(1)?,
+                origin: r.get(2)?,
+                ts: r.get(3)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn delete_seen(&self, bot_id: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM seen WHERE bot_id = ?1", params![bot_id])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +350,34 @@ mod tests {
         assert!(db.bot_bytes("b") > 0);
         db.delete_bot("b").unwrap();
         assert_eq!(db.bot_bytes("b"), 0);
+    }
+
+    #[test]
+    fn seen_keeps_the_newest_entries_per_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = ConvDb::open(&dir.path().join("c.db")).unwrap();
+        for i in 0..(KEEP_SEEN + 5) {
+            db.touch_seen(
+                "b",
+                "session",
+                &format!("p:FriendMessage:{i}"),
+                &format!("p:FriendMessage:{i}"),
+            )
+            .unwrap();
+        }
+        db.touch_seen("b", "user", "u1", "p:GroupMessage:g1").unwrap();
+        db.touch_seen("b", "user", "u1", "p:FriendMessage:u1").unwrap();
+        db.touch_seen("other", "user", "u2", "p:FriendMessage:u2").unwrap();
+        let rows = db.seen("b").unwrap();
+        let sessions: Vec<&Seen> = rows.iter().filter(|r| r.kind == "session").collect();
+        assert_eq!(sessions.len() as i64, KEEP_SEEN);
+        assert!(!sessions.iter().any(|r| r.id == "p:FriendMessage:0"));
+        let users: Vec<&Seen> = rows.iter().filter(|r| r.kind == "user").collect();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].origin, "p:FriendMessage:u1");
+        db.delete_seen("b").unwrap();
+        assert!(db.seen("b").unwrap().is_empty());
+        assert_eq!(db.seen("other").unwrap().len(), 1);
     }
 
     #[test]

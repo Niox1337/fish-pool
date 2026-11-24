@@ -16,7 +16,7 @@ use crate::model::{
     parse_origin, unified_origin, BotSettings, Component, DesiredBot, LlmSpec, MessageEvent, MessageType, PlatformSpec,
     PluginSpec, PLATFORM_QQ, PLATFORM_WEIXIN,
 };
-use crate::pipeline::{is_listed, wake, RateLimiter};
+use crate::pipeline::{is_listed, listed_ids, wake, RateLimiter};
 use crate::platform::{loopback, qq, weixin, Inbound, PlatformConn, StatusSink};
 use crate::plugin::install::Installer;
 use crate::plugin::proc::EXIT_UNGROUPABLE;
@@ -173,6 +173,30 @@ pub struct Bot {
     dormant_gen: watch::Sender<u64>,
     /// Last LLM failure notice per chat session and kind.
     notices: Mutex<HashMap<(String, llm::Trouble), Instant>>,
+    /// Last time a seen session or sender was written to `conversations.db`, by kind and id.
+    seen_written: Mutex<HashMap<(&'static str, String), Instant>>,
+}
+
+/// Minimum time between two writes of the same seen session or sender.
+const SEEN_WRITE_EVERY: Duration = Duration::from_secs(300);
+
+/// Reply to the built in `/sid` command: the session origin and the sender's account id.
+/// `raw` is the message text before wake prefixes were removed. A bare `sid` without a prefix is not a command.
+fn sid_reply(ev: &MessageEvent, raw: &str) -> Option<String> {
+    let text = ev.message_str.trim();
+    let command = text.eq_ignore_ascii_case("/sid") || (text.eq_ignore_ascii_case("sid") && raw.trim() != text);
+    if !ev.is_at_or_wake || !command {
+        return None;
+    }
+    let mut lines = vec![
+        format!("当前会话：{}", ev.unified_msg_origin),
+        format!("你的账号：{}", ev.sender.user_id),
+    ];
+    if let Some(g) = ev.group_id.as_deref().filter(|g| !g.is_empty()) {
+        lines.push(format!("群号：{g}"));
+    }
+    lines.push("会话可以填进插件的会话列表，账号可以填进管理员。".into());
+    Some(lines.join("\n"))
 }
 
 fn log_level(l: &str) -> &'static str {
@@ -216,6 +240,7 @@ impl Bot {
             dormant: Mutex::new(HashMap::new()),
             dormant_gen: watch::channel(0).0,
             notices: Mutex::new(HashMap::new()),
+            seen_written: Mutex::new(HashMap::new()),
         })
     }
 
@@ -350,6 +375,7 @@ impl Bot {
         self.stop_locked(&mut rt).await;
         let user = self.user_id();
         let _ = self.shared.conv.delete_bot(&self.id);
+        let _ = self.shared.conv.delete_seen(&self.id);
         let _ = self.shared.db.delete_bot(&self.id);
         let dir = self.shared.cfg.bot_dir(&user, &self.id);
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -1242,9 +1268,34 @@ impl Bot {
             chain: ib.chain.clone(),
             is_at_or_wake: w.woke,
             is_admin: is_listed(&b.admins, ib.platform_kind, &[ib.sender.user_id.as_str()]),
+            admins: listed_ids(&b.admins, ib.platform_kind),
             timestamp: crate::sign::now_ms(),
             raw: Some(ib.raw.clone()),
         })
+    }
+
+    /// Records the session and sender of an inbound message, writing each at most once per `SEEN_WRITE_EVERY`.
+    fn note_seen(&self, ev: &MessageEvent) {
+        let origin = ev.unified_msg_origin.as_str();
+        let entries = [("session", origin), ("user", ev.sender.user_id.as_str())];
+        let now = Instant::now();
+        for (kind, id) in entries {
+            if id.is_empty() {
+                continue;
+            }
+            {
+                let mut g = self.seen_written.lock().unwrap();
+                let key = (kind, id.to_string());
+                if g.get(&key).is_some_and(|t| now.duration_since(*t) < SEEN_WRITE_EVERY) {
+                    continue;
+                }
+                if g.len() > 1024 {
+                    g.retain(|_, t| now.duration_since(*t) < SEEN_WRITE_EVERY);
+                }
+                g.insert(key, now);
+            }
+            let _ = self.shared.conv.touch_seen(&self.id, kind, id, origin);
+        }
     }
 
     async fn handle_inbound(self: Arc<Self>, ib: Inbound) {
@@ -1252,6 +1303,7 @@ impl Bot {
         let Some(ev) = self.build_event(&ib, &settings) else {
             return;
         };
+        self.note_seen(&ev);
         if ev.is_at_or_wake {
             let key = format!("{}:{}", ib.platform_id, ib.sender.user_id);
             let ok = self
@@ -1272,6 +1324,10 @@ impl Bot {
             session_id: ib.session_id.clone(),
             msg_id: Some(ib.msg_id.clone()),
         };
+        if let Some(text) = sid_reply(&ev, &ib.text) {
+            self.send_to_target(&target, &[Component::plain(text)]).await;
+            return;
+        }
         self.remember_target(&event_id, target.clone(), &ev);
 
         let procs = self.awake_procs(&ev).await;
@@ -2151,6 +2207,35 @@ mod tests {
     }
 
     #[test]
+    fn sid_answers_only_the_prefixed_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut d = DesiredBot {
+            bot_id: "b".into(),
+            user_id: "u".into(),
+            ..Default::default()
+        };
+        d.settings.behavior.reply_in_group_without_at = false;
+        let bot = Bot::new(test_shared(dir.path()), d.clone());
+        let reply = |text: &str, mt: MessageType| {
+            let ib = inbound(text, mt, false);
+            let ev = bot.build_event(&ib, &d.settings).unwrap();
+            sid_reply(&ev, &ib.text)
+        };
+        let group = reply("/sid", MessageType::Group).unwrap();
+        assert!(group.contains("当前会话：p1:GroupMessage:g1"));
+        assert!(group.contains("你的账号：u1"));
+        assert!(group.contains("群号：g1"));
+        assert!(reply("/SID", MessageType::Private).is_some());
+        assert!(reply("sid", MessageType::Private).is_none());
+        assert!(reply("sid", MessageType::Group).is_none());
+        assert!(reply("/sid please", MessageType::Private).is_none());
+        d.settings.behavior.wake_prefixes = vec!["小鱼".into()];
+        let ib = inbound("小鱼 sid", MessageType::Group, false);
+        let ev = bot.build_event(&ib, &d.settings).unwrap();
+        assert!(sid_reply(&ev, &ib.text).is_some());
+    }
+
+    #[test]
     fn event_building_applies_rules() {
         let dir = tempfile::tempdir().unwrap();
         let mut d = DesiredBot {
@@ -2165,6 +2250,7 @@ mod tests {
             .unwrap();
         assert!(ev.is_at_or_wake);
         assert!(ev.is_admin);
+        assert_eq!(ev.admins, vec!["u1"]);
         assert_eq!(ev.message_str, "help");
         assert_eq!(ev.unified_msg_origin, "p1:GroupMessage:g1");
         let ev = bot

@@ -273,6 +273,9 @@ pub struct MessageEvent {
     pub chain: Vec<Component>,
     pub is_at_or_wake: bool,
     pub is_admin: bool,
+    /// Account ids of the bot admins on this platform, without platform prefixes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub admins: Vec<String>,
     pub timestamp: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<Value>,

@@ -301,6 +301,8 @@ Plugin archive proxy: `GET https://fish.niox.lol/api/internal/plugin-archive/{ow
 - One process, tokio. Each bot is a task group: platform adapters, message pipeline, LLM client, plugin bridge.
 - Message pipeline: platform event → normalize to `MessageEvent` → behavior filters (blocklist, rate limit, wake rules) → plugin dispatch (section 8) → if no plugin handled it and the message woke the bot → default LLM chat with persona and the last `context_turns` turns → send reply.
 - Conversation history in SQLite `data/conversations.db`, table per bot rows, attributed as storage source `conversations`.
+- Recently seen sessions and senders in table `seen` of `data/conversations.db`, at most 100 of each per bot, written at most once per 5 min per entry. `GET /v1/bots/{bot_id}/recent` (console `GET /api/bots/{id}/recent`) returns `sessions` and `users`, each `[{id, origin, last_ts}]` newest first, where `id` is the unified origin or the sender account and `origin` is the session it was last seen in. The console offers them when filling plugin session lists and admin lists.
+- Built in command `/sid` (any wake prefix followed by `sid`, or `/sid`) replies with the session origin, the sender account and the group id, before plugins and the default chat see the message.
 - QQ Official: credentials (app_id, secret) → access token via `https://bots.qq.com/app/getAppAccessToken`, passive reply with msg_id/msg_seq. Rebuild from public QQ bot docs. Two ways to receive events, chosen by `extra.mode`:
   - `websocket` (default): the node opens the gateway with intents for group @ messages and C2C messages.
   - `webhook`: QQ posts events to `https://fish.niox.lol/api/qq/webhook/<platform id>`. The Ed25519 key comes from the secret repeated to at least 32 bytes and cut to 32. Pushes are verified over `timestamp || body`. The op 13 validation is answered with a signature over `event_ts || plain_token`, and it is signed only for alphanumeric tokens and numeric timestamps, so the answer can never cover a JSON event. A signed op 13 request must carry a valid signature. Retried pushes are dropped by event id. The platform reports `connecting` until the first validation or event, then `connected`.
@@ -345,7 +347,7 @@ Plugin process socket (node ↔ one plugin process):
 ```
 MessageEvent = {platform: "qq_official"|"weixin_ilink", bot_id, self_id,
   message_type: "group"|"private", group_id?, session_id, unified_msg_origin: "<platform_id>:<GroupMessage|FriendMessage>:<session_id>",
-  message_id, sender: {user_id, nickname}, message_str, chain: [Component], is_at_or_wake: bool, is_admin: bool, timestamp, raw?}
+  message_id, sender: {user_id, nickname}, message_str, chain: [Component], is_at_or_wake: bool, is_admin: bool, admins?: [account id], timestamp, raw?}
 Component = {"type":"plain","text"} | {"type":"image","url"?,"path"?,"base64"?} | {"type":"at","user_id","name"?}
           | {"type":"reply","id"} | {"type":"record","url"?,"path"?} | {"type":"face","id"}
 ```

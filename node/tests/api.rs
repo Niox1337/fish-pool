@@ -118,6 +118,17 @@ async fn signed_api_lifecycle() {
     let (_, later) = call(&base, "GET", &format!("/v1/bots/b1/logs?after={cursor}"), None).await;
     assert_eq!(later["items"], json!([]));
 
+    let origin = "p:FriendMessage:x";
+    node.shared.conv.touch_seen("b1", "session", origin, origin).unwrap();
+    node.shared.conv.touch_seen("b1", "user", "x", origin).unwrap();
+    let (s, recent) = call(&base, "GET", "/v1/bots/b1/recent", None).await;
+    assert_eq!(s, 200);
+    assert_eq!(recent["sessions"][0]["id"], origin);
+    assert_eq!(recent["users"][0]["id"], "x");
+    assert_eq!(recent["users"][0]["origin"], origin);
+    let (s, _) = call(&base, "GET", "/v1/bots/missing/recent", None).await;
+    assert_eq!(s, 404);
+
     let (_, usage) = call(&base, "GET", "/v1/usage?user_id=u1", None).await;
     assert_eq!(usage["quota"]["memory_mb"], 128);
     let kinds: Vec<&str> = usage["sources"]

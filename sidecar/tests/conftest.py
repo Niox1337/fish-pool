@@ -288,6 +288,7 @@ def make_event(
     user_id: str = "u1",
     nickname: str = "Alice",
     chain: list | None = None,
+    admins: list[str] | None = None,
 ) -> dict[str, Any]:
     session = "g1" if group else user_id
     kind = "GroupMessage" if group else "FriendMessage"
@@ -307,6 +308,8 @@ def make_event(
     }
     if group:
         event["group_id"] = "g1"
+    if admins is not None:
+        event["admins"] = admins
     return event
 
 

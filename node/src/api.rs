@@ -68,6 +68,7 @@ pub fn router(node: Arc<Node>) -> Router {
             "/v1/bots/{bot_id}/conversations",
             get(list_conversations).delete(delete_conversations),
         )
+        .route("/v1/bots/{bot_id}/recent", get(list_recent))
         .route("/v1/bots/{bot_id}/platforms/{platform_id}/qq-webhook", post(qq_webhook))
         .route(
             "/v1/bots/{bot_id}/platforms/{platform_id}/qq-panels",
@@ -207,6 +208,24 @@ async fn list_conversations(State(node): State<Arc<Node>>, Path(bot_id): Path<St
         })
         .collect();
     Ok(Json(json!({"items": items})))
+}
+
+/// Sessions and senders that recently messaged the bot, most recent first.
+async fn list_recent(State(node): State<Arc<Node>>, Path(bot_id): Path<String>) -> ApiResult {
+    node.get(&bot_id).ok_or_else(ApiError::not_found)?;
+    let conv = node.shared.conv.clone();
+    let id = bot_id.clone();
+    let rows = tokio::task::spawn_blocking(move || conv.seen(&id))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
+    let pick = |kind: &str| -> Vec<Value> {
+        rows.iter()
+            .filter(|r| r.kind == kind)
+            .map(|r| json!({"id": r.id, "origin": r.origin, "last_ts": r.ts}))
+            .collect()
+    };
+    Ok(Json(json!({"sessions": pick("session"), "users": pick("user")})))
 }
 
 #[derive(Deserialize)]

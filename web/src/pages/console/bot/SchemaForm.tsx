@@ -4,6 +4,8 @@ import type { PluginSchema, SchemaField } from '@/api/types'
 import { Button, Field, Input, Switch, Textarea } from '@/components/ui'
 import { useFieldId } from '@/lib/fieldId'
 import { cn } from '@/lib/cn'
+import { recentKindOf, useRecentBot } from './recent'
+import { RecentPicker } from './RecentPicker'
 import { RangeField, Select } from './shared'
 import { isObject, schemaFields, withDefaults, type Obj } from './schema'
 
@@ -82,12 +84,14 @@ function DraftField({
 }
 
 function ListField({
+  name,
   label,
   hint,
   field,
   values,
   onChange,
 }: {
+  name: string
   label: string
   hint?: ReactNode
   field: SchemaField
@@ -95,6 +99,13 @@ function ListField({
   onChange: (values: unknown[]) => void
 }) {
   const options = field.options?.length && !field.secret ? field.options : undefined
+  const bot = useRecentBot()
+  const recentKind = !options && !field.secret ? recentKindOf(name, field.description, field.hint) : null
+
+  function addRecent(value: string) {
+    const blank = values.indexOf('')
+    onChange(blank < 0 ? [...values, value] : values.map((item, i) => (i === blank ? value : item)))
+  }
 
   return (
     <fieldset className="min-w-0">
@@ -145,6 +156,7 @@ function ListField({
               <Plus aria-hidden />
               添加一项
             </Button>
+            {bot && recentKind && <RecentPicker bot={bot} kind={recentKind} values={values} onAdd={addRecent} />}
           </>
         )}
       </div>
@@ -332,7 +344,7 @@ function FieldInput({
 
   const values = Array.isArray(value) ? value : []
   if (field.type === 'list' && listEditor) {
-    return <ListField label={label} hint={hint} values={values} field={field} onChange={onChange} />
+    return <ListField name={name} label={label} hint={hint} values={values} field={field} onChange={onChange} />
   }
   if (field.type === 'template_list' && isObject(field.templates) && Object.keys(field.templates).length) {
     return (

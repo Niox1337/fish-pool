@@ -213,6 +213,7 @@ fn event(text: &str) -> MessageEvent {
         chain: vec![Component::plain(text)],
         is_at_or_wake: true,
         is_admin: false,
+        admins: vec![],
         timestamp: 0,
         raw: None,
     }

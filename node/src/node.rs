@@ -138,6 +138,7 @@ impl Node {
             None => {
                 let _ = self.shared.db.delete_bot(id);
                 let _ = self.shared.conv.delete_bot(id);
+                let _ = self.shared.conv.delete_seen(id);
             }
         }
     }

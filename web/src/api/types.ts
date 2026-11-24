@@ -220,6 +220,10 @@ export type UsageSource = {
 /** One stored chat session, keyed by `platform_id:MessageType:session_id`. */
 export type ConversationSession = { session: string; messages: number; bytes: number; last_ts: number }
 
+/** A session or sender that recently messaged a bot. `id` is the session origin or the account id, `origin` the session it was last seen in. */
+export type RecentEntry = { id: string; origin: string; last_ts: number }
+export type RecentChats = { sessions: RecentEntry[]; users: RecentEntry[] }
+
 export type Usage = {
   quota: { memory_mb: number; storage_mb: number }
   memory_bytes: number

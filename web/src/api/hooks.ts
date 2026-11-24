@@ -11,6 +11,7 @@ export const keys = {
   usage: ['usage'] as const,
   logs: (id: string) => ['logs', id] as const,
   conversations: (id: string) => ['conversations', id] as const,
+  recent: (id: string) => ['recent', id] as const,
   admin: ['admin'] as const,
 }
 
@@ -69,6 +70,10 @@ export function useLogs(id: string) {
 
 export function useConversations(id: string) {
   return useQuery({ queryKey: keys.conversations(id), queryFn: () => api.conversations(id) })
+}
+
+export function useRecent(id: string, enabled = true) {
+  return useQuery({ queryKey: keys.recent(id), queryFn: () => api.recent(id), enabled, staleTime: 15_000 })
 }
 
 export function useBotMutation<TArgs>(botId: string, fn: (args: TArgs) => Promise<unknown>) {
