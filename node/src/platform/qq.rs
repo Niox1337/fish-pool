@@ -201,6 +201,40 @@ pub fn media_message(file_info: &str, content: &str, msg_id: Option<&str>, msg_s
     v
 }
 
+/// Error answered by the QQ open API, with the platform error code when the body carries one.
+#[derive(Debug)]
+pub struct QqApiError {
+    pub path: String,
+    pub status: reqwest::StatusCode,
+    pub code: Option<i64>,
+    pub message: String,
+}
+
+impl std::fmt::Display for QqApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "QQ API {} 返回 {}: {}", self.path, self.status, self.message)
+    }
+}
+
+impl std::error::Error for QqApiError {}
+
+/// QQ error code for a user who refuses messages from the bot.
+const USER_REFUSED: i64 = 40054013;
+
+/// Whether a failed active send may still go out as an interaction recall message.
+fn recall_may_help(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<QqApiError>().is_some_and(|e| {
+        e.status.is_client_error() && e.status != reqwest::StatusCode::UNAUTHORIZED && e.code != Some(USER_REFUSED)
+    })
+}
+
+/// How a message body went out.
+#[derive(Debug, PartialEq)]
+enum Sent {
+    Normal,
+    Recall,
+}
+
 fn target_path(mt: MessageType, session_id: &str, what: &str) -> String {
     match mt {
         MessageType::Group => format!("/v2/groups/{session_id}/{what}"),
@@ -322,9 +356,34 @@ impl QqConn {
                 self.invalidate_token().await;
             }
             let msg = v.get("message").and_then(|m| m.as_str()).unwrap_or(&text);
-            return Err(anyhow!("QQ API {path} 返回 {status}: {msg}"));
+            return Err(QqApiError {
+                path: path.to_string(),
+                status,
+                code: v.get("code").or_else(|| v.get("err_code")).and_then(Value::as_i64),
+                message: msg.to_string(),
+            }
+            .into());
         }
         Ok(v)
+    }
+
+    /// Posts one message body. A rejected active private message is sent again as an interaction recall
+    /// message (`is_wakeup`), which QQ allows once per period for 30 days after the user last chatted.
+    async fn post_message(&self, mt: MessageType, path: &str, mut body: Value, active: bool) -> Result<Sent> {
+        let err = match self.api(reqwest::Method::POST, path, Some(&body)).await {
+            Ok(_) => return Ok(Sent::Normal),
+            Err(e) => e,
+        };
+        if !active || mt != MessageType::Private || !recall_may_help(&err) {
+            return Err(err);
+        }
+        body["is_wakeup"] = json!(true);
+        self.api(reqwest::Method::POST, path, Some(&body))
+            .await
+            .with_context(|| format!("主动消息被拒（{err}），改用互动召回也没有发出"))?;
+        self.logs
+            .info(SRC, format!("主动消息被拒（{err}），已改用互动召回发出"));
+        Ok(Sent::Recall)
     }
 
     pub async fn gateway_url(&self) -> Result<String> {
@@ -404,6 +463,7 @@ impl QqConn {
     }
 
     /// Sends a chain as passive replies when a reply target is known, otherwise as active messages.
+    /// A chain sent through an interaction recall stops after its first message, since QQ accepts one recall per period.
     pub async fn send(
         &self,
         mt: MessageType,
@@ -418,26 +478,42 @@ impl QqConn {
         let text = chain_text(chain).trim().to_string();
         let images: Vec<&Component> = chain.iter().filter(|c| matches!(c, Component::Image { .. })).collect();
         let path = target_path(mt, session_id, "messages");
+        let active = reply.is_none();
+        let total = usize::from(!text.is_empty()) + images.len();
+        let mut sent = 0;
+        let mut recalled = false;
         if !text.is_empty() {
             let body = text_message(&text, reply, self.next_seq(reply));
-            self.api(reqwest::Method::POST, &path, Some(&body)).await?;
+            recalled = self.post_message(mt, &path, body, active).await? == Sent::Recall;
+            sent += 1;
         }
         for img in images {
-            match self.upload_image(mt, session_id, img).await {
-                Ok(info) => {
-                    let body = media_message(&info, " ", reply, self.next_seq(reply));
-                    self.api(reqwest::Method::POST, &path, Some(&body)).await?;
-                }
+            if recalled {
+                break;
+            }
+            let body = match self.upload_image(mt, session_id, img).await {
+                Ok(info) => media_message(&info, " ", reply, self.next_seq(reply)),
                 Err(e) => {
                     self.logs.warn(SRC, format!("图片发送失败，改为文本链接: {e}"));
-                    if let Component::Image { url: Some(u), .. } = img {
-                        if u.starts_with("http") {
-                            let body = text_message(&format!("[图片] {u}"), reply, self.next_seq(reply));
-                            self.api(reqwest::Method::POST, &path, Some(&body)).await?;
+                    match img {
+                        Component::Image { url: Some(u), .. } if u.starts_with("http") => {
+                            text_message(&format!("[图片] {u}"), reply, self.next_seq(reply))
+                        }
+                        _ => {
+                            sent += 1;
+                            continue;
                         }
                     }
                 }
-            }
+            };
+            recalled = self.post_message(mt, &path, body, active).await? == Sent::Recall;
+            sent += 1;
+        }
+        if recalled && sent < total {
+            self.logs.warn(
+                SRC,
+                format!("互动召回每个周期只能发一条，这次还有 {} 段内容没有发出", total - sent),
+            );
         }
         Ok(())
     }
@@ -865,6 +941,102 @@ mod tests {
         c.remember_inbound(MessageType::Group, "g", "m9");
         assert_eq!(c.passive_target(MessageType::Group, "g").as_deref(), Some("m9"));
         assert_eq!(c.passive_target(MessageType::Private, "g"), None);
+    }
+
+    /// Serves a QQ API stand-in where active messages lack permission, and records every message body.
+    async fn mock_qq() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
+        use axum::extract::{Path, State};
+        use axum::http::StatusCode;
+        use axum::routing::post;
+        use axum::Json;
+        type Log = Arc<Mutex<Vec<(String, Value)>>>;
+        async fn message(
+            State(log): State<Log>,
+            Path((kind, id)): Path<(String, String)>,
+            Json(body): Json<Value>,
+        ) -> (StatusCode, Json<Value>) {
+            log.lock().unwrap().push((format!("{kind}/{id}"), body.clone()));
+            if id == "refuser" {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"code": USER_REFUSED, "message": "用户拒收消息"})),
+                );
+            }
+            if body.get("msg_id").is_some() || (kind == "users" && body["is_wakeup"] == true) {
+                return (StatusCode::OK, Json(json!({"id": "sent"})));
+            }
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"code": 40034105, "message": "主动消息发送失败，无权限"})),
+            )
+        }
+        let log: Log = Arc::default();
+        let app = axum::Router::new()
+            .route(
+                "/token",
+                post(|| async { Json(json!({"access_token": "t", "expires_in": 7200})) }),
+            )
+            .route("/v2/{kind}/{id}/messages", post(message))
+            .route(
+                "/v2/{kind}/{id}/files",
+                post(|| async { Json(json!({"file_info": "F"})) }),
+            )
+            .with_state(log.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (base, log)
+    }
+
+    #[tokio::test]
+    async fn rejected_active_private_messages_go_out_as_recalls() {
+        let (base, log) = mock_qq().await;
+        let logs = Arc::new(LogBuffer::new("b", 10));
+        let mut c = QqConn::new("p", "a", "s", reqwest::Client::new(), logs);
+        c.token_url = format!("{base}/token");
+        c.api_base = base;
+        let take = || std::mem::take(&mut *log.lock().unwrap());
+        let image = Component::Image {
+            url: None,
+            path: None,
+            base64: Some("aGk=".into()),
+        };
+
+        c.send(
+            MessageType::Private,
+            "u1",
+            &[Component::plain("hi"), image.clone()],
+            None,
+        )
+        .await
+        .unwrap();
+        let bodies = take();
+        assert_eq!(bodies.len(), 2);
+        assert!(bodies[0].1.get("is_wakeup").is_none());
+        assert_eq!(bodies[1].1["is_wakeup"], true);
+        assert_eq!(bodies[1].1["content"], "hi");
+
+        c.remember_inbound(MessageType::Private, "u1", "m1");
+        c.send(MessageType::Private, "u1", &[Component::plain("hi"), image], None)
+            .await
+            .unwrap();
+        let bodies = take();
+        assert_eq!(bodies.len(), 2);
+        assert!(bodies
+            .iter()
+            .all(|(_, b)| b["msg_id"] == "m1" && b.get("is_wakeup").is_none()));
+
+        let err = c
+            .send(MessageType::Group, "g1", &[Component::plain("hi")], None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("无权限"));
+        assert_eq!(take().len(), 1);
+
+        c.send(MessageType::Private, "refuser", &[Component::plain("hi")], None)
+            .await
+            .unwrap_err();
+        assert_eq!(take().len(), 1);
     }
 
     fn webhook_conn() -> QqConn {
