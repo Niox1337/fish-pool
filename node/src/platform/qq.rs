@@ -22,8 +22,8 @@ pub const API_BASE: &str = "https://api.sgroup.qq.com";
 pub const INTENT_GROUP_AND_C2C: u64 = 1 << 25;
 
 const SRC: &str = "qq_official";
-const GROUP_REPLY_WINDOW: Duration = Duration::from_secs(5 * 60);
-const C2C_REPLY_WINDOW: Duration = Duration::from_secs(60 * 60);
+/// Age up to which an inbound message id is used as the passive reply target, in groups and private chats.
+const REPLY_WINDOW: Duration = Duration::from_secs(60 * 60);
 
 pub mod op {
     pub const DISPATCH: u8 = 0;
@@ -398,7 +398,7 @@ impl QqConn {
         let mut g = self.last_msg.lock().unwrap();
         if g.len() > 2048 {
             let now = Instant::now();
-            g.retain(|_, (_, t)| now.duration_since(*t) < C2C_REPLY_WINDOW);
+            g.retain(|_, (_, t)| now.duration_since(*t) < REPLY_WINDOW);
         }
         g.insert(
             format!("{}:{session_id}", mt.origin_tag()),
@@ -413,7 +413,7 @@ impl QqConn {
         let mut g = self.seqs.lock().unwrap();
         if g.len() > 2048 {
             let now = Instant::now();
-            g.retain(|_, (_, t)| now.duration_since(*t) < C2C_REPLY_WINDOW);
+            g.retain(|_, (_, t)| now.duration_since(*t) < REPLY_WINDOW);
         }
         let e = g.entry(id.to_string()).or_insert((0, Instant::now()));
         e.0 += 1;
@@ -421,14 +421,9 @@ impl QqConn {
     }
 
     fn passive_target(&self, mt: MessageType, session_id: &str) -> Option<String> {
-        let window = if mt == MessageType::Group {
-            GROUP_REPLY_WINDOW
-        } else {
-            C2C_REPLY_WINDOW
-        };
         let g = self.last_msg.lock().unwrap();
         g.get(&format!("{}:{session_id}", mt.origin_tag()))
-            .filter(|(_, t)| t.elapsed() < window)
+            .filter(|(_, t)| t.elapsed() < REPLY_WINDOW)
             .map(|(id, _)| id.clone())
     }
 
@@ -941,6 +936,17 @@ mod tests {
         c.remember_inbound(MessageType::Group, "g", "m9");
         assert_eq!(c.passive_target(MessageType::Group, "g").as_deref(), Some("m9"));
         assert_eq!(c.passive_target(MessageType::Private, "g"), None);
+        let ago = |mins: u64| Instant::now().checked_sub(Duration::from_secs(mins * 60)).unwrap();
+        c.last_msg
+            .lock()
+            .unwrap()
+            .insert("GroupMessage:g".into(), ("m9".into(), ago(59)));
+        assert_eq!(c.passive_target(MessageType::Group, "g").as_deref(), Some("m9"));
+        c.last_msg
+            .lock()
+            .unwrap()
+            .insert("GroupMessage:g".into(), ("m9".into(), ago(61)));
+        assert_eq!(c.passive_target(MessageType::Group, "g"), None);
     }
 
     /// Serves a QQ API stand-in where active messages lack permission, and records every message body.
