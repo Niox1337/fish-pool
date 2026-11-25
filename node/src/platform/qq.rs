@@ -185,6 +185,26 @@ pub fn parse_dispatch(t: &str, d: &Value, platform_id: &str, self_id: &str) -> O
     })
 }
 
+/// Log line for a QQ event that changes whether the bot is in a group or a friend list, or whether
+/// it may send active messages there. None for other events.
+pub fn notice_text(t: &str, d: &Value) -> Option<String> {
+    let field = |key: &str| d.get(key).and_then(Value::as_str).unwrap_or("未知");
+    let group = || format!("群 {}", field("group_openid"));
+    let by = || format!("（操作人 {}）", field("op_member_openid"));
+    let user = || format!("用户 {}", field("openid"));
+    Some(match t {
+        "GROUP_ADD_ROBOT" => format!("机器人被拉进{}{}", group(), by()),
+        "GROUP_DEL_ROBOT" => format!("机器人被移出{}{}，不会再收到这个群的消息", group(), by()),
+        "GROUP_MSG_REJECT" => format!("{} 关闭了机器人的主动消息{}", group(), by()),
+        "GROUP_MSG_RECEIVE" => format!("{} 开启了机器人的主动消息{}", group(), by()),
+        "FRIEND_ADD" => format!("{} 添加了机器人", user()),
+        "FRIEND_DEL" => format!("{} 删除了机器人，不会再收到这个用户的私聊", user()),
+        "C2C_MSG_REJECT" => format!("{} 关闭了机器人的主动消息", user()),
+        "C2C_MSG_RECEIVE" => format!("{} 开启了机器人的主动消息", user()),
+        _ => return None,
+    })
+}
+
 pub fn text_message(content: &str, msg_id: Option<&str>, msg_seq: u32) -> Value {
     let mut v = json!({"content": content, "msg_type": 0, "msg_seq": msg_seq});
     if let Some(id) = msg_id {
@@ -690,6 +710,10 @@ async fn handle_dispatch(
             status("connected", "");
         }
         _ => {
+            if let Some(line) = notice_text(t, &p.d) {
+                conn.logs.info(SRC, line);
+                return;
+            }
             let self_id = conn.self_id.lock().unwrap().clone();
             if let Some(ev) = parse_dispatch(t, &p.d, &conn.platform_id, &self_id) {
                 conn.remember_inbound(ev.message_type, &ev.session_id, &ev.msg_id);
@@ -837,6 +861,10 @@ impl QqConn {
                     return WebhookReply::Ok(json!({"op": webhook::OP_ACK}));
                 }
                 let t = p.t.as_deref().unwrap_or("");
+                if let Some(line) = notice_text(t, &p.d) {
+                    self.logs.info(SRC, line);
+                    return WebhookReply::Ok(json!({"op": webhook::OP_ACK}));
+                }
                 let self_id = self.self_id.lock().unwrap().clone();
                 if let Some(ev) = parse_dispatch(t, &p.d, &self.platform_id, &self_id) {
                     self.remember_inbound(ev.message_type, &ev.session_id, &ev.msg_id);
@@ -919,6 +947,28 @@ mod tests {
         assert_eq!(ev.chain, vec![Component::plain("hello")]);
         assert!(parse_dispatch("GUILD_CREATE", &d, "p1", "bot").is_none());
         assert!(parse_dispatch("C2C_MESSAGE_CREATE", &json!({"content": "x"}), "p1", "bot").is_none());
+    }
+
+    #[test]
+    fn notice_events() {
+        let d = json!({"group_openid": "G1", "op_member_openid": "M1", "timestamp": 1});
+        assert_eq!(
+            notice_text("GROUP_MSG_REJECT", &d).as_deref(),
+            Some("群 G1 关闭了机器人的主动消息（操作人 M1）")
+        );
+        assert_eq!(
+            notice_text("GROUP_DEL_ROBOT", &d).as_deref(),
+            Some("机器人被移出群 G1（操作人 M1），不会再收到这个群的消息")
+        );
+        assert_eq!(
+            notice_text("C2C_MSG_RECEIVE", &json!({"openid": "U1"})).as_deref(),
+            Some("用户 U1 开启了机器人的主动消息")
+        );
+        assert_eq!(
+            notice_text("FRIEND_ADD", &json!({})).as_deref(),
+            Some("用户 未知 添加了机器人")
+        );
+        assert!(notice_text("GROUP_AT_MESSAGE_CREATE", &d).is_none());
     }
 
     #[test]
@@ -1168,6 +1218,15 @@ mod tests {
             c.handle_webhook(&wrong_app, &tx, &status),
             WebhookReply::Unauthorized(_)
         ));
+
+        let notice = r#"{"id":"ev2","op":0,"t":"GROUP_MSG_REJECT","d":{"group_openid":"G1","op_member_openid":"M1"}}"#;
+        let ok = signed("naOC0ocQE3shWLAfffVLB1rhYPG7", "1725442341", notice);
+        assert_eq!(c.handle_webhook(&ok, &tx, &status), WebhookReply::Ok(json!({"op": 12})));
+        assert!(rx.try_recv().is_err(), "notice is not a message");
+        let (logged, _) = c.logs.read_after(None, 10);
+        assert!(logged
+            .iter()
+            .any(|e| e.message == "群 G1 关闭了机器人的主动消息（操作人 M1）"));
 
         let mut ws = webhook_conn();
         ws.webhook = false;
