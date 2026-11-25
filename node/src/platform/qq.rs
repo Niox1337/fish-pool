@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -109,10 +109,12 @@ fn strip_mentions(content: &str) -> String {
     out.trim().to_string()
 }
 
-/// Converts a QQ dispatch event into an `Inbound` when it is a group @ or C2C message.
+/// Converts a QQ dispatch event into an `Inbound` when it is a group or C2C message.
+/// `GROUP_MESSAGE_CREATE` carries every group message when the group lets the bot receive all
+/// messages, and counts as an @ only when `mentions` marks the bot with `is_you`.
 pub fn parse_dispatch(t: &str, d: &Value, platform_id: &str, self_id: &str) -> Option<Inbound> {
     let (mt, group_id, sender_id) = match t {
-        "GROUP_AT_MESSAGE_CREATE" => {
+        "GROUP_AT_MESSAGE_CREATE" | "GROUP_MESSAGE_CREATE" => {
             let gid = d
                 .get("group_openid")
                 .or_else(|| d.get("group_id"))?
@@ -138,9 +140,17 @@ pub fn parse_dispatch(t: &str, d: &Value, platform_id: &str, self_id: &str) -> O
         _ => return None,
     };
     let msg_id = d.get("id")?.as_str()?.to_string();
+    let is_at = match t {
+        "GROUP_AT_MESSAGE_CREATE" => true,
+        "GROUP_MESSAGE_CREATE" => d
+            .get("mentions")
+            .and_then(Value::as_array)
+            .is_some_and(|m| m.iter().any(|u| u.get("is_you").and_then(Value::as_bool) == Some(true))),
+        _ => false,
+    };
     let text = strip_mentions(d.get("content").and_then(|c| c.as_str()).unwrap_or(""));
     let mut chain = vec![];
-    if mt == MessageType::Group {
+    if is_at {
         chain.push(Component::At {
             user_id: self_id.to_string(),
             name: None,
@@ -179,7 +189,7 @@ pub fn parse_dispatch(t: &str, d: &Value, platform_id: &str, self_id: &str) -> O
         },
         text,
         chain,
-        is_at: mt == MessageType::Group,
+        is_at,
         msg_id,
         raw: d.clone(),
     })
@@ -286,6 +296,10 @@ pub struct QqConn {
     pub webhook: bool,
     /// Recent callback event ids, used to drop retried deliveries.
     seen_events: Mutex<VecDeque<String>>,
+    /// Recent inbound message ids, used to drop a message pushed more than once.
+    seen_msgs: Mutex<VecDeque<String>>,
+    /// Event types that were ignored and already logged once.
+    ignored_types: Mutex<HashSet<String>>,
 }
 
 impl QqConn {
@@ -304,6 +318,8 @@ impl QqConn {
             self_id: Mutex::new(app_id.to_string()),
             webhook: false,
             seen_events: Mutex::new(VecDeque::new()),
+            seen_msgs: Mutex::new(VecDeque::new()),
+            ignored_types: Mutex::new(HashSet::new()),
         }
     }
 
@@ -709,20 +725,24 @@ async fn handle_dispatch(
             conn.logs.info(SRC, "会话已恢复");
             status("connected", "");
         }
-        _ => {
-            if let Some(line) = notice_text(t, &p.d) {
-                conn.logs.info(SRC, line);
-                return;
-            }
-            let self_id = conn.self_id.lock().unwrap().clone();
-            if let Some(ev) = parse_dispatch(t, &p.d, &conn.platform_id, &self_id) {
-                conn.remember_inbound(ev.message_type, &ev.session_id, &ev.msg_id);
-                if tx.try_send(ev).is_err() {
-                    conn.logs.warn(SRC, "消息队列已满，丢弃一条消息");
-                }
-            }
-        }
+        _ => conn.dispatch_event(t, &p.d, tx),
     }
+}
+
+/// Records `id` in `recent` and returns false when it was already there. Keeps the latest 256 ids.
+fn first_seen(recent: &Mutex<VecDeque<String>>, id: &str) -> bool {
+    if id.is_empty() {
+        return true;
+    }
+    let mut g = recent.lock().unwrap();
+    if g.iter().any(|e| e == id) {
+        return false;
+    }
+    if g.len() >= 256 {
+        g.pop_front();
+    }
+    g.push_back(id.to_string());
+    true
 }
 
 /// HTTP callback (Webhook) delivery: Ed25519 keys derived from the bot secret,
@@ -812,18 +832,29 @@ pub struct WebhookDelivery {
 impl QqConn {
     /// Records a callback event id and returns false when it was already seen.
     fn first_delivery(&self, id: &str) -> bool {
-        if id.is_empty() {
-            return true;
+        first_seen(&self.seen_events, id)
+    }
+
+    /// Logs notices and queues messages, each message id once. Logs the first ignored event of each type.
+    fn dispatch_event(&self, t: &str, d: &Value, tx: &mpsc::Sender<Inbound>) {
+        if let Some(line) = notice_text(t, d) {
+            self.logs.info(SRC, line);
+            return;
         }
-        let mut g = self.seen_events.lock().unwrap();
-        if g.iter().any(|e| e == id) {
-            return false;
+        let self_id = self.self_id.lock().unwrap().clone();
+        let Some(ev) = parse_dispatch(t, d, &self.platform_id, &self_id) else {
+            if self.ignored_types.lock().unwrap().insert(t.to_string()) {
+                self.logs.info(SRC, format!("收到未处理的 QQ 事件 {t}，已忽略"));
+            }
+            return;
+        };
+        if !first_seen(&self.seen_msgs, &ev.msg_id) {
+            return;
         }
-        if g.len() >= 256 {
-            g.pop_front();
+        self.remember_inbound(ev.message_type, &ev.session_id, &ev.msg_id);
+        if tx.try_send(ev).is_err() {
+            self.logs.warn(SRC, "消息队列已满，丢弃一条消息");
         }
-        g.push_back(id.to_string());
-        true
     }
 
     /// Handles one callback: validates the signature, answers op 13 and queues op 0 messages.
@@ -860,18 +891,7 @@ impl QqConn {
                 if !self.first_delivery(p.id.as_deref().unwrap_or("")) {
                     return WebhookReply::Ok(json!({"op": webhook::OP_ACK}));
                 }
-                let t = p.t.as_deref().unwrap_or("");
-                if let Some(line) = notice_text(t, &p.d) {
-                    self.logs.info(SRC, line);
-                    return WebhookReply::Ok(json!({"op": webhook::OP_ACK}));
-                }
-                let self_id = self.self_id.lock().unwrap().clone();
-                if let Some(ev) = parse_dispatch(t, &p.d, &self.platform_id, &self_id) {
-                    self.remember_inbound(ev.message_type, &ev.session_id, &ev.msg_id);
-                    if tx.try_send(ev).is_err() {
-                        self.logs.warn(SRC, "消息队列已满，丢弃一条消息");
-                    }
-                }
+                self.dispatch_event(p.t.as_deref().unwrap_or(""), &p.d, tx);
                 WebhookReply::Ok(json!({"op": webhook::OP_ACK}))
             }
             other => {
@@ -947,6 +967,47 @@ mod tests {
         assert_eq!(ev.chain, vec![Component::plain("hello")]);
         assert!(parse_dispatch("GUILD_CREATE", &d, "p1", "bot").is_none());
         assert!(parse_dispatch("C2C_MESSAGE_CREATE", &json!({"content": "x"}), "p1", "bot").is_none());
+    }
+
+    #[test]
+    fn parse_group_full_message() {
+        let d = json!({
+            "id": "m3",
+            "content": "<@M2> 你好",
+            "group_openid": "G1",
+            "author": {"member_openid": "M1"},
+            "mentions": [{"member_openid": "M2", "is_you": false}]
+        });
+        let ev = parse_dispatch("GROUP_MESSAGE_CREATE", &d, "p1", "bot").unwrap();
+        assert_eq!(ev.session_id, "G1");
+        assert_eq!(ev.sender.user_id, "M1");
+        assert_eq!(ev.text, "你好");
+        assert!(!ev.is_at);
+        assert_eq!(ev.chain, vec![Component::plain("你好")]);
+
+        let mut at = d.clone();
+        at["mentions"] = json!([{"member_openid": "BOT", "bot": true, "is_you": true}]);
+        let ev = parse_dispatch("GROUP_MESSAGE_CREATE", &at, "p1", "bot").unwrap();
+        assert!(ev.is_at);
+        assert!(matches!(&ev.chain[0], Component::At { user_id, .. } if user_id == "bot"));
+    }
+
+    #[test]
+    fn dispatch_drops_repeated_messages_and_logs_ignored_types_once() {
+        let c = webhook_conn();
+        let (tx, mut rx) = mpsc::channel(4);
+        let d = json!({"id": "m1", "content": "hi", "group_openid": "G1", "author": {"member_openid": "M1"}});
+        c.dispatch_event("GROUP_AT_MESSAGE_CREATE", &d, &tx);
+        c.dispatch_event("GROUP_MESSAGE_CREATE", &d, &tx);
+        assert_eq!(rx.try_recv().unwrap().msg_id, "m1");
+        assert!(rx.try_recv().is_err(), "same message id is queued once");
+
+        c.dispatch_event("SOMETHING_NEW", &json!({}), &tx);
+        c.dispatch_event("SOMETHING_NEW", &json!({}), &tx);
+        assert!(rx.try_recv().is_err());
+        let (logged, _) = c.logs.read_after(None, 10);
+        let ignored: Vec<_> = logged.iter().filter(|e| e.message.contains("SOMETHING_NEW")).collect();
+        assert_eq!(ignored.len(), 1);
     }
 
     #[test]
