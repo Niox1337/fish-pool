@@ -223,6 +223,57 @@ pub fn text_message(content: &str, msg_id: Option<&str>, msg_seq: u32) -> Value 
     v
 }
 
+pub fn markdown_message(content: &str, msg_id: Option<&str>, msg_seq: u32) -> Value {
+    let mut v = json!({"msg_type": 2, "markdown": {"content": content}, "msg_seq": msg_seq});
+    if let Some(id) = msg_id {
+        v["msg_id"] = json!(id);
+    }
+    v
+}
+
+/// Whether `text` uses Markdown syntax: headings, lists, quotes, rules, code, emphasis, strikethrough or links.
+pub fn looks_like_markdown(text: &str) -> bool {
+    let block = text.lines().any(|line| {
+        let l = line.trim_start();
+        let hashes = l.chars().take_while(|&c| c == '#').count();
+        let numbered = l.chars().take_while(char::is_ascii_digit).count();
+        let rule = l.trim_end();
+        (1..=6).contains(&hashes) && l[hashes..].starts_with(' ')
+            || ["- ", "* ", "+ ", "> "]
+                .iter()
+                .any(|p| l.starts_with(p) && l.len() > p.len())
+            || numbered > 0 && (l[numbered..].starts_with(". ") || l[numbered..].starts_with(") "))
+            || l.starts_with("```")
+            || rule.len() >= 3 && ['*', '-', '_'].iter().any(|&c| rule.chars().all(|x| x == c))
+    });
+    let paired = |mark: &str| {
+        text.split_once(mark)
+            .and_then(|(_, rest)| rest.split_once(mark))
+            .is_some_and(|(inner, _)| !inner.trim().is_empty() && !inner.contains('\n'))
+    };
+    block || paired("**") || paired("~~") || paired("`") || text.contains("](http") || text.contains("](qqbot-media://")
+}
+
+/// Text of a chain for a QQ message, and whether it has to go out as Markdown. In a group an `At`
+/// becomes a mention tag, which only Markdown messages render.
+pub fn outbound_text(mt: MessageType, chain: &[Component]) -> (String, bool) {
+    let mut text = String::new();
+    let mut mention = false;
+    for c in chain {
+        match c {
+            Component::Plain { text: t } => text.push_str(t),
+            Component::At { user_id, .. } if mt == MessageType::Group && !user_id.is_empty() => {
+                text.push_str(&format!("<qqbot-at-user id=\"{user_id}\" /> "));
+                mention = true;
+            }
+            _ => {}
+        }
+    }
+    let text = text.trim().to_string();
+    let markdown = mention || looks_like_markdown(&text);
+    (text, markdown)
+}
+
 pub fn media_message(file_info: &str, content: &str, msg_id: Option<&str>, msg_seq: u32) -> Value {
     let mut v = json!({"content": content, "msg_type": 7, "media": {"file_info": file_info}, "msg_seq": msg_seq});
     if let Some(id) = msg_id {
@@ -251,8 +302,8 @@ impl std::error::Error for QqApiError {}
 /// QQ error code for a user who refuses messages from the bot.
 const USER_REFUSED: i64 = 40054013;
 
-/// Whether a failed active send may still go out as an interaction recall message.
-fn recall_may_help(err: &anyhow::Error) -> bool {
+/// Whether a failed send may still go out in another form, as an interaction recall or as plain text.
+fn retry_may_help(err: &anyhow::Error) -> bool {
     err.downcast_ref::<QqApiError>().is_some_and(|e| {
         e.status.is_client_error() && e.status != reqwest::StatusCode::UNAUTHORIZED && e.code != Some(USER_REFUSED)
     })
@@ -410,7 +461,7 @@ impl QqConn {
             Ok(_) => return Ok(Sent::Normal),
             Err(e) => e,
         };
-        if !active || mt != MessageType::Private || !recall_may_help(&err) {
+        if !active || mt != MessageType::Private || !retry_may_help(&err) {
             return Err(err);
         }
         body["is_wakeup"] = json!(true);
@@ -463,22 +514,30 @@ impl QqConn {
             .map(|(id, _)| id.clone())
     }
 
-    async fn upload_image(&self, mt: MessageType, session_id: &str, img: &Component) -> Result<String> {
-        let Component::Image { url, path, base64 } = img else {
-            return Err(anyhow!("not an image"));
+    /// Uploads an image (`file_type` 1) or a voice clip (`file_type` 3) and returns its `file_info`.
+    async fn upload_media(&self, mt: MessageType, session_id: &str, media: &Component) -> Result<String> {
+        let (file_type, what, url, path, base64) = match media {
+            Component::Image { url, path, base64 } => (1, "图片", url, path, base64.as_ref()),
+            Component::Record { url, path } => (3, "语音", url, path, None),
+            _ => return Err(anyhow!("不是图片或语音")),
         };
-        let mut body = json!({"file_type": 1, "srv_send_msg": false});
+        let mut body = json!({"file_type": file_type, "srv_send_msg": false});
         if let Some(u) = url.as_ref().filter(|u| u.starts_with("http")) {
             body["url"] = json!(u);
-        } else if let Some(b) = base64.as_ref() {
+        } else if let Some(b) = base64 {
             let data = b.split_once("base64,").map(|(_, d)| d).unwrap_or(b);
             body["file_data"] = json!(data);
         } else if let Some(p) = path.as_ref().or(url.as_ref()) {
             let p = p.trim_start_matches("file://");
-            let bytes = tokio::fs::read(p).await.with_context(|| format!("读取图片 {p} 失败"))?;
+            let bytes = tokio::fs::read(p)
+                .await
+                .with_context(|| format!("读取{what} {p} 失败"))?;
             body["file_data"] = json!(B64.encode(bytes));
+            if let Some(name) = std::path::Path::new(p).file_name().and_then(|n| n.to_str()) {
+                body["file_name"] = json!(name);
+            }
         } else {
-            return Err(anyhow!("图片缺少来源"));
+            return Err(anyhow!("{what}缺少来源"));
         }
         let v = self
             .api(
@@ -493,7 +552,41 @@ impl QqConn {
             .ok_or_else(|| anyhow!("上传响应缺少 file_info"))
     }
 
+    /// Posts the text of a chain as a Markdown message when it uses Markdown syntax or mentions group
+    /// members, otherwise as a text message. A Markdown message QQ rejects goes out again as plain text.
+    async fn post_text(
+        &self,
+        mt: MessageType,
+        path: &str,
+        chain: &[Component],
+        reply: Option<&str>,
+        active: bool,
+    ) -> Result<Option<Sent>> {
+        let (text, markdown) = outbound_text(mt, chain);
+        let plain = chain_text(chain).trim().to_string();
+        if !markdown {
+            if text.is_empty() {
+                return Ok(None);
+            }
+            let body = text_message(&text, reply, self.next_seq(reply));
+            return self.post_message(mt, path, body, active).await.map(Some);
+        }
+        let body = markdown_message(&text, reply, self.next_seq(reply));
+        let err = match self.post_message(mt, path, body, active).await {
+            Ok(sent) => return Ok(Some(sent)),
+            Err(e) => e,
+        };
+        if !retry_may_help(&err) || plain.is_empty() {
+            return Err(err);
+        }
+        self.logs
+            .warn(SRC, format!("Markdown 消息发送失败（{err}），改用纯文本发送"));
+        let body = text_message(&plain, reply, self.next_seq(reply));
+        self.post_message(mt, path, body, active).await.map(Some)
+    }
+
     /// Sends a chain as passive replies when a reply target is known, otherwise as active messages.
+    /// Text goes first, then each image and voice clip as its own media message.
     /// A chain sent through an interaction recall stops after its first message, since QQ accepts one recall per period.
     pub async fn send(
         &self,
@@ -506,36 +599,38 @@ impl QqConn {
             .map(str::to_string)
             .or_else(|| self.passive_target(mt, session_id));
         let reply = reply.as_deref();
-        let text = chain_text(chain).trim().to_string();
-        let images: Vec<&Component> = chain.iter().filter(|c| matches!(c, Component::Image { .. })).collect();
+        let media: Vec<&Component> = chain
+            .iter()
+            .filter(|c| matches!(c, Component::Image { .. }))
+            .chain(chain.iter().filter(|c| matches!(c, Component::Record { .. })))
+            .collect();
         let path = target_path(mt, session_id, "messages");
         let active = reply.is_none();
-        let total = usize::from(!text.is_empty()) + images.len();
+        let mut total = media.len();
         let mut sent = 0;
         let mut recalled = false;
-        if !text.is_empty() {
-            let body = text_message(&text, reply, self.next_seq(reply));
-            recalled = self.post_message(mt, &path, body, active).await? == Sent::Recall;
+        if let Some(how) = self.post_text(mt, &path, chain, reply, active).await? {
+            recalled = how == Sent::Recall;
+            total += 1;
             sent += 1;
         }
-        for img in images {
+        for item in media {
             if recalled {
                 break;
             }
-            let body = match self.upload_image(mt, session_id, img).await {
+            let body = match self.upload_media(mt, session_id, item).await {
                 Ok(info) => media_message(&info, " ", reply, self.next_seq(reply)),
-                Err(e) => {
-                    self.logs.warn(SRC, format!("图片发送失败，改为文本链接: {e}"));
-                    match img {
-                        Component::Image { url: Some(u), .. } if u.starts_with("http") => {
-                            text_message(&format!("[图片] {u}"), reply, self.next_seq(reply))
-                        }
-                        _ => {
-                            sent += 1;
-                            continue;
-                        }
+                Err(e) => match item {
+                    Component::Image { url: Some(u), .. } if u.starts_with("http") => {
+                        self.logs.warn(SRC, format!("图片发送失败，改为文本链接: {e}"));
+                        text_message(&format!("[图片] {u}"), reply, self.next_seq(reply))
                     }
-                }
+                    _ => {
+                        self.logs.warn(SRC, format!("媒体发送失败，已跳过: {e}"));
+                        sent += 1;
+                        continue;
+                    }
+                },
             };
             recalled = self.post_message(mt, &path, body, active).await? == Sent::Recall;
             sent += 1;
@@ -1060,8 +1155,13 @@ mod tests {
         assert_eq!(c.passive_target(MessageType::Group, "g"), None);
     }
 
-    /// Serves a QQ API stand-in where active messages lack permission, and records every message body.
-    async fn mock_qq() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
+    /// Serves a QQ API stand-in where active messages lack permission and group "nomd" rejects
+    /// Markdown. Records every message body and every upload body.
+    async fn mock_qq() -> (
+        String,
+        Arc<Mutex<Vec<(String, Value)>>>,
+        Arc<Mutex<Vec<(String, Value)>>>,
+    ) {
         use axum::extract::{Path, State};
         use axum::http::StatusCode;
         use axum::routing::post;
@@ -1079,6 +1179,12 @@ mod tests {
                     Json(json!({"code": USER_REFUSED, "message": "用户拒收消息"})),
                 );
             }
+            if id == "nomd" && body["msg_type"] == 2 {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"code": 40034001, "message": "markdown 不可用"})),
+                );
+            }
             if body.get("msg_id").is_some() || (kind == "users" && body["is_wakeup"] == true) {
                 return (StatusCode::OK, Json(json!({"id": "sent"})));
             }
@@ -1087,27 +1193,32 @@ mod tests {
                 Json(json!({"code": 40034105, "message": "主动消息发送失败，无权限"})),
             )
         }
+        async fn file(
+            State(log): State<Log>,
+            Path((kind, id)): Path<(String, String)>,
+            Json(body): Json<Value>,
+        ) -> Json<Value> {
+            log.lock().unwrap().push((format!("{kind}/{id}"), body));
+            Json(json!({"file_info": "F"}))
+        }
         let log: Log = Arc::default();
+        let files: Log = Arc::default();
         let app = axum::Router::new()
             .route(
                 "/token",
                 post(|| async { Json(json!({"access_token": "t", "expires_in": 7200})) }),
             )
-            .route("/v2/{kind}/{id}/messages", post(message))
-            .route(
-                "/v2/{kind}/{id}/files",
-                post(|| async { Json(json!({"file_info": "F"})) }),
-            )
-            .with_state(log.clone());
+            .route("/v2/{kind}/{id}/messages", post(message).with_state(log.clone()))
+            .route("/v2/{kind}/{id}/files", post(file).with_state(files.clone()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (base, log)
+        (base, log, files)
     }
 
     #[tokio::test]
     async fn rejected_active_private_messages_go_out_as_recalls() {
-        let (base, log) = mock_qq().await;
+        let (base, log, _) = mock_qq().await;
         let logs = Arc::new(LogBuffer::new("b", 10));
         let mut c = QqConn::new("p", "a", "s", reqwest::Client::new(), logs);
         c.token_url = format!("{base}/token");
@@ -1154,6 +1265,120 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(take().len(), 1);
+    }
+
+    #[test]
+    fn markdown_detection() {
+        for md in [
+            "# 标题\n内容",
+            "清单：\n- 苹果\n- 香蕉",
+            "1. 第一步\n2. 第二步",
+            "> 引用",
+            "上面\n---\n下面",
+            "这是**重点**",
+            "~~删掉~~",
+            "运行 `cargo test`",
+            "```\ncode\n```",
+            "看[这里](https://www.qq.com)",
+        ] {
+            assert!(looks_like_markdown(md), "{md}");
+        }
+        for plain in [
+            "你好呀",
+            "2*3=6，a-b",
+            "#话题 没有空格也不算",
+            "-1 度",
+            "3.14 是圆周率",
+            "**",
+            "a ** b",
+            "价格 $5 - $10",
+        ] {
+            assert!(!looks_like_markdown(plain), "{plain}");
+        }
+    }
+
+    #[test]
+    fn outbound_text_renders_group_mentions_as_markdown() {
+        let chain = [
+            Component::At {
+                user_id: "M1".into(),
+                name: None,
+            },
+            Component::plain("早上好"),
+        ];
+        assert_eq!(
+            outbound_text(MessageType::Group, &chain),
+            ("<qqbot-at-user id=\"M1\" /> 早上好".to_string(), true)
+        );
+        assert_eq!(
+            outbound_text(MessageType::Private, &chain),
+            ("早上好".to_string(), false)
+        );
+        assert_eq!(
+            outbound_text(MessageType::Private, &[Component::plain("**好**")]),
+            ("**好**".to_string(), true)
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_markdown_and_voice_and_falls_back_to_text() {
+        let (base, log, files) = mock_qq().await;
+        let logs = Arc::new(LogBuffer::new("b", 10));
+        let mut c = QqConn::new("p", "a", "s", reqwest::Client::new(), logs);
+        c.token_url = format!("{base}/token");
+        c.api_base = base;
+        let take = |l: &Arc<Mutex<Vec<(String, Value)>>>| std::mem::take(&mut *l.lock().unwrap());
+
+        c.send(
+            MessageType::Group,
+            "g1",
+            &[Component::plain("## 今日\n- 喝水")],
+            Some("m1"),
+        )
+        .await
+        .unwrap();
+        let bodies = take(&log);
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].1["msg_type"], 2);
+        assert_eq!(bodies[0].1["markdown"]["content"], "## 今日\n- 喝水");
+        assert_eq!(bodies[0].1["msg_id"], "m1");
+        assert!(bodies[0].1.get("content").is_none());
+
+        c.send(MessageType::Group, "g1", &[Component::plain("你好")], Some("m1"))
+            .await
+            .unwrap();
+        let bodies = take(&log);
+        assert_eq!(bodies[0].1["msg_type"], 0);
+        assert_eq!(bodies[0].1["content"], "你好");
+
+        let chain = [
+            Component::At {
+                user_id: "M1".into(),
+                name: None,
+            },
+            Component::plain("**醒醒**"),
+        ];
+        c.send(MessageType::Group, "nomd", &chain, Some("m2")).await.unwrap();
+        let bodies = take(&log);
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0].1["msg_type"], 2);
+        assert_eq!(bodies[1].1["msg_type"], 0);
+        assert_eq!(bodies[1].1["content"], "**醒醒**");
+        assert_ne!(bodies[0].1["msg_seq"], bodies[1].1["msg_seq"]);
+
+        let voice = Component::Record {
+            url: Some("https://example.com/a.silk".into()),
+            path: None,
+        };
+        c.send(MessageType::Group, "g1", &[voice], Some("m1")).await.unwrap();
+        let uploads = take(&files);
+        assert_eq!(uploads.len(), 1);
+        assert_eq!(uploads[0].1["file_type"], 3);
+        assert_eq!(uploads[0].1["url"], "https://example.com/a.silk");
+        let bodies = take(&log);
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].1["msg_type"], 7);
+        assert_eq!(bodies[0].1["media"]["file_info"], "F");
     }
 
     fn webhook_conn() -> QqConn {
