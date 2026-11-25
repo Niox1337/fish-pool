@@ -1,4 +1,4 @@
-"""Returns freed heap memory of the current process to the operating system."""
+"""Returns freed heap memory of the current process to the operating system and keeps objects shared with forked processes."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import ctypes.util
 import gc
 import os
 import sys
+import sysconfig
 import threading
 import time
 from typing import Any
@@ -77,6 +78,71 @@ def trim() -> bool:
         return False
     lib.malloc_trim(0)
     return True
+
+
+def _immortal_refcount() -> int | None:
+    """Reference count value that the interpreter never changes, or None when it cannot be used.
+
+    Copied from ``None`` and checked on a probe object, so it is only used when taking new
+    references to an object with this count leaves the count unchanged.
+    """
+    if (
+        sys.implementation.name != "cpython"
+        or sys.version_info < (3, 12)
+        or os.environ.get("FISH_SIDECAR_IMMORTALIZE") == "0"
+    ):
+        return None
+    if sysconfig.get_config_var("Py_GIL_DISABLED"):
+        return None
+    value = ctypes.c_ssize_t.from_address(id(None)).value
+    probe = object()
+    cell = ctypes.c_ssize_t.from_address(id(probe))
+    saved = cell.value
+    cell.value = value
+    held = [probe, probe, probe]
+    unchanged = cell.value == value
+    del held
+    if not unchanged:
+        cell.value = saved
+        return None
+    return value
+
+
+def immortalize() -> int:
+    """Makes every object reachable from garbage collected objects and loaded modules immortal.
+
+    The interpreter then stops writing reference counts of these objects, so a forked process
+    that reads them keeps sharing their pages. The objects are never freed, their ``__del__``
+    methods and weak reference callbacks do not run. Objects that are already immortal are only
+    read, so pages a forked process shares with its parent stay shared. Call with a single
+    Python thread. Returns the number of objects made immortal, 0 when the interpreter does not
+    support it.
+    """
+    value = _immortal_refcount()
+    if value is None:
+        return 0
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        todo: list[Any] = gc.get_objects()
+        todo.extend(sys.modules.values())
+        seen: set[int] = set()
+        changed = 0
+        while todo:
+            obj = todo.pop()
+            key = id(obj)
+            if key in seen:
+                continue
+            seen.add(key)
+            cell = ctypes.c_ssize_t.from_address(key)
+            if cell.value != value:
+                cell.value = value
+                changed += 1
+            todo.extend(gc.get_referents(obj))
+        return changed
+    finally:
+        if enabled:
+            gc.enable()
 
 
 def touch() -> None:

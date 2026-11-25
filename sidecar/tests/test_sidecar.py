@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from conftest import (
+    SIDECAR_DIR,
     TIMEOUT,
     Control,
     FakeNode,
@@ -1075,6 +1077,49 @@ def test_idle_trim_returns_freed_heap():
     assert memory.free_heap_bytes() > 0
     assert memory.collect_and_trim(min_free=0)
     assert not memory.collect_and_trim(min_free=1 << 60)
+
+
+IMMORTAL_PROBE = """
+import json, sys, types
+from fish_sidecar import memory
+module = types.ModuleType("fish_immortal_probe")
+module.holder = {"value": object(), "text": "x" * 64}
+sys.modules[module.__name__] = module
+count = memory.immortalize()
+value = module.holder["value"]
+start = sys.getrefcount(value)
+refs = [value] * 10
+held = sys.getrefcount(value)
+del refs
+module.holder["added"] = [1, 2]
+print(json.dumps({"count": count, "stable": start == held == sys.getrefcount(value), "added": module.holder["added"]}))
+"""
+
+
+def _immortal_probe(env_extra: dict[str, str] | None = None) -> dict:
+    env = {**os.environ, **(env_extra or {})}
+    env["PYTHONPATH"] = os.pathsep.join([str(SIDECAR_DIR), env.get("PYTHONPATH", "")])
+    out = subprocess.run([sys.executable, "-c", IMMORTAL_PROBE], env=env, capture_output=True, text=True, check=True)
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.skipif(
+    sys.implementation.name != "cpython"
+    or sys.version_info < (3, 12)
+    or bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
+    reason="immortal objects need the CPython 3.12+ default build",
+)
+def test_immortalize_stops_reference_count_writes():
+    result = _immortal_probe()
+    assert result["count"] > 1000
+    assert result["stable"] is True
+    assert result["added"] == [1, 2]
+
+
+def test_immortalize_can_be_disabled():
+    result = _immortal_probe({"FISH_SIDECAR_IMMORTALIZE": "0"})
+    assert result["count"] == 0
+    assert result["stable"] is False
 
 
 def test_group_scan_skips_files_the_plugin_cannot_import(tmp_path):

@@ -576,9 +576,11 @@ def prepare(spec: dict[str, Any], workdir: str) -> dict[str, Any]:
         return {"op": "failed", "reason": "；".join(watch.reasons)}
     preimported = (package, main)
     gc.collect()
-    gc.freeze()
     from fish_sidecar import memory
 
+    # Plugin processes read the imported plugin without writing its reference counts.
+    memory.immortalize()
+    gc.freeze()
     memory.trim()
     return {"op": "ready"}
 

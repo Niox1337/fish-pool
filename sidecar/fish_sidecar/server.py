@@ -161,10 +161,12 @@ def preload() -> list[str]:
     if extra:
         failed.append("threads started during preload: " + ", ".join(extra))
     gc.collect()
-    gc.freeze()
-    # Children inherit the heap, so free memory returned here is not copied into each of them.
     from fish_sidecar import memory
 
+    # Children read the preloaded objects without writing their reference counts.
+    memory.immortalize()
+    gc.freeze()
+    # Children inherit the heap, so free memory returned here is not copied into each of them.
     memory.trim()
     if warm_faiss:
         try:
